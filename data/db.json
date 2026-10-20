@@ -15,7 +15,7 @@
       "avatar": "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80",
       "status": "active",
       "createdAt": "2026-09-01T10:00:00.000Z",
-      "lastLogin": "2026-10-20T18:53:08.081Z",
+      "lastLogin": "2026-10-19T12:39:52.934Z",
       "bookmarks": [
         {
           "id": "1",
@@ -360,24 +360,6 @@
     }
   ],
   "auditLogs": [
-    {
-      "id": "log_1792522388082_lfta",
-      "timestamp": "2026-10-20T18:53:08.082Z",
-      "type": "login_success",
-      "user": "محمود عبد الرحمن (student@example.com)",
-      "details": "تسجيل دخول ناجح للمستخدم",
-      "ip": "197.43.181.179",
-      "status": "success"
-    },
-    {
-      "id": "log_1792522381152_bcu5",
-      "timestamp": "2026-10-20T18:53:01.152Z",
-      "type": "login_failed",
-      "user": "ar1118498@gmail.com",
-      "details": "محاولة تسجيل دخول فاشلة للمستخدم (كلمة مرور غير صحيحة)",
-      "ip": "197.43.181.179",
-      "status": "warning"
-    },
     {
       "id": "log_init",
       "type": "login_success",

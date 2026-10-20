@@ -1,6 +1,8 @@
-require('dotenv').config();
-const express = require('express');
-const { Pool } = require('pg');
+import dotenv from 'dotenv';
+dotenv.config();
+import express from 'express';
+import pg from 'pg';
+const { Pool } = pg;
 
 const app = express();
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -266,7 +268,7 @@ let memoryStore = {
 };
 
 // Endpoints
-app.get('/api/status', (req, res) => {
+app.get(['/api/status', '/status'], (req, res) => {
   res.json({
     status: 'ok',
     engine: getPool() ? 'PostgreSQL Cloud' : 'Vercel Serverless Memory/Disk',
@@ -279,23 +281,23 @@ app.get('/api/status', (req, res) => {
   });
 });
 
-app.get('/api/books', (req, res) => {
+app.get(['/api/books', '/books'], (req, res) => {
   res.json({ books: memoryStore.books });
 });
 
-app.get('/api/videos', (req, res) => {
+app.get(['/api/videos', '/videos'], (req, res) => {
   res.json({ videos: memoryStore.videos });
 });
 
-app.get('/api/summaries', (req, res) => {
+app.get(['/api/summaries', '/summaries'], (req, res) => {
   res.json({ summaries: memoryStore.summaries });
 });
 
-app.get('/api/articles', (req, res) => {
+app.get(['/api/articles', '/articles'], (req, res) => {
   res.json({ articles: memoryStore.articles });
 });
 
-app.post('/api/admin/login', (req, res) => {
+app.post(['/api/admin/login', '/admin/login'], (req, res) => {
   const { username, password } = req.body;
   if (username === ADMIN_USERNAME && password === adminPassword) {
     const token = 'adm_' + Date.now();
@@ -304,7 +306,7 @@ app.post('/api/admin/login', (req, res) => {
   return res.status(401).json({ error: 'بيانات غير صحيحة' });
 });
 
-app.get('/api/admin/stats', (req, res) => {
+app.get(['/api/admin/stats', '/admin/stats'], (req, res) => {
   res.json({
     counts: {
       books: memoryStore.books.length,
@@ -326,7 +328,7 @@ app.get('/api/admin/stats', (req, res) => {
   });
 });
 
-app.post('/api/rate', (req, res) => {
+app.post(['/api/rate', '/rate'], (req, res) => {
   const { id, type, rating } = req.body;
   if (!id || !type || typeof rating !== 'number') {
     return res.status(400).json({ error: 'البيانات غير مكتملة' });
@@ -351,7 +353,7 @@ app.post('/api/rate', (req, res) => {
   res.json({ success: true, message: 'تم تسجيل تقييمك بنجاح ⭐', rating: newRating, ratingCount: newCount });
 });
 
-app.post('/api/auth/login', (req, res) => {
+app.post(['/api/auth/login', '/auth/login'], (req, res) => {
   const { email, password } = req.body;
   const user = memoryStore.users.find(u => u.email === email && u.password === password);
   if (user) {
@@ -361,7 +363,7 @@ app.post('/api/auth/login', (req, res) => {
   return res.status(401).json({ error: 'البريد أو كلمة المرور غير صحيحة' });
 });
 
-app.post('/api/auth/register', (req, res) => {
+app.post(['/api/auth/register', '/auth/register'], (req, res) => {
   const { name, email, password, academicStage } = req.body;
   if (!name || !email || !password) {
     return res.status(400).json({ error: 'يرجى إكمال البيانات' });
@@ -382,4 +384,4 @@ app.post('/api/auth/register', (req, res) => {
   res.json({ success: true, token, user: newUser });
 });
 
-module.exports = app;
+export default app;
