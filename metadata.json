@@ -1,0 +1,6 @@
+{
+  "name": "المكتبة الرقمية الفاخرة",
+  "description": "منصة متكاملة للمناهج الدراسية والكتب والمقالات العلمية وملخصات الخرائط الذهنية ومقاطع الفيديو مع نظام حسابات مستخدمين ولوحة تحكم متطورة للأدمن والأمان.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
