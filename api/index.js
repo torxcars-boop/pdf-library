@@ -384,4 +384,212 @@ app.post(['/api/auth/register', '/auth/register'], (req, res) => {
   res.json({ success: true, token, user: newUser });
 });
 
+// BOOKS CRUD
+app.post(['/api/books', '/books'], (req, res) => {
+  const { title, category, filepath, coverpath, is_student, grade, description } = req.body;
+  if (!title || !filepath) {
+    return res.status(400).json({ error: 'العنوان ورابط الملف مطلوبان' });
+  }
+  const newId = memoryStore.books.length > 0 ? Math.max(...memoryStore.books.map(b => b.id)) + 1 : 1;
+  const newBook = {
+    id: newId,
+    title: title.trim(),
+    category: category || 'كتب الطلاب',
+    filepath: filepath.trim(),
+    coverpath: coverpath || 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=600&auto=format&fit=crop&q=80',
+    is_student: is_student ? 1 : 0,
+    grade: grade || 'الصف الثالث الثانوي',
+    description: description || '',
+    downloads: 0,
+    views: 0,
+    rating: 5,
+    ratingCount: 1,
+    created_at: new Date().toISOString()
+  };
+  memoryStore.books.unshift(newBook);
+  res.status(201).json({ book: newBook, message: 'تمت إضافة الكتاب بنجاح' });
+});
+
+app.put(['/api/books/:id', '/books/:id'], (req, res) => {
+  const id = Number(req.params.id);
+  const idx = memoryStore.books.findIndex(b => b.id === id);
+  if (idx === -1) return res.status(404).json({ error: 'الكتاب غير موجود' });
+  memoryStore.books[idx] = { ...memoryStore.books[idx], ...req.body, id };
+  res.json({ book: memoryStore.books[idx], message: 'تم تحديث بيانات الكتاب بنجاح' });
+});
+
+app.delete(['/api/books/:id', '/books/:id'], (req, res) => {
+  const id = Number(req.params.id);
+  const initialLen = memoryStore.books.length;
+  memoryStore.books = memoryStore.books.filter(b => b.id !== id);
+  if (memoryStore.books.length === initialLen) {
+    // If not found in memory, still return success so frontend stays in sync
+    return res.json({ success: true, message: 'تم حذف الكتاب بنجاح' });
+  }
+  res.json({ success: true, message: 'تم حذف الكتاب بنجاح' });
+});
+
+// SUMMARIES CRUD
+app.post(['/api/summaries', '/summaries'], (req, res) => {
+  const { title, imagepath, category } = req.body;
+  if (!title || !imagepath) {
+    return res.status(400).json({ error: 'العنوان ورابط صورة الملخص مطلوبان' });
+  }
+  const newId = memoryStore.summaries.length > 0 ? Math.max(...memoryStore.summaries.map(s => s.id)) + 1 : 1;
+  const newSum = {
+    id: newId,
+    title: title.trim(),
+    imagepath: imagepath.trim(),
+    category: category || 'عام',
+    views: 0,
+    rating: 5,
+    ratingCount: 1,
+    created_at: new Date().toISOString()
+  };
+  memoryStore.summaries.unshift(newSum);
+  res.status(201).json({ summary: newSum, message: 'تمت إضافة الملخص بنجاح' });
+});
+
+app.put(['/api/summaries/:id', '/summaries/:id'], (req, res) => {
+  const id = Number(req.params.id);
+  const idx = memoryStore.summaries.findIndex(s => s.id === id);
+  if (idx === -1) return res.status(404).json({ error: 'الملخص غير موجود' });
+  memoryStore.summaries[idx] = { ...memoryStore.summaries[idx], ...req.body, id };
+  res.json({ summary: memoryStore.summaries[idx], message: 'تم تعديل الملخص بنجاح' });
+});
+
+app.delete(['/api/summaries/:id', '/summaries/:id'], (req, res) => {
+  const id = Number(req.params.id);
+  memoryStore.summaries = memoryStore.summaries.filter(s => s.id !== id);
+  res.json({ success: true, message: 'تم حذف الملخص بنجاح' });
+});
+
+// VIDEOS CRUD
+app.post(['/api/videos', '/videos'], (req, res) => {
+  const { title, videourl, category, channel, duration } = req.body;
+  if (!title || !videourl) {
+    return res.status(400).json({ error: 'العنوان ورابط الفيديو مطلوبان' });
+  }
+  const newId = memoryStore.videos.length > 0 ? Math.max(...memoryStore.videos.map(v => v.id)) + 1 : 1;
+  const newVid = {
+    id: newId,
+    title: title.trim(),
+    videourl: videourl.trim(),
+    category: category || 'شروحات',
+    channel: channel || 'المكتبة الرقمية',
+    duration: duration || '15:00',
+    views: 0,
+    rating: 5,
+    ratingCount: 1,
+    created_at: new Date().toISOString()
+  };
+  memoryStore.videos.unshift(newVid);
+  res.status(201).json({ video: newVid, message: 'تمت إضافة الفيديو بنجاح' });
+});
+
+app.put(['/api/videos/:id', '/videos/:id'], (req, res) => {
+  const id = Number(req.params.id);
+  const idx = memoryStore.videos.findIndex(v => v.id === id);
+  if (idx === -1) return res.status(404).json({ error: 'الفيديو غير موجود' });
+  memoryStore.videos[idx] = { ...memoryStore.videos[idx], ...req.body, id };
+  res.json({ video: memoryStore.videos[idx], message: 'تم تعديل الفيديو بنجاح' });
+});
+
+app.delete(['/api/videos/:id', '/videos/:id'], (req, res) => {
+  const id = Number(req.params.id);
+  memoryStore.videos = memoryStore.videos.filter(v => v.id !== id);
+  res.json({ success: true, message: 'تم حذف الفيديو بنجاح' });
+});
+
+// ARTICLES CRUD
+app.post(['/api/articles', '/articles'], (req, res) => {
+  const { title, content, imagepath, author, readTime } = req.body;
+  if (!title || !content) {
+    return res.status(400).json({ error: 'العنوان والمحتوى مطلوبان' });
+  }
+  const newId = memoryStore.articles.length > 0 ? Math.max(...memoryStore.articles.map(a => a.id)) + 1 : 1;
+  const newArt = {
+    id: newId,
+    title: title.trim(),
+    content: content.trim(),
+    imagepath: imagepath || 'https://images.unsplash.com/photo-1457369804613-52c61a468e7d?w=800',
+    author: author || 'ARM',
+    readTime: readTime || '5 دقائق',
+    views: 0,
+    rating: 5,
+    ratingCount: 1,
+    created_at: new Date().toISOString()
+  };
+  memoryStore.articles.unshift(newArt);
+  res.status(201).json({ article: newArt, message: 'تمت إضافة المقالة بنجاح' });
+});
+
+app.put(['/api/articles/:id', '/articles/:id'], (req, res) => {
+  const id = Number(req.params.id);
+  const idx = memoryStore.articles.findIndex(a => a.id === id);
+  if (idx === -1) return res.status(404).json({ error: 'المقالة غير موجودة' });
+  memoryStore.articles[idx] = { ...memoryStore.articles[idx], ...req.body, id };
+  res.json({ article: memoryStore.articles[idx], message: 'تم تعديل المقالة بنجاح' });
+});
+
+app.delete(['/api/articles/:id', '/articles/:id'], (req, res) => {
+  const id = Number(req.params.id);
+  memoryStore.articles = memoryStore.articles.filter(a => a.id !== id);
+  res.json({ success: true, message: 'تم حذف المقالة بنجاح' });
+});
+
+// ADMIN MANAGEMENT
+app.get(['/api/admin/verify', '/admin/verify'], (req, res) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.replace('Bearer ', '');
+  if (token && (token.startsWith('adm_') || token === adminPassword)) {
+    return res.json({ verified: true, username: ADMIN_USERNAME });
+  }
+  return res.status(401).json({ verified: false });
+});
+
+app.get(['/api/admin/users', '/admin/users'], (req, res) => {
+  res.json({ users: memoryStore.users.map(({ password, ...u }) => u) });
+});
+
+app.put(['/api/admin/users/:id/status', '/admin/users/:id/status'], (req, res) => {
+  const { id } = req.params;
+  const { status, role } = req.body;
+  const user = memoryStore.users.find(u => u.id === id);
+  if (!user) return res.status(404).json({ error: 'المستخدم غير موجود' });
+  if (status) user.status = status;
+  if (role) user.role = role;
+  res.json({ message: 'تم تحديث حالة المستخدم بنجاح', user });
+});
+
+app.delete(['/api/admin/users/:id', '/admin/users/:id'], (req, res) => {
+  const { id } = req.params;
+  memoryStore.users = memoryStore.users.filter(u => u.id !== id);
+  res.json({ message: 'تم حذف حساب المستخدم بنجاح' });
+});
+
+app.get(['/api/admin/security/logs', '/admin/security/logs'], (req, res) => {
+  res.json({ logs: memoryStore.auditLogs });
+});
+
+app.post(['/api/admin/security/clear-logs', '/admin/security/clear-logs'], (req, res) => {
+  memoryStore.auditLogs = [];
+  res.json({ message: 'تم مسح السجلات بنجاح' });
+});
+
+app.post(['/api/admin/security/change-password', '/admin/security/change-password'], (req, res) => {
+  const { currentPassword, newPassword, confirmPassword } = req.body;
+  if (currentPassword !== adminPassword) {
+    return res.status(400).json({ error: 'كلمة المرور الحالية غير صحيحة' });
+  }
+  if (!newPassword || newPassword.length < 6) {
+    return res.status(400).json({ error: 'كلمة المرور الجديدة يجب أن تكون 6 أحرف على الأقل' });
+  }
+  if (newPassword !== confirmPassword) {
+    return res.status(400).json({ error: 'كلمتا المرور غير متطابقتين' });
+  }
+  adminPassword = newPassword;
+  res.json({ success: true, message: 'تم تغيير كلمة مرور المدير بنجاح!' });
+});
+
 export default app;

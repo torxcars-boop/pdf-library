@@ -12,7 +12,11 @@ import {
   FileText,
   Image,
   Video,
-  Grid
+  Grid,
+  Menu,
+  GraduationCap,
+  BarChart3,
+  Volume2
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -26,6 +30,7 @@ interface NavbarProps {
   activeTab: string;
   onSelectTab: (tab: string) => void;
   bookmarksCount: number;
+  onToggleSidebar?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -39,34 +44,47 @@ export const Navbar: React.FC<NavbarProps> = ({
   activeTab,
   onSelectTab,
   bookmarksCount,
+  onToggleSidebar,
 }) => {
   const [showUserDropdown, setShowUserDropdown] = useState(false);
 
   return (
-    <header className="bg-zinc-950/80 backdrop-blur-xl sticky top-0 z-40 border-b border-amber-500/20 shadow-2xl">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3.5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+    <header className="bg-zinc-950/85 backdrop-blur-xl sticky top-0 z-40 border-b border-amber-500/20 shadow-2xl">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-col md:flex-row md:items-center justify-between gap-3 sm:gap-4">
         
-        {/* Brand Logo & Title */}
-        <div className="flex items-center justify-between">
-          <div 
-            onClick={() => onSelectTab('all')} 
-            className="flex items-center gap-3 cursor-pointer group select-none"
-          >
-            <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-amber-600 via-amber-500 to-amber-300 flex items-center justify-center text-zinc-950 shadow-lg shadow-amber-500/20 group-hover:scale-105 transition-transform duration-300">
-              <Crown className="w-6 h-6 stroke-[2.2] text-zinc-950" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-xl font-bold bg-gradient-to-r from-amber-200 via-amber-400 to-amber-100 bg-clip-text text-transparent">
-                  المكتبة الرقمية الفاخرة
-                </h1>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400">
-                  ARM PRO
-                </span>
+        {/* Brand Logo & Title & Sidebar Toggle */}
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            {onToggleSidebar && (
+              <button
+                onClick={onToggleSidebar}
+                className="p-2.5 rounded-2xl bg-zinc-900 hover:bg-zinc-800 text-amber-400 border border-zinc-800 hover:border-amber-500/40 transition shadow-md group"
+                title="فتح القائمة الجانبية للتنقل السريع"
+              >
+                <Menu className="w-5 h-5 group-hover:scale-110 transition" />
+              </button>
+            )}
+
+            <div 
+              onClick={() => onSelectTab('all')} 
+              className="flex items-center gap-2.5 cursor-pointer group select-none"
+            >
+              <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-amber-600 via-amber-500 to-amber-300 flex items-center justify-center text-zinc-950 shadow-lg shadow-amber-500/20 group-hover:scale-105 transition-transform duration-300">
+                <Crown className="w-5 h-5 stroke-[2.2] text-zinc-950" />
               </div>
-              <p className="text-[11px] text-zinc-400 font-medium">
-                منصة المناهج الدراسية، الكتب، المقالات والملخصات الذكية
-              </p>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-lg sm:text-xl font-black bg-gradient-to-r from-amber-200 via-amber-400 to-amber-100 bg-clip-text text-transparent">
+                    المكتبة الرقمية الفاخرة
+                  </h1>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 hidden sm:inline-block">
+                    ARM PRO
+                  </span>
+                </div>
+                <p className="text-[10px] sm:text-[11px] text-zinc-400 font-medium hidden sm:block">
+                  منصة المناهج الدراسية، الكتب، المقالات والملخصات الذكية
+                </p>
+              </div>
             </div>
           </div>
 
@@ -114,6 +132,29 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Action Controls: User Auth, Bookmarks, and Admin Portal */}
         <div className="hidden md:flex items-center gap-3">
+          {/* Student Dashboard Quick Button */}
+          <button
+            onClick={() => onSelectTab('dashboard')}
+            className={`hidden lg:flex items-center gap-1.5 px-3 py-2 rounded-2xl text-xs font-bold transition border ${
+              activeTab === 'dashboard'
+                ? 'bg-amber-500 text-zinc-950 border-amber-400 font-extrabold shadow-md'
+                : 'bg-zinc-900 text-amber-300 border-zinc-800 hover:border-amber-500/40 hover:bg-zinc-850'
+            }`}
+          >
+            <BarChart3 className="w-3.5 h-3.5 text-amber-400" />
+            <span>لوحة الطالب 📊</span>
+          </button>
+
+          {/* Admin Portal Quick Button */}
+          <button
+            onClick={onOpenAdmin}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-2xl bg-zinc-900 hover:bg-zinc-850 text-amber-400 border border-amber-500/30 hover:border-amber-500 text-xs font-bold transition shadow-md"
+            title="بوابة إدارة المحتوى والأمان"
+          >
+            <ShieldCheck className="w-4 h-4 text-amber-400" />
+            <span className="hidden sm:inline">الأدمن 🛡️</span>
+          </button>
+
           {/* User Section */}
           {user ? (
             <div className="relative">
@@ -147,6 +188,20 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <button
                     onClick={() => {
                       setShowUserDropdown(false);
+                      onSelectTab('dashboard');
+                    }}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs text-zinc-200 hover:bg-zinc-800 hover:text-amber-400 transition"
+                  >
+                    <span className="flex items-center gap-2">
+                      <BarChart3 className="w-3.5 h-3.5 text-amber-400" />
+                      لوحة إحصائياتي
+                    </span>
+                    <Sparkles className="w-3 h-3 text-amber-500" />
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setShowUserDropdown(false);
                       onOpenProfile();
                     }}
                     className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs text-zinc-200 hover:bg-zinc-800 hover:text-amber-400 transition"
@@ -155,7 +210,6 @@ export const Navbar: React.FC<NavbarProps> = ({
                       <UserIcon className="w-3.5 h-3.5" />
                       الملف الشخصي وحسابي
                     </span>
-                    <Sparkles className="w-3 h-3 text-amber-500" />
                   </button>
 
                   <button

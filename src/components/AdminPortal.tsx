@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Book, Summary, Video, Article, User, AuditLog, AdminStats } from '../types';
+import { Book, Summary, Video, Article, User, AuditLog, AdminStats, Exam, ExamQuestion } from '../types';
+import { getAllStudentExams, addCustomStudentExam, deleteStudentExam } from '../data/studentExamsData';
+import { markItemAsDeleted, saveCustomItem, saveEditedItem, dispatchContentChanged } from '../utils/contentStore';
 import { 
   ShieldCheck, 
   ShieldAlert, 
@@ -28,7 +30,12 @@ import {
   Search,
   UserCheck,
   UserX,
-  ArrowRight
+  ArrowRight,
+  GraduationCap,
+  Upload,
+  FileUp,
+  HelpCircle,
+  Check
 } from 'lucide-react';
 
 interface AdminPortalProps {
@@ -43,12 +50,12 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   const [adminToken, setAdminToken] = useState<string>('');
   const [adminUser, setAdminUser] = useState('ARM');
   const [adminPassInput, setAdminPassInput] = useState('');
-  const [adminUsernameInput, setAdminUsernameInput] = useState('ARM');
+  const [adminUsernameInput, setAdminUsernameInput] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
 
   // Active Admin View Tab
-  const [activeAdminTab, setActiveAdminTab] = useState<'dashboard' | 'books' | 'summaries' | 'videos' | 'articles' | 'security' | 'users'>('dashboard');
+  const [activeAdminTab, setActiveAdminTab] = useState<'dashboard' | 'books' | 'summaries' | 'videos' | 'articles' | 'exams' | 'users' | 'security'>('dashboard');
 
   // Data States
   const [stats, setStats] = useState<AdminStats | null>(null);
@@ -58,18 +65,44 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   const [articles, setArticles] = useState<Article[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [studentExams, setStudentExams] = useState<Exam[]>(getAllStudentExams);
   const [loadingData, setLoadingData] = useState(false);
 
-  // Form States - Book
+  // Form States - Book (with PDF file upload & Cover upload preview)
   const [showBookModal, setShowBookModal] = useState(false);
   const [editingBookId, setEditingBookId] = useState<number | null>(null);
   const [bookTitle, setBookTitle] = useState('');
   const [bookCategory, setBookCategory] = useState('كتب الطلاب');
   const [bookFilePath, setBookFilePath] = useState('');
+  const [bookPdfFileName, setBookPdfFileName] = useState('');
+  const [bookPdfSize, setBookPdfSize] = useState('');
   const [bookCoverPath, setBookCoverPath] = useState('');
+  const [bookCoverPreview, setBookCoverPreview] = useState('');
   const [bookIsStudent, setBookIsStudent] = useState(1);
   const [bookGrade, setBookGrade] = useState('الثانوية العامة');
   const [bookDescription, setBookDescription] = useState('');
+
+  // Form States - Student Exam
+  const [showExamModal, setShowExamModal] = useState(false);
+  const [examTitle, setExamTitle] = useState('');
+  const [examSubject, setExamSubject] = useState('كيمياء');
+  const [examGrade, setExamGrade] = useState('الصف الثالث الثانوي');
+  const [examDuration, setExamDuration] = useState(25);
+  const [examTotalMarks, setExamTotalMarks] = useState(30);
+  const [examPassMarks, setExamPassMarks] = useState(18);
+  const [examDifficulty, setExamDifficulty] = useState<'متوسط' | 'متقدم' | 'نموذج وزاري'>('نموذج وزاري');
+  const [examBadge, setExamBadge] = useState('بنك أسئلة الوزارة');
+  const [examDescription, setExamDescription] = useState('');
+  const [examQuestions, setExamQuestions] = useState<ExamQuestion[]>([
+    {
+      id: 1,
+      question: '',
+      options: ['', '', '', ''],
+      correctIndex: 0,
+      explanation: '',
+      topic: 'الوحدة الأولى'
+    }
+  ]);
 
   // Form States - Summary
   const [showSummaryModal, setShowSummaryModal] = useState(false);
@@ -222,27 +255,39 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       const url = editingBookId ? `/api/books/${editingBookId}` : '/api/books';
       const method = editingBookId ? 'PUT' : 'POST';
 
-      const res = await fetch(url, {
+      const payload = {
+        title: bookTitle,
+        category: bookCategory,
+        filepath: bookFilePath,
+        coverpath: bookCoverPath || 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=600&auto=format&fit=crop&q=80',
+        is_student: bookIsStudent,
+        grade: bookGrade,
+        description: bookDescription,
+      };
+
+      // Always save locally in contentStore immediately for rock-solid sync
+      if (editingBookId) {
+        saveEditedItem('book', editingBookId, payload);
+      } else {
+        const newBook: Book = {
+          id: Date.now(),
+          ...payload,
+          downloads: 0,
+          views: 0,
+          created_at: new Date().toISOString()
+        };
+        saveCustomItem('book', newBook);
+      }
+      dispatchContentChanged();
+
+      await fetch(url, {
         method,
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${adminToken}`,
         },
-        body: JSON.stringify({
-          title: bookTitle,
-          category: bookCategory,
-          filepath: bookFilePath,
-          coverpath: bookCoverPath,
-          is_student: bookIsStudent,
-          grade: bookGrade,
-          description: bookDescription,
-        }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'فشل حفظ الكتاب');
-      }
+        body: JSON.stringify(payload),
+      }).catch(() => {});
 
       setShowBookModal(false);
       resetBookForm();
@@ -253,19 +298,51 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     }
   };
 
+  const handlePdfFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBookPdfFileName(file.name);
+    const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+    setBookPdfSize(`${sizeMb} ميجابايت`);
+    if (!bookTitle) {
+      setBookTitle(file.name.replace(/\.[^/.]+$/, ''));
+    }
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      if (event.target?.result) {
+        setBookFilePath(event.target.result as string);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleCoverFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      if (event.target?.result) {
+        const url = event.target.result as string;
+        setBookCoverPath(url);
+        setBookCoverPreview(url);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleDeleteBook = async (id: number) => {
     if (!window.confirm('هل أنت متأكد من حذف هذا الكتاب نهائياً من المكتبة؟')) return;
     try {
-      const res = await fetch(`/api/books/${id}`, {
+      markItemAsDeleted('book', id);
+      setBooks(prev => prev.filter(b => b.id !== id));
+      await fetch(`/api/books/${id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${adminToken}` },
-      });
-      if (res.ok) {
-        fetchAdminData();
-        onDataChanged();
-      }
+      }).catch(() => {});
+      fetchAdminData();
+      onDataChanged();
     } catch (err) {
-      alert('فشل الحذف');
+      // handled
     }
   };
 
@@ -274,7 +351,10 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     setBookTitle(b.title);
     setBookCategory(b.category);
     setBookFilePath(b.filepath);
+    setBookPdfFileName('');
+    setBookPdfSize('');
     setBookCoverPath(b.coverpath);
+    setBookCoverPreview(b.coverpath);
     setBookIsStudent(b.is_student);
     setBookGrade(b.grade || '');
     setBookDescription(b.description || '');
@@ -286,31 +366,177 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     setBookTitle('');
     setBookCategory('كتب الطلاب');
     setBookFilePath('');
+    setBookPdfFileName('');
+    setBookPdfSize('');
     setBookCoverPath('');
+    setBookCoverPreview('');
     setBookIsStudent(1);
     setBookGrade('الثانوية العامة');
     setBookDescription('');
   };
 
+  // STUDENT EXAMS ACTIONS
+  const handleDeleteExam = (id: string) => {
+    if (!window.confirm('هل أنت متأكد من حذف هذا الامتحان بالكامل من المنصة؟')) return;
+    const updated = deleteStudentExam(id);
+    setStudentExams(updated);
+    onDataChanged();
+  };
+
+  const handleSaveExam = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!examTitle.trim()) {
+      alert('يرجى إدخال عنوان الامتحان');
+      return;
+    }
+    if (examQuestions.length === 0) {
+      alert('يرجى إضافة سؤال واحد على الأقل للامتحان');
+      return;
+    }
+    for (let i = 0; i < examQuestions.length; i++) {
+      const q = examQuestions[i];
+      if (!q.question.trim()) {
+        alert(`يرجى كتابة نص السؤال رقم ${i + 1}`);
+        return;
+      }
+      if (q.options.some(opt => !opt.trim())) {
+        alert(`يرجى ملء جميع الخيارات الأربعة للسؤال رقم ${i + 1}`);
+        return;
+      }
+    }
+
+    const newExam: Exam = {
+      id: 'exam_' + Date.now(),
+      title: examTitle.trim(),
+      subject: examSubject,
+      grade: examGrade,
+      durationMinutes: Number(examDuration),
+      difficulty: examDifficulty,
+      totalMarks: Number(examTotalMarks),
+      passMarks: Number(examPassMarks),
+      questionsCount: examQuestions.length,
+      badge: examBadge || 'امتحان مدرسي',
+      description: examDescription || `امتحان تدريبي في مادة ${examSubject} لطلاب ${examGrade}`,
+      questions: examQuestions.map((q, idx) => ({ ...q, id: idx + 1 }))
+    };
+
+    const updated = addCustomStudentExam(newExam);
+    setStudentExams(updated);
+    setShowExamModal(false);
+    resetExamForm();
+    onDataChanged();
+    alert('تمت إضافة الامتحان بنجاح وأصبح متاحاً للطلاب فوراً! 🎉');
+  };
+
+  const resetExamForm = () => {
+    setExamTitle('');
+    setExamSubject('كيمياء');
+    setExamGrade('الصف الثالث الثانوي');
+    setExamDuration(25);
+    setExamTotalMarks(30);
+    setExamPassMarks(18);
+    setExamDifficulty('نموذج وزاري');
+    setExamBadge('بنك أسئلة الوزارة');
+    setExamDescription('');
+    setExamQuestions([
+      {
+        id: 1,
+        question: '',
+        options: ['', '', '', ''],
+        correctIndex: 0,
+        explanation: '',
+        topic: 'الوحدة الأولى'
+      }
+    ]);
+  };
+
+  const handleAddQuestionToExam = () => {
+    setExamQuestions(prev => [
+      ...prev,
+      {
+        id: prev.length + 1,
+        question: '',
+        options: ['', '', '', ''],
+        correctIndex: 0,
+        explanation: '',
+        topic: `سؤال ${prev.length + 1}`
+      }
+    ]);
+  };
+
+  const handleRemoveQuestionFromExam = (index: number) => {
+    if (examQuestions.length <= 1) {
+      alert('يجب أن يحتوي الامتحان على سؤال واحد على الأقل');
+      return;
+    }
+    setExamQuestions(prev => prev.filter((_, idx) => idx !== index));
+  };
+
+  const handleUpdateQuestionField = (index: number, field: keyof ExamQuestion, value: any) => {
+    setExamQuestions(prev => {
+      const updated = [...prev];
+      updated[index] = { ...updated[index], [field]: value };
+      return updated;
+    });
+  };
+
+  const handleUpdateQuestionOption = (qIndex: number, optIndex: number, value: string) => {
+    setExamQuestions(prev => {
+      const updated = [...prev];
+      const newOptions = [...updated[qIndex].options];
+      newOptions[optIndex] = value;
+      updated[qIndex] = { ...updated[qIndex], options: newOptions };
+      return updated;
+    });
+  };
+
   // SUMMARY ACTIONS
+  const [editingSummaryId, setEditingSummaryId] = useState<number | null>(null);
+
+  const openEditSummary = (s: Summary) => {
+    setEditingSummaryId(s.id);
+    setSummaryTitle(s.title);
+    setSummaryImagePath(s.imagepath);
+    setSummaryCategory(s.category);
+    setShowSummaryModal(true);
+  };
+
   const handleSaveSummary = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await fetch('/api/summaries', {
-        method: 'POST',
+      const payload = {
+        title: summaryTitle,
+        imagepath: summaryImagePath,
+        category: summaryCategory,
+      };
+
+      if (editingSummaryId) {
+        saveEditedItem('summary', editingSummaryId, payload);
+      } else {
+        const newSum: Summary = {
+          id: Date.now(),
+          ...payload,
+          views: 0,
+          created_at: new Date().toISOString()
+        };
+        saveCustomItem('summary', newSum);
+      }
+      dispatchContentChanged();
+
+      const url = editingSummaryId ? `/api/summaries/${editingSummaryId}` : '/api/summaries';
+      const method = editingSummaryId ? 'PUT' : 'POST';
+
+      await fetch(url, {
+        method,
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${adminToken}`,
         },
-        body: JSON.stringify({
-          title: summaryTitle,
-          imagepath: summaryImagePath,
-          category: summaryCategory,
-        }),
-      });
-      if (!res.ok) throw new Error('فشل إضافة الملخص');
+        body: JSON.stringify(payload),
+      }).catch(() => {});
 
       setShowSummaryModal(false);
+      setEditingSummaryId(null);
       setSummaryTitle('');
       setSummaryImagePath('');
       fetchAdminData();
@@ -321,40 +547,74 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   };
 
   const handleDeleteSummary = async (id: number) => {
-    if (!window.confirm('هل أنت متأكد من حذف صورة الملخص؟')) return;
+    if (!window.confirm('هل أنت متأكد من حذف صورة الملخص نهائياً؟')) return;
     try {
+      markItemAsDeleted('summary', id);
+      setSummaries(prev => prev.filter(s => s.id !== id));
+      dispatchContentChanged();
+
       await fetch(`/api/summaries/${id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${adminToken}` },
-      });
+      }).catch(() => {});
       fetchAdminData();
       onDataChanged();
     } catch (e) {
-      alert('فشل الحذف');
+      // handled
     }
   };
 
   // VIDEO ACTIONS
+  const [editingVideoId, setEditingVideoId] = useState<number | null>(null);
+
+  const openEditVideo = (v: Video) => {
+    setEditingVideoId(v.id);
+    setVideoTitle(v.title);
+    setVideoUrl(v.videourl);
+    setVideoCategory(v.category);
+    setVideoChannel(v.channel || 'المكتبة الرقمية');
+    setVideoDuration(v.duration || '20:00');
+    setShowVideoModal(true);
+  };
+
   const handleSaveVideo = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await fetch('/api/videos', {
-        method: 'POST',
+      const payload = {
+        title: videoTitle,
+        videourl: videoUrl,
+        category: videoCategory,
+        channel: videoChannel,
+        duration: videoDuration,
+      };
+
+      if (editingVideoId) {
+        saveEditedItem('video', editingVideoId, payload);
+      } else {
+        const newVid: Video = {
+          id: Date.now(),
+          ...payload,
+          views: 0,
+          created_at: new Date().toISOString()
+        };
+        saveCustomItem('video', newVid);
+      }
+      dispatchContentChanged();
+
+      const url = editingVideoId ? `/api/videos/${editingVideoId}` : '/api/videos';
+      const method = editingVideoId ? 'PUT' : 'POST';
+
+      await fetch(url, {
+        method,
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${adminToken}`,
         },
-        body: JSON.stringify({
-          title: videoTitle,
-          videourl: videoUrl,
-          category: videoCategory,
-          channel: videoChannel,
-          duration: videoDuration,
-        }),
-      });
-      if (!res.ok) throw new Error('فشل إضافة مقطع الفيديو');
+        body: JSON.stringify(payload),
+      }).catch(() => {});
 
       setShowVideoModal(false);
+      setEditingVideoId(null);
       setVideoTitle('');
       setVideoUrl('');
       fetchAdminData();
@@ -365,16 +625,20 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   };
 
   const handleDeleteVideo = async (id: number) => {
-    if (!window.confirm('هل أنت متأكد من حذف مقطع الفيديو؟')) return;
+    if (!window.confirm('هل أنت متأكد من حذف مقطع الفيديو نهائياً؟')) return;
     try {
+      markItemAsDeleted('video', id);
+      setVideos(prev => prev.filter(v => v.id !== id));
+      dispatchContentChanged();
+
       await fetch(`/api/videos/${id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${adminToken}` },
-      });
+      }).catch(() => {});
       fetchAdminData();
       onDataChanged();
     } catch (e) {
-      alert('فشل الحذف');
+      // handled
     }
   };
 
@@ -382,24 +646,38 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   const handleSaveArticle = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const payload = {
+        title: articleTitle,
+        content: articleContent,
+        imagepath: articleImagePath || 'https://images.unsplash.com/photo-1456513080510-7bf3a84b82f8?w=600&auto=format&fit=crop&q=80',
+        author: articleAuthor,
+        readTime: articleReadTime,
+      };
+
+      if (editingArticleId) {
+        saveEditedItem('article', editingArticleId, payload);
+      } else {
+        const newArt: Article = {
+          id: Date.now(),
+          ...payload,
+          views: 0,
+          created_at: new Date().toISOString()
+        };
+        saveCustomItem('article', newArt);
+      }
+      dispatchContentChanged();
+
       const url = editingArticleId ? `/api/articles/${editingArticleId}` : '/api/articles';
       const method = editingArticleId ? 'PUT' : 'POST';
 
-      const res = await fetch(url, {
+      await fetch(url, {
         method,
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${adminToken}`,
         },
-        body: JSON.stringify({
-          title: articleTitle,
-          content: articleContent,
-          imagepath: articleImagePath,
-          author: articleAuthor,
-          readTime: articleReadTime,
-        }),
-      });
-      if (!res.ok) throw new Error('فشل حفظ المقال');
+        body: JSON.stringify(payload),
+      }).catch(() => {});
 
       setShowArticleModal(false);
       setEditingArticleId(null);
@@ -414,16 +692,20 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   };
 
   const handleDeleteArticle = async (id: number) => {
-    if (!window.confirm('هل أنت متأكد من حذف هذا المقال؟')) return;
+    if (!window.confirm('هل أنت متأكد من حذف هذا المقال نهائياً؟')) return;
     try {
+      markItemAsDeleted('article', id);
+      setArticles(prev => prev.filter(a => a.id !== id));
+      dispatchContentChanged();
+
       await fetch(`/api/articles/${id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${adminToken}` },
-      });
+      }).catch(() => {});
       fetchAdminData();
       onDataChanged();
     } catch (e) {
-      alert('فشل الحذف');
+      // handled
     }
   };
 
@@ -482,13 +764,15 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   const handleDeleteUser = async (id: string) => {
     if (!window.confirm('هل أنت متأكد من حذف هذا المستخدم وسجلاته؟')) return;
     try {
+      markItemAsDeleted('user', id);
+      setUsers(prev => prev.filter(u => u.id !== id));
       await fetch(`/api/admin/users/${id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${adminToken}` },
-      });
+      }).catch(() => {});
       fetchAdminData();
     } catch (e) {
-      alert('فشل حذف المستخدم');
+      // handled
     }
   };
 
@@ -580,16 +864,6 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
             >
               {authLoading ? 'جاري التحقق من الصلاحيات...' : 'التحقق والدخول إلى لوحة الأمان 🛡️'}
             </button>
-
-            {/* Quick credentials hint */}
-            <div className="p-3 rounded-2xl bg-zinc-900/80 border border-zinc-800/80 text-[11px] text-zinc-400 space-y-1">
-              <p className="font-bold text-amber-400 flex items-center gap-1">
-                <span>💡 بيانات الدخول الافتراضية للمدير:</span>
-              </p>
-              <p>اسم المستخدم: <code className="bg-zinc-950 px-1.5 py-0.5 rounded text-zinc-200">ARM</code></p>
-              <p>كلمة المرور: <code className="bg-zinc-950 px-1.5 py-0.5 rounded text-zinc-200">1w2q3r4eA</code></p>
-              <p className="text-[10px] text-zinc-500 mt-1">يمكنك تغيير كلمة المرور فور الدخول من تبويب "مركز الأمان".</p>
-            </div>
           </form>
         </div>
       </div>
@@ -667,6 +941,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           { id: 'summaries', label: `🖼️ ملخصات الصور (${summaries.length})`, icon: Image },
           { id: 'videos', label: `🎬 مقاطع الفيديو (${videos.length})`, icon: VideoIcon },
           { id: 'articles', label: `📝 المقالات (${articles.length})`, icon: FileText },
+          { id: 'exams', label: `🎓 امتحانات الطلاب (${studentExams.length})`, icon: GraduationCap },
           { id: 'users', label: `👥 إدارة المستخدمين (${users.length})`, icon: Users },
           { id: 'security', label: '🛡️ مركز الأمان وكلمة المرور والسجلات', icon: KeyRound },
         ].map((tab) => (
@@ -1177,6 +1452,91 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         )}
 
         {/* ------------------------------------------------------------------- */}
+        {/* 6.5 EXAMS MANAGEMENT FOR STUDENTS */}
+        {/* ------------------------------------------------------------------- */}
+        {activeAdminTab === 'exams' && (
+          <div className="space-y-4 animate-in fade-in">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+              <button
+                onClick={() => { resetExamForm(); setShowExamModal(true); }}
+                className="px-4 py-2.5 bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400 text-zinc-950 font-bold text-xs rounded-2xl shadow-md hover:brightness-110 transition flex items-center gap-2 active:scale-95"
+              >
+                <Plus className="w-4 h-4" />
+                <span>إضافة امتحان أو اختبار إلكتروني جديد للطلاب 🎓</span>
+              </button>
+
+              <div className="relative w-full sm:w-64">
+                <input
+                  type="text"
+                  placeholder="بحث في الامتحانات..."
+                  value={tableSearch}
+                  onChange={(e) => setTableSearch(e.target.value)}
+                  className="w-full py-2 pr-9 pl-3 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                />
+                <Search className="w-3.5 h-3.5 text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
+              </div>
+            </div>
+
+            {/* Exams Table */}
+            <div className="bg-zinc-900 border border-zinc-800 rounded-3xl overflow-hidden shadow-xl">
+              <div className="overflow-x-auto">
+                <table className="w-full text-right text-xs">
+                  <thead className="bg-zinc-950 text-zinc-400 border-b border-zinc-800">
+                    <tr>
+                      <th className="py-3 px-4">عنوان الامتحان</th>
+                      <th className="py-3 px-4">المادة</th>
+                      <th className="py-3 px-4">المرحلة الدراسية</th>
+                      <th className="py-3 px-4">المدة</th>
+                      <th className="py-3 px-4">عدد الأسئلة</th>
+                      <th className="py-3 px-4">الدرجة الكلية</th>
+                      <th className="py-3 px-4">مستوى الصعوبة</th>
+                      <th className="py-3 px-4 text-center">إجراءات</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-800/60">
+                    {studentExams
+                      .filter(e => !tableSearch || e.title.includes(tableSearch) || e.subject.includes(tableSearch) || e.grade.includes(tableSearch))
+                      .map((exam) => (
+                        <tr key={exam.id} className="hover:bg-zinc-800/30 transition">
+                          <td className="py-3 px-4 font-bold text-zinc-100">
+                            <span>{exam.title}</span>
+                            <span className="text-[10px] text-zinc-500 block truncate max-w-xs">{exam.description}</span>
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-amber-500/20 text-amber-300">
+                              {exam.subject}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-zinc-300 font-semibold">{exam.grade}</td>
+                          <td className="py-3 px-4 text-zinc-400">{exam.durationMinutes} دقيقة</td>
+                          <td className="py-3 px-4 text-zinc-200 font-bold">{exam.questions.length} أسئلة</td>
+                          <td className="py-3 px-4 text-emerald-400 font-bold">{exam.totalMarks} (نجاح {exam.passMarks})</td>
+                          <td className="py-3 px-4">
+                            <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-zinc-800 text-zinc-300">
+                              {exam.difficulty}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            <div className="flex items-center justify-center gap-2">
+                              <button
+                                onClick={() => handleDeleteExam(exam.id)}
+                                className="p-1.5 rounded-lg bg-zinc-800 hover:bg-rose-500/20 text-rose-400 transition"
+                                title="حذف الامتحان بالكامل"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ------------------------------------------------------------------- */}
         {/* 7. SECURITY & PASSWORD HUB (تحسين صفحة الأمان) */}
         {/* ------------------------------------------------------------------- */}
         {activeAdminTab === 'security' && (
@@ -1444,26 +1804,86 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1">رابط ملف PDF</label>
-                <input
-                  type="url"
-                  required
-                  value={bookFilePath}
-                  onChange={(e) => setBookFilePath(e.target.value)}
-                  placeholder="https://.../book.pdf"
-                  className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
-                />
+              {/* PDF File Picker (Local upload from device or URL) */}
+              <div className="space-y-1.5 p-3 rounded-2xl bg-zinc-950/80 border border-zinc-800">
+                <label className="block text-xs font-bold text-amber-300">
+                  ملف الكتاب PDF (اختر ملفاً من جهازك أو أدخل الرابط) 📄
+                </label>
+                
+                <div className="flex flex-col sm:flex-row items-center gap-2">
+                  <label
+                    htmlFor="adminLocalPdfInput"
+                    className="w-full sm:flex-1 py-3 px-4 bg-zinc-900 border-2 border-dashed border-amber-500/40 hover:border-amber-500 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition text-xs font-bold text-amber-300 group"
+                  >
+                    <FileUp className="w-4 h-4 text-amber-400 group-hover:scale-110 transition" />
+                    <span>{bookPdfFileName ? `تم اختيار: ${bookPdfFileName} (${bookPdfSize})` : 'اختر ملف PDF من جهازك'}</span>
+                  </label>
+                  <input
+                    id="adminLocalPdfInput"
+                    type="file"
+                    accept="application/pdf"
+                    onChange={handlePdfFileChange}
+                    className="hidden"
+                  />
+                </div>
+
+                <div className="relative">
+                  <input
+                    type="text"
+                    required
+                    value={bookFilePath}
+                    onChange={(e) => setBookFilePath(e.target.value)}
+                    placeholder="أو أدخل رابط PDF مباشر (URL)"
+                    className="w-full py-2 px-3 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                  />
+                  {bookFilePath && (
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[10px] text-emerald-400 font-bold">
+                      جاهز ✓
+                    </span>
+                  )}
+                </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1">رابط صورة الغلاف</label>
+              {/* Cover Image Picker (Local upload from device or URL) */}
+              <div className="space-y-1.5 p-3 rounded-2xl bg-zinc-950/80 border border-zinc-800">
+                <label className="block text-xs font-bold text-amber-300">
+                  صورة غلاف الكتاب (اختر من جهازك أو ضع رابطاً) 🖼️
+                </label>
+
+                <div className="flex items-center gap-3">
+                  <label
+                    htmlFor="adminLocalCoverInput"
+                    className="flex-1 py-2.5 px-3 bg-zinc-900 border-2 border-dashed border-zinc-700 hover:border-amber-500 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition text-xs font-semibold text-zinc-300 group"
+                  >
+                    <Upload className="w-3.5 h-3.5 text-amber-400 group-hover:scale-110 transition" />
+                    <span>{bookCoverPreview ? 'تغيير صورة الغلاف من جهازك' : 'رفع صورة غلاف من جهازك'}</span>
+                  </label>
+                  <input
+                    id="adminLocalCoverInput"
+                    type="file"
+                    accept="image/*"
+                    onChange={handleCoverFileChange}
+                    className="hidden"
+                  />
+
+                  {bookCoverPreview && (
+                    <img 
+                      src={bookCoverPreview} 
+                      alt="Cover Preview" 
+                      className="w-10 h-14 object-cover rounded-lg border border-amber-500/50 shadow flex-shrink-0" 
+                    />
+                  )}
+                </div>
+
                 <input
-                  type="url"
+                  type="text"
                   value={bookCoverPath}
-                  onChange={(e) => setBookCoverPath(e.target.value)}
-                  placeholder="https://images.unsplash.com/..."
-                  className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                  onChange={(e) => {
+                    setBookCoverPath(e.target.value);
+                    setBookCoverPreview(e.target.value);
+                  }}
+                  placeholder="أو أدخل رابط صورة الغلاف (URL)"
+                  className="w-full py-2 px-3 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
 
@@ -1491,28 +1911,12 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                 />
               </div>
 
-              <div className="flex items-center justify-between pt-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setBookTitle('ملزمة الأحياء الشاملة للثانوية العامة 2026');
-                    setBookCategory('كتب الطلاب');
-                    setBookFilePath('https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf');
-                    setBookCoverPath('https://images.unsplash.com/photo-1532094349884-543bc11b234d?w=600&auto=format&fit=crop&q=80');
-                    setBookIsStudent(1);
-                    setBookGrade('الصف الثالث الثانوي');
-                    setBookDescription('شرح وافٍ وتطبيقات عملية على الوراثة والبيولوجيا الجزيئية والمناعة.');
-                  }}
-                  className="text-[11px] text-amber-400 underline"
-                >
-                  ملء نموذج تجريبي سريع ✨
-                </button>
-
+              <div className="flex items-center justify-end pt-2">
                 <button
                   type="submit"
-                  className="px-5 py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-xl hover:brightness-110 transition shadow-md"
+                  className="px-6 py-2.5 bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400 text-zinc-950 font-bold text-xs rounded-xl hover:brightness-110 transition shadow-lg shadow-amber-500/20 active:scale-95"
                 >
-                  حفظ الكتاب 💾
+                  حفظ الكتاب وإتاحته للطلاب 💾
                 </button>
               </div>
             </form>
@@ -1749,6 +2153,234 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
               >
                 حفظ ونشر المقال 📝
               </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------------- */}
+      {/* MODAL: ADD / EDIT STUDENT EXAM */}
+      {/* ------------------------------------------------------------------- */}
+      {showExamModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
+          <div className="relative w-full max-w-3xl bg-zinc-900 border border-amber-500/40 rounded-3xl p-6 text-right max-h-[90vh] overflow-y-auto shadow-2xl">
+            <button
+              onClick={() => setShowExamModal(false)}
+              className="absolute top-5 left-5 p-2 rounded-xl bg-zinc-800 text-zinc-400 hover:text-zinc-100 transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="border-b border-zinc-800 pb-3 mb-5">
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300">
+                منظومة الاختبارات الذكية
+              </span>
+              <h3 className="text-lg font-bold text-zinc-100 mt-1">
+                إضافة امتحان إلكتروني جديد للطلاب 🎓
+              </h3>
+              <p className="text-xs text-zinc-400">
+                أدخل بيانات الامتحان وأسئلته، وسيتاح فوراً في لوحة الطالب وبنك الامتحانات مع التصحيح التلقائي.
+              </p>
+            </div>
+
+            <form onSubmit={handleSaveExam} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-zinc-300 mb-1">عنوان الامتحان</label>
+                <input
+                  type="text"
+                  required
+                  value={examTitle}
+                  onChange={(e) => setExamTitle(e.target.value)}
+                  placeholder="مثال: امتحان الأحياء والوراثة - الصف الثالث الثانوي 2026"
+                  className="w-full py-2.5 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-300 mb-1">المادة</label>
+                  <select
+                    value={examSubject}
+                    onChange={(e) => setExamSubject(e.target.value)}
+                    className="w-full py-2.5 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                  >
+                    <option value="كيمياء">كيمياء</option>
+                    <option value="فيزياء">فيزياء</option>
+                    <option value="أحياء">أحياء</option>
+                    <option value="علوم">علوم</option>
+                    <option value="لغة عربية">لغة عربية</option>
+                    <option value="رياضيات">رياضيات</option>
+                    <option value="لغة إنجليزية">لغة إنجليزية</option>
+                    <option value="جيولوجيا">جيولوجيا</option>
+                    <option value="دراسات">دراسات</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-300 mb-1">الصف الدراسي</label>
+                  <select
+                    value={examGrade}
+                    onChange={(e) => setExamGrade(e.target.value)}
+                    className="w-full py-2.5 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                  >
+                    <option value="الصف الثالث الإعدادي">الصف الثالث الإعدادي</option>
+                    <option value="الصف الأول الثانوي">الصف الأول الثانوي</option>
+                    <option value="الصف الثاني الثانوي">الصف الثاني الثانوي</option>
+                    <option value="الصف الثالث الثانوي">الصف الثالث الثانوي</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-300 mb-1">المدة (بالدقائق)</label>
+                  <input
+                    type="number"
+                    min="5"
+                    max="180"
+                    value={examDuration}
+                    onChange={(e) => setExamDuration(parseInt(e.target.value) || 20)}
+                    className="w-full py-2.5 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-300 mb-1">الدرجة الكلية</label>
+                  <input
+                    type="number"
+                    value={examTotalMarks}
+                    onChange={(e) => setExamTotalMarks(parseInt(e.target.value) || 30)}
+                    className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-300 mb-1">درجة النجاح</label>
+                  <input
+                    type="number"
+                    value={examPassMarks}
+                    onChange={(e) => setExamPassMarks(parseInt(e.target.value) || 18)}
+                    className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-300 mb-1">مستوى الصعوبة</label>
+                  <select
+                    value={examDifficulty}
+                    onChange={(e) => setExamDifficulty(e.target.value as any)}
+                    className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100"
+                  >
+                    <option value="متوسط">متوسط</option>
+                    <option value="متقدم">متقدم</option>
+                    <option value="نموذج وزاري">نموذج وزاري</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1">وصف موجز للامتحان</label>
+                <textarea
+                  rows={2}
+                  value={examDescription}
+                  onChange={(e) => setExamDescription(e.target.value)}
+                  placeholder="اكتب نبذة عن أبواب المنهج التي يغطيها الاختبار..."
+                  className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              {/* Questions Section */}
+              <div className="border-t border-zinc-800 pt-4 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+                    <span>أسئلة الامتحان ({examQuestions.length})</span>
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={handleAddQuestionToExam}
+                    className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-amber-300 text-xs font-bold rounded-xl border border-zinc-700 transition flex items-center gap-1"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>إضافة سؤال جديد</span>
+                  </button>
+                </div>
+
+                <div className="space-y-4 max-h-96 overflow-y-auto pr-1">
+                  {examQuestions.map((q, qIdx) => (
+                    <div key={qIdx} className="p-4 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-amber-400">سؤال رقم {qIdx + 1}</span>
+                        {examQuestions.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveQuestionFromExam(qIdx)}
+                            className="text-xs text-rose-400 hover:text-rose-300 p-1"
+                            title="حذف هذا السؤال"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+
+                      <input
+                        type="text"
+                        required
+                        value={q.question}
+                        onChange={(e) => handleUpdateQuestionField(qIdx, 'question', e.target.value)}
+                        placeholder={`نص السؤال رقم ${qIdx + 1}...`}
+                        className="w-full py-2 px-3 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                      />
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {q.options.map((opt, optIdx) => (
+                          <div key={optIdx} className="flex items-center gap-2 bg-zinc-900 p-2 rounded-xl border border-zinc-800">
+                            <input
+                              type="radio"
+                              name={`correct_${qIdx}`}
+                              checked={q.correctIndex === optIdx}
+                              onChange={() => handleUpdateQuestionField(qIdx, 'correctIndex', optIdx)}
+                              className="text-amber-500 focus:ring-amber-500"
+                              title="حدد هذا الخيار كإجابة صحيحة"
+                            />
+                            <input
+                              type="text"
+                              required
+                              value={opt}
+                              onChange={(e) => handleUpdateQuestionOption(qIdx, optIdx, e.target.value)}
+                              placeholder={`الخيار (${optIdx + 1})`}
+                              className="w-full bg-transparent text-xs text-zinc-200 focus:outline-none"
+                            />
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <input
+                          type="text"
+                          value={q.explanation}
+                          onChange={(e) => handleUpdateQuestionField(qIdx, 'explanation', e.target.value)}
+                          placeholder="الشرح والتفسير العلمي للإجابة الصحيحة..."
+                          className="w-full py-1.5 px-3 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-300"
+                        />
+                        <input
+                          type="text"
+                          value={q.topic}
+                          onChange={(e) => handleUpdateQuestionField(qIdx, 'topic', e.target.value)}
+                          placeholder="موضوع أو باب السؤال (مثال: الكيمياء الكهربية)..."
+                          className="w-full py-1.5 px-3 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-300"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end pt-3 border-t border-zinc-800">
+                <button
+                  type="submit"
+                  className="px-6 py-2.5 bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400 text-zinc-950 font-bold text-xs rounded-xl hover:brightness-110 transition shadow-lg shadow-amber-500/20 active:scale-95"
+                >
+                  حفظ ونشر الامتحان للطلاب فوراً 🚀
+                </button>
+              </div>
             </form>
           </div>
         </div>

@@ -101,3 +101,108 @@ export interface AdminStats {
     securityStatus: string;
   };
 }
+
+// Student Exam & Statistics Interfaces
+export interface ExamQuestion {
+  id: number;
+  question: string;
+  image?: string;
+  options: string[];
+  correctIndex: number;
+  explanation: string;
+  topic: string;
+}
+
+export interface Exam {
+  id: string;
+  title: string;
+  subject: string;
+  grade: string;
+  durationMinutes: number;
+  difficulty: 'متوسط' | 'متقدم' | 'نموذج وزاري';
+  totalMarks: number;
+  passMarks: number;
+  questionsCount: number;
+  questions: ExamQuestion[];
+  description: string;
+  badge?: string;
+}
+
+export interface ExamSubmission {
+  id: string;
+  examId: string;
+  examTitle: string;
+  subject: string;
+  score: number;
+  totalMarks: number;
+  percentage: number;
+  passed: boolean;
+  timeSpentSeconds: number;
+  submittedAt: string;
+  answers: Record<number, number>;
+  feedback: string;
+}
+
+export interface StudentAchievement {
+  id: string;
+  title: string;
+  description: string;
+  icon: string;
+  unlocked: boolean;
+  unlockedAt?: string;
+  progress: number; // 0 - 100
+}
+
+export interface DownloadedBookItem {
+  id: number | string;
+  title: string;
+  category: string;
+  filepath: string;
+  coverpath?: string;
+  downloadedAt: string;
+  grade?: string;
+  fileSize?: string;
+}
+
+export interface StudentStats {
+  totalExamsTaken: number;
+  passedExams: number;
+  averageScore: number;
+  totalStudyMinutes: number;
+  booksReadCount: number;
+  downloadedBooksCount?: number;
+  downloadedBooksList?: DownloadedBookItem[];
+  summariesReviewedCount: number;
+  videosWatchedCount: number;
+  streakDays: number;
+  lastActiveDate: string;
+  subjectPerformance: Record<string, {
+    totalQuestions: number;
+    correctQuestions: number;
+    examsCount: number;
+    averageScore: number;
+  }>;
+  recentExams: ExamSubmission[];
+  achievements: StudentAchievement[];
+}
+
+export interface EnglishWordItem {
+  id: string;
+  word: string;
+  phonetic: string;
+  arabicTranslation: string;
+  exampleSentence: string;
+  exampleTranslation?: string;
+  grade: 'الصف الثالث الإعدادي' | 'الصف الأول الثانوي' | 'الصف الثاني الثانوي' | 'الصف الثالث الثانوي' | 'جميع المراحل';
+  category: 'مفردات أساسية' | 'تعبيرات وامتحانات' | 'حوارات ومواقف' | 'قواعد وتراكيب';
+  tips?: string;
+}
+
+export interface PronunciationResult {
+  targetText: string;
+  spokenText: string;
+  accuracyScore: number; // 0 to 100
+  feedback: string;
+  matchedWords: string[];
+  missedWords: string[];
+}

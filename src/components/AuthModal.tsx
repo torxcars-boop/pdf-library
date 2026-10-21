@@ -129,16 +129,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
     }
   };
 
-  // Quick Demo fill
-  const handleQuickDemo = (type: 'student' | 'researcher') => {
-    if (type === 'student') {
-      setLoginEmail('student@example.com');
-      setLoginPassword('user123');
-    } else {
-      setLoginEmail('sara@example.com');
-      setLoginPassword('user123');
-    }
-  };
 
   const sampleAvatars = [
     'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
@@ -269,26 +259,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
               {loading ? 'جاري التحقق...' : 'دخول إلى حسابي 🚀'}
             </button>
 
-            {/* Quick Demo Logins for easy testing */}
-            <div className="pt-3 border-t border-zinc-800/80">
-              <p className="text-[11px] text-zinc-400 mb-2 text-center">أو تسجيل سريع بنقرة واحدة (حسابات تجريبية):</p>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleQuickDemo('student')}
-                  className="flex-1 py-1.5 px-2 bg-zinc-800 hover:bg-zinc-700 text-amber-300 text-[11px] font-semibold rounded-lg border border-zinc-700 transition"
-                >
-                  🎓 طالب تجريبي
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleQuickDemo('researcher')}
-                  className="flex-1 py-1.5 px-2 bg-zinc-800 hover:bg-zinc-700 text-amber-300 text-[11px] font-semibold rounded-lg border border-zinc-700 transition"
-                >
-                  🔬 باحث أكاديمي
-                </button>
-              </div>
-            </div>
           </form>
         ) : (
           /* REGISTER FORM */

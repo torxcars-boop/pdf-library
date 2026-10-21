@@ -12,6 +12,7 @@ import {
   BookOpen
 } from 'lucide-react';
 import { RatingStars } from './RatingStars';
+import { recordBookDownload } from '../utils/contentStore';
 
 interface BookDetailModalProps {
   book: Book | null;
@@ -40,6 +41,8 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
 
   const handleDownload = async () => {
     setDownloading(true);
+    // Record download for Student Dashboard tracking
+    recordBookDownload(book);
     try {
       const res = await fetch(`/api/books/${book.id}/download`, { method: 'POST' });
       if (res.ok) {

@@ -33,16 +33,35 @@ import {
   EGYPT_THANAWEYA_ARTICLES
 } from './data/egyptCurriculum';
 import { RatingStars } from './components/RatingStars';
+import { StudentDashboard } from './components/StudentDashboard';
+import { Sidebar } from './components/Sidebar';
+import { EnglishAITutor } from './components/EnglishAITutor';
+import { StudentExamsView } from './components/StudentExamsView';
+import { StudentStats } from './types';
+import { getStudentStats, saveStudentStats } from './data/studentExamsData';
+import { 
+  filterOutDeleted, 
+  getCustomItems, 
+  applyEditedOverrides, 
+  recordBookDownload, 
+  getDownloadedBooksCount, 
+  listenToContentChanged 
+} from './utils/contentStore';
 
 export default function App() {
   // Auth state
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [userToken, setUserToken] = useState<string>('');
   
-  // Modals visibility
+  // Modals & Navigation visibility
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isAdminOpen, setIsAdminOpen] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
+  // Student statistics & local downloads
+  const [studentStats, setStudentStats] = useState<StudentStats>(getStudentStats);
+  const [downloadedCount, setDownloadedCount] = useState<number>(getDownloadedBooksCount);
 
   // Detail View Modals
   const [selectedBook, setSelectedBook] = useState<Book | null>(null);
@@ -70,7 +89,7 @@ export default function App() {
     setTimeout(() => setToast(null), 3000);
   };
 
-  // Initial Data Fetch & Egyptian Curriculum Synchronization
+  // Initial Data Fetch & Egyptian Curriculum Synchronization with Persistent Admin Actions
   const fetchData = async () => {
     try {
       setLoading(true);
@@ -81,80 +100,109 @@ export default function App() {
         fetch('/api/articles').catch(() => null),
       ]);
 
-      // Books processing: guarantee Egyptian Thanaweya books are classified under 'كتب الطلاب'
+      // 1. Books processing: server + egypt curriculum + custom items, filtered by deletions & edits
+      let serverBooks: Book[] = [];
       if (bRes && bRes.ok) {
         const b = await bRes.json();
-        const serverBooks: Book[] = b.books || [];
-        if (serverBooks.length > 0) {
-          // Merge server books with Egyptian curriculum if any are missing
-          const existingIds = new Set(serverBooks.map(item => item.id));
-          const missingEgyptBooks = EGYPT_THANAWEYA_BOOKS.filter(eb => !existingIds.has(eb.id));
-          const combined = [...serverBooks, ...missingEgyptBooks].map(book => {
-            // Ensure student curriculums are strictly tagged
-            if (book.title.includes('الثانوية') || book.title.includes('ثانوي') || book.grade?.includes('ثانوي')) {
-              return { ...book, category: 'كتب الطلاب', is_student: 1 };
-            }
-            return book;
-          });
-          setBooks(combined);
-        } else {
-          setBooks(EGYPT_THANAWEYA_BOOKS);
-        }
-      } else {
-        setBooks(EGYPT_THANAWEYA_BOOKS);
+        serverBooks = b.books || [];
       }
+      const existingBookIds = new Set(serverBooks.map(item => item.id));
+      const missingEgyptBooks = EGYPT_THANAWEYA_BOOKS.filter(eb => !existingBookIds.has(eb.id));
+      let combinedBooks = [...serverBooks, ...missingEgyptBooks];
 
-      // Summaries processing
+      // Merge custom admin-uploaded books
+      const customBooks = getCustomItems<Book>('arm_custom_books_v2');
+      customBooks.forEach(cb => {
+        if (!combinedBooks.some(b => String(b.id) === String(cb.id))) {
+          combinedBooks.unshift(cb);
+        }
+      });
+      // Filter out deleted books
+      combinedBooks = filterOutDeleted('book', combinedBooks);
+      // Apply edited field overrides
+      combinedBooks = applyEditedOverrides('book', combinedBooks);
+      // Format student category tags
+      combinedBooks = combinedBooks.map(book => {
+        if (
+          book.title.includes('الثانوية') || 
+          book.title.includes('ثانوي') || 
+          book.title.includes('إعدادي') || 
+          book.grade?.includes('ثانوي') ||
+          book.grade?.includes('إعدادي')
+        ) {
+          return { ...book, is_student: 1 };
+        }
+        return book;
+      });
+      setBooks(combinedBooks);
+
+      // 2. Summaries processing
+      let serverSums: Summary[] = [];
       if (sRes && sRes.ok) {
         const s = await sRes.json();
-        const serverSums: Summary[] = s.summaries || [];
-        if (serverSums.length > 0) {
-          const existingIds = new Set(serverSums.map(item => item.id));
-          const missingSums = EGYPT_THANAWEYA_SUMMARIES.filter(es => !existingIds.has(es.id));
-          setSummaries([...serverSums, ...missingSums]);
-        } else {
-          setSummaries(EGYPT_THANAWEYA_SUMMARIES);
-        }
-      } else {
-        setSummaries(EGYPT_THANAWEYA_SUMMARIES);
+        serverSums = s.summaries || [];
       }
+      const existingSumIds = new Set(serverSums.map(item => item.id));
+      const missingSums = EGYPT_THANAWEYA_SUMMARIES.filter(es => !existingSumIds.has(es.id));
+      let combinedSums = [...serverSums, ...missingSums];
+      const customSums = getCustomItems<Summary>('arm_custom_summaries_v2');
+      customSums.forEach(cs => {
+        if (!combinedSums.some(s => String(s.id) === String(cs.id))) {
+          combinedSums.unshift(cs);
+        }
+      });
+      combinedSums = filterOutDeleted('summary', combinedSums);
+      combinedSums = applyEditedOverrides('summary', combinedSums);
+      setSummaries(combinedSums);
 
-      // Videos processing: guarantee Egyptian educational videos
+      // 3. Videos processing
+      let serverVids: Video[] = [];
       if (vRes && vRes.ok) {
         const v = await vRes.json();
-        const serverVids: Video[] = v.videos || [];
-        if (serverVids.length > 0) {
-          const existingIds = new Set(serverVids.map(item => item.id));
-          const missingVids = EGYPT_THANAWEYA_VIDEOS.filter(ev => !existingIds.has(ev.id));
-          setVideos([...serverVids, ...missingVids]);
-        } else {
-          setVideos(EGYPT_THANAWEYA_VIDEOS);
-        }
-      } else {
-        setVideos(EGYPT_THANAWEYA_VIDEOS);
+        serverVids = v.videos || [];
       }
+      const existingVidIds = new Set(serverVids.map(item => item.id));
+      const missingVids = EGYPT_THANAWEYA_VIDEOS.filter(ev => !existingVidIds.has(ev.id));
+      let combinedVids = [...serverVids, ...missingVids];
+      const customVids = getCustomItems<Video>('arm_custom_videos_v2');
+      customVids.forEach(cv => {
+        if (!combinedVids.some(v => String(v.id) === String(cv.id))) {
+          combinedVids.unshift(cv);
+        }
+      });
+      combinedVids = filterOutDeleted('video', combinedVids);
+      combinedVids = applyEditedOverrides('video', combinedVids);
+      setVideos(combinedVids);
 
-      // Articles processing
+      // 4. Articles processing
+      let serverArts: Article[] = [];
       if (aRes && aRes.ok) {
         const a = await aRes.json();
-        const serverArts = a.articles || [];
-        if (serverArts.length > 0) {
-          const existingIds = new Set(serverArts.map((item: Article) => item.id));
-          const missingArts = EGYPT_THANAWEYA_ARTICLES.filter(ea => !existingIds.has(ea.id));
-          setArticles([...serverArts, ...missingArts]);
-        } else {
-          setArticles(EGYPT_THANAWEYA_ARTICLES);
-        }
-      } else {
-        setArticles(EGYPT_THANAWEYA_ARTICLES);
+        serverArts = a.articles || [];
       }
+      const existingArtIds = new Set(serverArts.map((item: Article) => item.id));
+      const missingArts = EGYPT_THANAWEYA_ARTICLES.filter(ea => !existingArtIds.has(ea.id));
+      let combinedArts = [...serverArts, ...missingArts];
+      const customArts = getCustomItems<Article>('arm_custom_articles_v2');
+      customArts.forEach(ca => {
+        if (!combinedArts.some(art => String(art.id) === String(ca.id))) {
+          combinedArts.unshift(ca);
+        }
+      });
+      combinedArts = filterOutDeleted('article', combinedArts);
+      combinedArts = applyEditedOverrides('article', combinedArts);
+      setArticles(combinedArts);
+
+      // Refresh student downloads & statistics
+      setDownloadedCount(getDownloadedBooksCount());
+      setStudentStats(getStudentStats());
     } catch (err) {
       console.error('Fetch error:', err);
-      // Fallback directly to verified Egyptian Thanaweya dataset
-      setBooks(EGYPT_THANAWEYA_BOOKS);
-      setVideos(EGYPT_THANAWEYA_VIDEOS);
-      setSummaries(EGYPT_THANAWEYA_SUMMARIES);
-      setArticles(EGYPT_THANAWEYA_ARTICLES);
+      // Fallback filtered by deletions
+      setBooks(filterOutDeleted('book', EGYPT_THANAWEYA_BOOKS));
+      setVideos(filterOutDeleted('video', EGYPT_THANAWEYA_VIDEOS));
+      setSummaries(filterOutDeleted('summary', EGYPT_THANAWEYA_SUMMARIES));
+      setArticles(filterOutDeleted('article', EGYPT_THANAWEYA_ARTICLES));
     } finally {
       setLoading(false);
     }
@@ -185,6 +233,13 @@ export default function App() {
       restoreUserSession(savedUserToken);
     }
 
+    // Realtime Content Synchronization Listener (Cross-component and Cross-tab)
+    const unsubscribeSync = listenToContentChanged(() => {
+      fetchData();
+      setStudentStats(getStudentStats());
+      setDownloadedCount(getDownloadedBooksCount());
+    });
+
     // Hidden Admin Trigger: Check URL path /admin, hash #admin, or query ?admin=1
     const checkAdminRoute = () => {
       const path = window.location.pathname;
@@ -208,6 +263,7 @@ export default function App() {
     window.addEventListener('keydown', handleAdminHotKey);
 
     return () => {
+      unsubscribeSync();
       window.removeEventListener('popstate', checkAdminRoute);
       window.removeEventListener('hashchange', checkAdminRoute);
       window.removeEventListener('keydown', handleAdminHotKey);
@@ -436,8 +492,16 @@ export default function App() {
           searchTerm={searchQuery}
           onSearchChange={setSearchQuery}
           activeTab={activeTab}
-          onSelectTab={setActiveTab}
+          onSelectTab={(tab) => {
+            if (tab === 'student-books') {
+              setSelectedCategory('كتب الطلاب');
+              setActiveTab('books');
+            } else {
+              setActiveTab(tab);
+            }
+          }}
           bookmarksCount={userBookmarksList.length}
+          onToggleSidebar={() => setIsSidebarOpen(prev => !prev)}
         />
 
         {/* Hero Section with Quick Statistics */}
@@ -484,10 +548,10 @@ export default function App() {
         <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
 
           {/* Section Navigation Tabs */}
-          <div className="flex flex-wrap justify-center gap-2 sm:gap-3 mb-6 border-b border-zinc-800/80 pb-5">
+          <div className="flex flex-wrap justify-center gap-2 sm:gap-2.5 mb-6 border-b border-zinc-800/80 pb-5">
             <button
               onClick={() => setActiveTab('all')}
-              className={`px-4 sm:px-5 py-2 rounded-2xl text-xs font-bold transition border ${
+              className={`px-3.5 sm:px-4 py-2 rounded-2xl text-xs font-bold transition border ${
                 activeTab === 'all'
                   ? 'bg-amber-500 text-zinc-950 border-amber-400 shadow-lg shadow-amber-500/20'
                   : 'bg-zinc-900/60 text-zinc-400 border-zinc-800 hover:text-amber-300'
@@ -496,8 +560,38 @@ export default function App() {
               🌐 عرض الكل
             </button>
             <button
+              onClick={() => setActiveTab('dashboard')}
+              className={`px-3.5 sm:px-4 py-2 rounded-2xl text-xs font-bold transition border ${
+                activeTab === 'dashboard'
+                  ? 'bg-amber-500 text-zinc-950 border-amber-400 shadow-lg shadow-amber-500/20'
+                  : 'bg-zinc-900/60 text-zinc-300 border-amber-500/30 hover:border-amber-500 hover:text-amber-300'
+              }`}
+            >
+              📊 لوحة تحكم الطالب
+            </button>
+            <button
+              onClick={() => setActiveTab('exams')}
+              className={`px-3.5 sm:px-4 py-2 rounded-2xl text-xs font-bold transition border ${
+                activeTab === 'exams'
+                  ? 'bg-amber-500 text-zinc-950 border-amber-400 shadow-lg shadow-amber-500/20'
+                  : 'bg-zinc-900/60 text-zinc-300 border-amber-500/30 hover:border-amber-500 hover:text-amber-300'
+              }`}
+            >
+              🎓 بنك الامتحانات (3 إعدادي - 3 ثانوي)
+            </button>
+            <button
+              onClick={() => setActiveTab('english-ai')}
+              className={`px-3.5 sm:px-4 py-2 rounded-2xl text-xs font-bold transition border ${
+                activeTab === 'english-ai'
+                  ? 'bg-amber-500 text-zinc-950 border-amber-400 shadow-lg shadow-amber-500/20'
+                  : 'bg-zinc-900/60 text-amber-300 border-amber-500/40 hover:border-amber-400 hover:brightness-110'
+              }`}
+            >
+              🎙️ نطق الإنجليزية بالذكاء الاصطناعي ✨
+            </button>
+            <button
               onClick={() => setActiveTab('books')}
-              className={`px-4 sm:px-5 py-2 rounded-2xl text-xs font-bold transition border ${
+              className={`px-3.5 sm:px-4 py-2 rounded-2xl text-xs font-bold transition border ${
                 activeTab === 'books'
                   ? 'bg-amber-500 text-zinc-950 border-amber-400 shadow-lg shadow-amber-500/20'
                   : 'bg-zinc-900/60 text-zinc-400 border-zinc-800 hover:text-amber-300'
@@ -507,7 +601,7 @@ export default function App() {
             </button>
             <button
               onClick={() => setActiveTab('articles')}
-              className={`px-4 sm:px-5 py-2 rounded-2xl text-xs font-bold transition border ${
+              className={`px-3.5 sm:px-4 py-2 rounded-2xl text-xs font-bold transition border ${
                 activeTab === 'articles'
                   ? 'bg-amber-500 text-zinc-950 border-amber-400 shadow-lg shadow-amber-500/20'
                   : 'bg-zinc-900/60 text-zinc-400 border-zinc-800 hover:text-amber-300'
@@ -517,7 +611,7 @@ export default function App() {
             </button>
             <button
               onClick={() => setActiveTab('summaries')}
-              className={`px-4 sm:px-5 py-2 rounded-2xl text-xs font-bold transition border ${
+              className={`px-3.5 sm:px-4 py-2 rounded-2xl text-xs font-bold transition border ${
                 activeTab === 'summaries'
                   ? 'bg-amber-500 text-zinc-950 border-amber-400 shadow-lg shadow-amber-500/20'
                   : 'bg-zinc-900/60 text-zinc-400 border-zinc-800 hover:text-amber-300'
@@ -527,24 +621,24 @@ export default function App() {
             </button>
             <button
               onClick={() => setActiveTab('videos')}
-              className={`px-4 sm:px-5 py-2 rounded-2xl text-xs font-bold transition border ${
+              className={`px-3.5 sm:px-4 py-2 rounded-2xl text-xs font-bold transition border ${
                 activeTab === 'videos'
                   ? 'bg-amber-500 text-zinc-950 border-amber-400 shadow-lg shadow-amber-500/20'
                   : 'bg-zinc-900/60 text-zinc-400 border-zinc-800 hover:text-amber-300'
               }`}
             >
-              🎬 مقاطع وشروحات الفيديو ({videos.length})
+              🎬 شروحات الفيديو ({videos.length})
             </button>
             {currentUser && (
               <button
                 onClick={() => setActiveTab('bookmarks')}
-                className={`px-4 sm:px-5 py-2 rounded-2xl text-xs font-bold transition border ${
+                className={`px-3.5 sm:px-4 py-2 rounded-2xl text-xs font-bold transition border ${
                   activeTab === 'bookmarks'
                     ? 'bg-amber-500 text-zinc-950 border-amber-400 shadow-lg shadow-amber-500/20'
                     : 'bg-zinc-900/60 text-zinc-400 border-zinc-800 hover:text-amber-300'
                 }`}
               >
-                ⭐ مفضلتي ومحفوظاتي ({userBookmarksList.length})
+                ⭐ مفضلتي ({userBookmarksList.length})
               </button>
             )}
           </div>
@@ -580,6 +674,53 @@ export default function App() {
               >
                 مسح البحث ✕
               </button>
+            </div>
+          )}
+
+          {/* ---------------------------------------------------------------- */}
+          {/* TAB: STUDENT DASHBOARD (إحصائيات الطالب المتقدمة) */}
+          {/* ---------------------------------------------------------------- */}
+          {activeTab === 'dashboard' && (
+            <div className="mb-14 animate-in fade-in">
+              <StudentDashboard
+                stats={studentStats}
+                currentUser={currentUser}
+                onUpdateStats={(newStats) => {
+                  setStudentStats(newStats);
+                  saveStudentStats(newStats);
+                }}
+                onNavigateToExams={() => setActiveTab('exams')}
+                onNavigateToBooks={() => {
+                  setSelectedCategory('كتب الطلاب');
+                  setActiveTab('books');
+                }}
+                onNavigateToEnglishAI={() => setActiveTab('english-ai')}
+              />
+            </div>
+          )}
+
+          {/* ---------------------------------------------------------------- */}
+          {/* TAB: EXAMS BANK (امتحانات 3 إعدادي حتى 3 ثانوي) */}
+          {/* ---------------------------------------------------------------- */}
+          {activeTab === 'exams' && (
+            <div className="mb-14 animate-in fade-in">
+              <StudentExamsView
+                stats={studentStats}
+                onUpdateStats={(newStats) => {
+                  setStudentStats(newStats);
+                  saveStudentStats(newStats);
+                }}
+                onNavigateToStats={() => setActiveTab('dashboard')}
+              />
+            </div>
+          )}
+
+          {/* ---------------------------------------------------------------- */}
+          {/* TAB: ENGLISH AI PRONUNCIATION TUTOR (نطق الإنجليزية بالذكاء الاصطناعي) */}
+          {/* ---------------------------------------------------------------- */}
+          {activeTab === 'english-ai' && (
+            <div className="mb-14 animate-in fade-in">
+              <EnglishAITutor />
             </div>
           )}
 
@@ -977,7 +1118,10 @@ export default function App() {
                             </button>
 
                             <button
-                              onClick={() => setSelectedBook(pdf)}
+                              onClick={() => {
+                                recordBookDownload(pdf);
+                                setSelectedBook(pdf);
+                              }}
                               className="px-3.5 py-1.5 bg-gradient-to-r from-amber-600 to-amber-500 text-zinc-950 text-xs font-bold rounded-xl shadow hover:brightness-110 transition flex items-center gap-1"
                             >
                               <span>تحميل</span> ⬇️
@@ -1004,6 +1148,27 @@ export default function App() {
 
         </main>
       </div>
+
+      {/* Sleek Collapsible Navigation Sidebar */}
+      <Sidebar
+        isOpen={isSidebarOpen}
+        onClose={() => setIsSidebarOpen(false)}
+        activeTab={activeTab}
+        onSelectTab={(tab) => {
+          if (tab === 'student-books') {
+            setSelectedCategory('كتب الطلاب');
+            setActiveTab('books');
+          } else {
+            setActiveTab(tab);
+          }
+        }}
+        currentUser={currentUser}
+        stats={studentStats}
+        onOpenAdmin={() => setIsAdminOpen(true)}
+        onOpenAuth={() => setIsAuthOpen(true)}
+        onOpenProfile={() => setIsProfileOpen(true)}
+        downloadedCount={downloadedCount}
+      />
 
       {/* ALL INTERACTIVE MODALS */}
       <AuthModal
