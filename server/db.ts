@@ -530,8 +530,8 @@ class DatabaseManager {
       if (fs.existsSync(DB_FILE)) {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
         const parsed = JSON.parse(raw);
-        // Verify if it contains the updated Thanaweya books
-        if (parsed.pdfs && parsed.pdfs.length >= 10) {
+        // Accept the existing database state as authoritative without resetting when items are deleted
+        if (parsed && Array.isArray(parsed.pdfs)) {
           return parsed;
         }
       }

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Exam, ExamQuestion, ExamSubmission, StudentStats } from '../types';
+import { Exam, ExamQuestion, ExamSubmission, StudentStats, User, UserSubscription } from '../types';
 import { getAllStudentExams, recordExamSubmission } from '../data/studentExamsData';
 import { 
   GraduationCap, 
@@ -21,24 +21,33 @@ import {
   X,
   Play,
   BarChart3,
-  Timer
+  Timer,
+  Zap,
+  CreditCard
 } from 'lucide-react';
 
 interface StudentExamsViewProps {
   stats: StudentStats;
   onUpdateStats: (newStats: StudentStats) => void;
   onNavigateToStats: () => void;
+  currentUser?: User | null;
+  onOpenSubscriptions?: () => void;
+  onUpdateUserSubscription?: (sub: UserSubscription) => void;
 }
 
 export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
   stats,
   onUpdateStats,
-  onNavigateToStats
+  onNavigateToStats,
+  currentUser,
+  onOpenSubscriptions,
+  onUpdateUserSubscription
 }) => {
   const [selectedSubject, setSelectedSubject] = useState<string>('الكل');
   const [selectedGrade, setSelectedGrade] = useState<string>('الكل');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [examsList, setExamsList] = useState<Exam[]>(getAllStudentExams);
+  const [showQuotaModal, setShowQuotaModal] = useState<boolean>(false);
 
   useEffect(() => {
     setExamsList(getAllStudentExams());
@@ -63,8 +72,16 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
   const grades = ['الكل', 'الصف الثالث الإعدادي', 'الصف الأول الثانوي', 'الصف الثاني الثانوي', 'الصف الثالث الثانوي'];
   const subjects = ['الكل', 'كيمياء', 'فيزياء', 'أحياء', 'علوم', 'لغة عربية', 'رياضيات', 'لغة إنجليزية', 'جيولوجيا', 'دراسات'];
 
-  // Start Exam handler
+  // Start Exam handler with subscription quota check
   const handleStartExam = (exam: Exam) => {
+    // If student is subscribed to a limited weekly package (e.g. 50 EGP with 2 exams/week)
+    if (currentUser?.subscription?.status === 'active' && currentUser.subscription.maxExamsPerWeek > 0) {
+      if (currentUser.subscription.examsRemainingThisWeek <= 0) {
+        setShowQuotaModal(true);
+        return;
+      }
+    }
+
     setActiveExam(exam);
     setCurrentQuestionIndex(0);
     setSelectedAnswers({});
@@ -168,6 +185,16 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
       correctQuestions: correctCount
     });
     onUpdateStats(updatedStats);
+
+    // Deduct from weekly exam quota if on a limited plan
+    if (currentUser?.subscription?.status === 'active' && currentUser.subscription.maxExamsPerWeek > 0) {
+      const nextRemaining = Math.max(0, (currentUser.subscription.examsRemainingThisWeek ?? currentUser.subscription.maxExamsPerWeek) - 1);
+      const updatedSub: UserSubscription = {
+        ...currentUser.subscription,
+        examsRemainingThisWeek: nextRemaining
+      };
+      onUpdateUserSubscription?.(updatedSub);
+    }
 
     setExamResult(submission);
     setViewingResultForExam(activeExam);
@@ -762,6 +789,52 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
         </div>
       </div>
 
+      {/* Subscription Status & Quota Banner */}
+      <div className="p-4 sm:p-5 rounded-3xl bg-zinc-900/90 border border-zinc-800 flex flex-col sm:flex-row items-center justify-between gap-4 text-right">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+            <Zap className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-zinc-200">
+                {currentUser?.subscription?.status === 'active' 
+                  ? `باقة الاشتراك النشطة: ${currentUser.subscription.planName}`
+                  : 'باقات اشتراك منصة الامتحانات تبدأ من 50 ج.م شهرياً'}
+              </span>
+              {currentUser?.subscription?.status === 'active' && (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  نشط
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-zinc-400 mt-0.5">
+              {currentUser?.subscription?.status === 'active' ? (
+                currentUser.subscription.maxExamsPerWeek > 0 ? (
+                  <span>
+                    الرصيد المتاح لهذا الأسبوع: <strong className="text-amber-400">{currentUser.subscription.examsRemainingThisWeek}</strong> من أصل <strong className="text-zinc-200">{currentUser.subscription.maxExamsPerWeek}</strong> امتحانات أسبوعياً.
+                  </span>
+                ) : (
+                  <span className="text-emerald-400 font-bold">
+                    رصيد امتحانات واختبارات غير محدود طوال مدة اشتراكك VIP 🌟
+                  </span>
+                )
+              ) : (
+                <span>احصل على باقة الـ 50 ج.م (امتحانين أسبوعياً مع الشرح)، أو 100 ج.م (5 امتحانات)، أو 200 ج.م VIP غير محدود.</span>
+              )}
+            </p>
+          </div>
+        </div>
+
+        <button
+          onClick={onOpenSubscriptions}
+          className="shrink-0 flex items-center gap-2 px-4 py-2 rounded-2xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs shadow-md shadow-amber-500/20 transition active:scale-95"
+        >
+          <CreditCard className="w-4 h-4" />
+          <span>{currentUser?.subscription?.status === 'active' ? 'تعديل أو ترقية الباقة' : 'استعراض باقات الاشتراك (من 50ج)'}</span>
+        </button>
+      </div>
+
       {/* Filter and Search Bar */}
       <div className="space-y-3">
         {/* Grade Filter Row */}
@@ -903,6 +976,45 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
           <GraduationCap className="w-12 h-12 text-zinc-600 mx-auto mb-3" />
           <h3 className="text-base font-bold text-zinc-300 mb-1">لم يتم العثور على امتحانات مطابقة</h3>
           <p className="text-xs text-zinc-500">جرب البحث بكلمات أخرى أو تغيير تصنيف المادة.</p>
+        </div>
+      )}
+
+      {/* Quota Exhausted Modal */}
+      {showQuotaModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="bg-zinc-950 border border-amber-500/40 rounded-3xl max-w-md w-full p-6 text-right shadow-2xl relative">
+            <div className="w-12 h-12 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center mx-auto mb-4">
+              <Zap className="w-6 h-6" />
+            </div>
+
+            <h3 className="text-lg font-black text-zinc-100 text-center mb-2">
+              لقد استهلكت رصيد امتحاناتك لهذا الأسبوع!
+            </h3>
+            
+            <p className="text-xs text-zinc-400 text-center leading-relaxed mb-6">
+              باقتك الحالية تسمح بـ <strong className="text-amber-400">{currentUser?.subscription?.maxExamsPerWeek} امتحانات أسبوعياً</strong>. يمكنك ترقية باقتك إلى باقة التفوق (5 امتحانات أسبوعياً) أو باقة أوائل الجمهورية VIP (امتحانات غير محدودة)، أو الانتظار لتجديد الرصيد الأسبوعي القادم.
+            </p>
+
+            <div className="space-y-3">
+              <button
+                onClick={() => {
+                  setShowQuotaModal(false);
+                  onOpenSubscriptions?.();
+                }}
+                className="w-full py-3 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-400 hover:brightness-110 text-zinc-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition active:scale-95 flex items-center justify-center gap-2"
+              >
+                <CreditCard className="w-4 h-4" />
+                <span>ترقية الباقة الآن (تبدأ من 50ج حتى 200ج)</span>
+              </button>
+
+              <button
+                onClick={() => setShowQuotaModal(false)}
+                className="w-full py-2.5 rounded-2xl bg-zinc-900 hover:bg-zinc-800 text-zinc-400 font-bold text-xs border border-zinc-800 transition"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

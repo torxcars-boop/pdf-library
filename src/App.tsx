@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Book, Summary, Video, Article, BookmarkItem } from './types';
+import { User, Book, Summary, Video, Article, BookmarkItem, UserSubscription } from './types';
 import { Navbar } from './components/Navbar';
 import { AuthModal } from './components/AuthModal';
 import { UserProfileModal } from './components/UserProfileModal';
@@ -8,6 +8,7 @@ import { BookDetailModal } from './components/BookDetailModal';
 import { ArticleDetailModal } from './components/ArticleDetailModal';
 import { ImageDetailModal } from './components/ImageDetailModal';
 import { VideoDetailModal } from './components/VideoDetailModal';
+import { SubscriptionPlansModal } from './components/SubscriptionPlansModal';
 import { 
   BookOpen, 
   FileText, 
@@ -58,6 +59,7 @@ export default function App() {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isAdminOpen, setIsAdminOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false);
 
   // Student statistics & local downloads
   const [studentStats, setStudentStats] = useState<StudentStats>(getStudentStats);
@@ -100,15 +102,16 @@ export default function App() {
         fetch('/api/articles').catch(() => null),
       ]);
 
-      // 1. Books processing: server + egypt curriculum + custom items, filtered by deletions & edits
+      // 1. Books processing: server authoritative + custom items, filtered by deletions & edits
       let serverBooks: Book[] = [];
       if (bRes && bRes.ok) {
         const b = await bRes.json();
         serverBooks = b.books || [];
       }
-      const existingBookIds = new Set(serverBooks.map(item => item.id));
-      const missingEgyptBooks = EGYPT_THANAWEYA_BOOKS.filter(eb => !existingBookIds.has(eb.id));
-      let combinedBooks = [...serverBooks, ...missingEgyptBooks];
+      // Never re-inject deleted books! Use server results if available, else initial seed
+      let combinedBooks = (serverBooks && serverBooks.length > 0)
+        ? [...serverBooks]
+        : [...EGYPT_THANAWEYA_BOOKS];
 
       // Merge custom admin-uploaded books
       const customBooks = getCustomItems<Book>('arm_custom_books_v2');
@@ -117,7 +120,7 @@ export default function App() {
           combinedBooks.unshift(cb);
         }
       });
-      // Filter out deleted books
+      // Filter out deleted books (enforcing persistent deletions)
       combinedBooks = filterOutDeleted('book', combinedBooks);
       // Apply edited field overrides
       combinedBooks = applyEditedOverrides('book', combinedBooks);
@@ -142,9 +145,9 @@ export default function App() {
         const s = await sRes.json();
         serverSums = s.summaries || [];
       }
-      const existingSumIds = new Set(serverSums.map(item => item.id));
-      const missingSums = EGYPT_THANAWEYA_SUMMARIES.filter(es => !existingSumIds.has(es.id));
-      let combinedSums = [...serverSums, ...missingSums];
+      let combinedSums = (serverSums && serverSums.length > 0)
+        ? [...serverSums]
+        : [...EGYPT_THANAWEYA_SUMMARIES];
       const customSums = getCustomItems<Summary>('arm_custom_summaries_v2');
       customSums.forEach(cs => {
         if (!combinedSums.some(s => String(s.id) === String(cs.id))) {
@@ -161,9 +164,9 @@ export default function App() {
         const v = await vRes.json();
         serverVids = v.videos || [];
       }
-      const existingVidIds = new Set(serverVids.map(item => item.id));
-      const missingVids = EGYPT_THANAWEYA_VIDEOS.filter(ev => !existingVidIds.has(ev.id));
-      let combinedVids = [...serverVids, ...missingVids];
+      let combinedVids = (serverVids && serverVids.length > 0)
+        ? [...serverVids]
+        : [...EGYPT_THANAWEYA_VIDEOS];
       const customVids = getCustomItems<Video>('arm_custom_videos_v2');
       customVids.forEach(cv => {
         if (!combinedVids.some(v => String(v.id) === String(cv.id))) {
@@ -180,9 +183,9 @@ export default function App() {
         const a = await aRes.json();
         serverArts = a.articles || [];
       }
-      const existingArtIds = new Set(serverArts.map((item: Article) => item.id));
-      const missingArts = EGYPT_THANAWEYA_ARTICLES.filter(ea => !existingArtIds.has(ea.id));
-      let combinedArts = [...serverArts, ...missingArts];
+      let combinedArts = (serverArts && serverArts.length > 0)
+        ? [...serverArts]
+        : [...EGYPT_THANAWEYA_ARTICLES];
       const customArts = getCustomItems<Article>('arm_custom_articles_v2');
       customArts.forEach(ca => {
         if (!combinedArts.some(art => String(art.id) === String(ca.id))) {
@@ -216,6 +219,13 @@ export default function App() {
       });
       if (res.ok) {
         const data = await res.json();
+        // Restore subscription from user record or local storage cache
+        const cachedSubStr = localStorage.getItem(`arm_subscription_${data.user.id}`) || localStorage.getItem('arm_cached_subscription');
+        if (cachedSubStr && !data.user.subscription) {
+          try {
+            data.user.subscription = JSON.parse(cachedSubStr);
+          } catch (e) {}
+        }
         setCurrentUser(data.user);
         setUserToken(token);
       } else {
@@ -224,6 +234,19 @@ export default function App() {
     } catch (e) {
       localStorage.removeItem('arm_user_token');
     }
+  };
+
+  const handleUpdateUserSubscription = (sub: UserSubscription) => {
+    if (currentUser) {
+      const updatedUser: User = {
+        ...currentUser,
+        subscription: sub
+      };
+      setCurrentUser(updatedUser);
+      localStorage.setItem(`arm_subscription_${currentUser.id}`, JSON.stringify(sub));
+    }
+    localStorage.setItem('arm_cached_subscription', JSON.stringify(sub));
+    showToast(`تم تفعيل باقة الاشتراك بنجاح: ${sub.planName} ⚡`);
   };
 
   useEffect(() => {
@@ -271,6 +294,12 @@ export default function App() {
   }, []);
 
   const handleLoginSuccess = (user: User, token: string) => {
+    const cachedSubStr = localStorage.getItem(`arm_subscription_${user.id}`) || localStorage.getItem('arm_cached_subscription');
+    if (cachedSubStr && !user.subscription) {
+      try {
+        user.subscription = JSON.parse(cachedSubStr);
+      } catch (e) {}
+    }
     setCurrentUser(user);
     setUserToken(token);
     localStorage.setItem('arm_user_token', token);
@@ -493,7 +522,9 @@ export default function App() {
           onSearchChange={setSearchQuery}
           activeTab={activeTab}
           onSelectTab={(tab) => {
-            if (tab === 'student-books') {
+            if (tab === 'pricing') {
+              setIsSubscriptionModalOpen(true);
+            } else if (tab === 'student-books') {
               setSelectedCategory('كتب الطلاب');
               setActiveTab('books');
             } else {
@@ -502,6 +533,7 @@ export default function App() {
           }}
           bookmarksCount={userBookmarksList.length}
           onToggleSidebar={() => setIsSidebarOpen(prev => !prev)}
+          onOpenSubscriptions={() => setIsSubscriptionModalOpen(true)}
         />
 
         {/* Hero Section with Quick Statistics */}
@@ -641,6 +673,12 @@ export default function App() {
                 ⭐ مفضلتي ({userBookmarksList.length})
               </button>
             )}
+            <button
+              onClick={() => setIsSubscriptionModalOpen(true)}
+              className="px-3.5 sm:px-4 py-2 rounded-2xl text-xs font-bold transition border bg-gradient-to-r from-amber-500/20 via-amber-400/20 to-amber-500/20 text-amber-300 border-amber-500/50 hover:border-amber-400 hover:brightness-125 shadow-lg shadow-amber-500/10 flex items-center gap-1.5 active:scale-95"
+            >
+              ⚡ باقات الاشتراك (تبدأ من 50ج)
+            </button>
           </div>
 
           {/* Book Category Filter Pills (when looking at books or all) */}
@@ -695,6 +733,7 @@ export default function App() {
                   setActiveTab('books');
                 }}
                 onNavigateToEnglishAI={() => setActiveTab('english-ai')}
+                onOpenSubscriptions={() => setIsSubscriptionModalOpen(true)}
               />
             </div>
           )}
@@ -706,11 +745,14 @@ export default function App() {
             <div className="mb-14 animate-in fade-in">
               <StudentExamsView
                 stats={studentStats}
+                currentUser={currentUser}
                 onUpdateStats={(newStats) => {
                   setStudentStats(newStats);
                   saveStudentStats(newStats);
                 }}
                 onNavigateToStats={() => setActiveTab('dashboard')}
+                onOpenSubscriptions={() => setIsSubscriptionModalOpen(true)}
+                onUpdateUserSubscription={handleUpdateUserSubscription}
               />
             </div>
           )}
@@ -1155,7 +1197,9 @@ export default function App() {
         onClose={() => setIsSidebarOpen(false)}
         activeTab={activeTab}
         onSelectTab={(tab) => {
-          if (tab === 'student-books') {
+          if (tab === 'pricing') {
+            setIsSubscriptionModalOpen(true);
+          } else if (tab === 'student-books') {
             setSelectedCategory('كتب الطلاب');
             setActiveTab('books');
           } else {
@@ -1167,10 +1211,19 @@ export default function App() {
         onOpenAdmin={() => setIsAdminOpen(true)}
         onOpenAuth={() => setIsAuthOpen(true)}
         onOpenProfile={() => setIsProfileOpen(true)}
+        onOpenSubscriptions={() => setIsSubscriptionModalOpen(true)}
         downloadedCount={downloadedCount}
       />
 
       {/* ALL INTERACTIVE MODALS */}
+      <SubscriptionPlansModal
+        isOpen={isSubscriptionModalOpen}
+        onClose={() => setIsSubscriptionModalOpen(false)}
+        currentUser={currentUser}
+        onOpenAuth={() => setIsAuthOpen(true)}
+        onSubscriptionUpdated={handleUpdateUserSubscription}
+      />
+
       <AuthModal
         isOpen={isAuthOpen}
         onClose={() => setIsAuthOpen(false)}

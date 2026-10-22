@@ -1,3 +1,29 @@
+export interface UserSubscription {
+  planId: 'free' | 'basic_50' | 'pro_100' | 'vip_200';
+  planName: string;
+  status: 'active' | 'expired' | 'none';
+  examsRemainingThisWeek: number;
+  maxExamsPerWeek: number; // 2 for basic_50, 5 for pro_100, -1 for unlimited
+  startDate: string;
+  endDate: string;
+  pricePaid?: number;
+  paymentMethod?: string;
+}
+
+export interface SubscriptionPlan {
+  id: 'basic_50' | 'pro_100' | 'vip_200';
+  name: string;
+  tagline: string;
+  priceEGP: number;
+  billingPeriod: string;
+  badge?: string;
+  isPopular?: boolean;
+  examsPerWeek: number; // 2, 5, or -1 (unlimited)
+  features: string[];
+  colorTheme: string;
+  ctaText: string;
+}
+
 export interface User {
   id: string;
   name: string;
@@ -9,6 +35,7 @@ export interface User {
   createdAt: string;
   lastLogin: string;
   bookmarks: BookmarkItem[];
+  subscription?: UserSubscription;
 }
 
 export interface BookmarkItem {

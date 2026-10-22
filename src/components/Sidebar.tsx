@@ -16,7 +16,9 @@ import {
   Download,
   Sparkles,
   LogOut,
-  User as UserIcon
+  User as UserIcon,
+  Zap,
+  CreditCard
 } from 'lucide-react';
 import { User, StudentStats } from '../types';
 
@@ -30,6 +32,7 @@ interface SidebarProps {
   onOpenAdmin: () => void;
   onOpenAuth: () => void;
   onOpenProfile: () => void;
+  onOpenSubscriptions?: () => void;
   downloadedCount: number;
 }
 
@@ -43,6 +46,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenAdmin,
   onOpenAuth,
   onOpenProfile,
+  onOpenSubscriptions,
   downloadedCount
 }) => {
   if (!isOpen) return null;
@@ -50,6 +54,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const navigationItems = [
     { id: 'all', label: 'الرئيسية (كافة المحتويات)', icon: Home, badge: null },
     { id: 'dashboard', label: 'لوحة تحكم وإحصائيات الطالب', icon: BarChart3, badge: 'إحصائياتك' },
+    { id: 'pricing', label: 'باقات الاشتراك (تبدأ من 50ج)', icon: Zap, badge: '3 باقات 🔥' },
     { id: 'student-books', label: 'كتب ومناهج الطلاب', icon: BookOpen, badge: '3 إعدادي - 3 ثانوي' },
     { id: 'exams', label: 'بنك الامتحانات والاختبارات', icon: GraduationCap, badge: `${stats.totalExamsTaken} منجز` },
     { id: 'english-ai', label: 'معلم نطق الإنجليزية بالذكاء الاصطناعي', icon: Volume2, badge: 'AI جديد ✨' },
@@ -60,6 +65,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   ];
 
   const handleNavClick = (tabId: string) => {
+    if (tabId === 'pricing' && onOpenSubscriptions) {
+      onOpenSubscriptions();
+      onClose();
+      return;
+    }
     onSelectTab(tabId);
     onClose();
   };

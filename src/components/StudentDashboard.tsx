@@ -28,7 +28,9 @@ import {
   ExternalLink,
   Check,
   X,
-  Volume2
+  Volume2,
+  Zap,
+  CreditCard
 } from 'lucide-react';
 
 interface StudentDashboardProps {
@@ -38,6 +40,7 @@ interface StudentDashboardProps {
   onNavigateToExams: () => void;
   onNavigateToBooks: () => void;
   onNavigateToEnglishAI?: () => void;
+  onOpenSubscriptions?: () => void;
 }
 
 export const StudentDashboard: React.FC<StudentDashboardProps> = ({
@@ -46,7 +49,8 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
   onUpdateStats,
   onNavigateToExams,
   onNavigateToBooks,
-  onNavigateToEnglishAI
+  onNavigateToEnglishAI,
+  onOpenSubscriptions
 }) => {
   // Downloaded books state
   const [downloadedBooks, setDownloadedBooks] = useState<DownloadedBookItem[]>([]);
@@ -250,6 +254,48 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
             )}
           </div>
         </div>
+      </div>
+
+      {/* ------------------------------------------------------------------- */}
+      {/* 1.5 SUBSCRIPTION STATUS BANNER */}
+      {/* ------------------------------------------------------------------- */}
+      <div className="bg-gradient-to-r from-amber-950/40 via-zinc-900 to-zinc-900 border border-amber-500/30 rounded-3xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-xl">
+        <div className="flex items-center gap-3.5">
+          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-amber-600 to-amber-400 flex items-center justify-center text-zinc-950 shadow-lg shadow-amber-500/20 flex-shrink-0">
+            <Zap className="w-6 h-6 stroke-[2.5]" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-black text-zinc-100">
+                {currentUser?.subscription?.status === 'active' 
+                  ? `باقة الاشتراك المفعلة: ${currentUser.subscription.planName}`
+                  : 'باقات الاشتراك الشهرية (تبدأ من 50 ج.م فقط)'}
+              </h3>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                {currentUser?.subscription?.status === 'active' ? 'مفعلة ✅' : '3 باقات مرنة'}
+              </span>
+            </div>
+            <p className="text-xs text-zinc-400 mt-1">
+              {currentUser?.subscription?.status === 'active' 
+                ? currentUser.subscription.maxExamsPerWeek === -1
+                  ? 'لديك إمكانية خوض امتحانات غير محدودة طوال الأسبوع والشهر لكافة المواد.'
+                  : `متبقي لك عدد ${currentUser.subscription.examsRemainingThisWeek} امتحان إلكتروني لهذا الأسبوع.`
+                : 'اشترك الآن في باقة الـ 50 ج.م واحصل على 2 امتحان أسبوعياً، أو باقة التفوق والـ VIP.'}
+            </p>
+          </div>
+        </div>
+
+        {onOpenSubscriptions && (
+          <button
+            onClick={onOpenSubscriptions}
+            className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400 hover:brightness-110 text-zinc-950 font-black text-xs shadow-md transition flex items-center gap-2 flex-shrink-0 active:scale-95"
+          >
+            <CreditCard className="w-4 h-4" />
+            <span>
+              {currentUser?.subscription?.status === 'active' ? 'ترقية / تعديل الباقة' : 'عرض الباقات والاشتراك ⚡'}
+            </span>
+          </button>
+        )}
       </div>
 
       {/* ------------------------------------------------------------------- */}
