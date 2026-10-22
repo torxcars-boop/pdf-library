@@ -48,6 +48,7 @@ import {
   getDownloadedBooksCount, 
   listenToContentChanged 
 } from './utils/contentStore';
+import { calculateStudentSubscription, saveStudentSubscription } from './utils/subscriptionStore';
 
 export default function App() {
   // Auth state
@@ -219,13 +220,9 @@ export default function App() {
       });
       if (res.ok) {
         const data = await res.json();
-        // Restore subscription from user record or local storage cache
-        const cachedSubStr = localStorage.getItem(`arm_subscription_${data.user.id}`) || localStorage.getItem('arm_cached_subscription');
-        if (cachedSubStr && !data.user.subscription) {
-          try {
-            data.user.subscription = JSON.parse(cachedSubStr);
-          } catch (e) {}
-        }
+        // Calculate trial or retrieve active subscription for this specific student
+        const studentSub = calculateStudentSubscription(data.user.id, data.user.createdAt, data.user.subscription);
+        data.user.subscription = studentSub;
         setCurrentUser(data.user);
         setUserToken(token);
       } else {
@@ -243,9 +240,8 @@ export default function App() {
         subscription: sub
       };
       setCurrentUser(updatedUser);
-      localStorage.setItem(`arm_subscription_${currentUser.id}`, JSON.stringify(sub));
+      saveStudentSubscription(currentUser.id, sub);
     }
-    localStorage.setItem('arm_cached_subscription', JSON.stringify(sub));
     showToast(`تم تفعيل باقة الاشتراك بنجاح: ${sub.planName} ⚡`);
   };
 
@@ -294,12 +290,8 @@ export default function App() {
   }, []);
 
   const handleLoginSuccess = (user: User, token: string) => {
-    const cachedSubStr = localStorage.getItem(`arm_subscription_${user.id}`) || localStorage.getItem('arm_cached_subscription');
-    if (cachedSubStr && !user.subscription) {
-      try {
-        user.subscription = JSON.parse(cachedSubStr);
-      } catch (e) {}
-    }
+    const studentSub = calculateStudentSubscription(user.id, user.createdAt, user.subscription);
+    user.subscription = studentSub;
     setCurrentUser(user);
     setUserToken(token);
     localStorage.setItem('arm_user_token', token);

@@ -1,7 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { Book, Summary, Video, Article, User, AuditLog, AdminStats, Exam, ExamQuestion } from '../types';
+import { Book, Summary, Video, Article, User, AuditLog, AdminStats, Exam, ExamQuestion, SubscriptionPlan, SubscriptionPaymentRequest, UserSubscription } from '../types';
 import { getAllStudentExams, addCustomStudentExam, deleteStudentExam } from '../data/studentExamsData';
 import { markItemAsDeleted, saveCustomItem, saveEditedItem, dispatchContentChanged } from '../utils/contentStore';
+import { 
+  getAdminPlansConfig, 
+  saveAdminPlanStatus, 
+  getPaymentRequests, 
+  updatePaymentRequestStatus, 
+  getAllSavedSubscriptions, 
+  saveStudentSubscription, 
+  calculateStudentSubscription, 
+  PAYMENT_ACCOUNTS 
+} from '../utils/subscriptionStore';
 import { 
   ShieldCheck, 
   ShieldAlert, 
@@ -35,7 +45,15 @@ import {
   Upload,
   FileUp,
   HelpCircle,
-  Check
+  Check,
+  Zap,
+  CreditCard,
+  CheckCircle2,
+  Calendar,
+  Clock,
+  Crown,
+  Phone,
+  MessageCircle
 } from 'lucide-react';
 
 interface AdminPortalProps {
@@ -55,7 +73,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   const [authLoading, setAuthLoading] = useState(false);
 
   // Active Admin View Tab
-  const [activeAdminTab, setActiveAdminTab] = useState<'dashboard' | 'books' | 'summaries' | 'videos' | 'articles' | 'exams' | 'users' | 'security'>('dashboard');
+  const [activeAdminTab, setActiveAdminTab] = useState<'dashboard' | 'subscriptions' | 'books' | 'summaries' | 'videos' | 'articles' | 'exams' | 'users' | 'security'>('dashboard');
+
+  // Subscriptions & Payment Requests States
+  const [adminPlans, setAdminPlans] = useState<SubscriptionPlan[]>(getAdminPlansConfig);
+  const [paymentRequests, setPaymentRequests] = useState<SubscriptionPaymentRequest[]>(getPaymentRequests);
+  const [studentSubscriptionsMap, setStudentSubscriptionsMap] = useState<Record<string, UserSubscription>>(getAllSavedSubscriptions);
+  const [selectedReceiptPreview, setSelectedReceiptPreview] = useState<string | null>(null);
 
   // Data States
   const [stats, setStats] = useState<AdminStats | null>(null);
@@ -82,7 +106,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   const [bookGrade, setBookGrade] = useState('الثانوية العامة');
   const [bookDescription, setBookDescription] = useState('');
 
-  // Form States - Student Exam
+  // Form States - Student Exam (Target audience controls per package or per student)
   const [showExamModal, setShowExamModal] = useState(false);
   const [examTitle, setExamTitle] = useState('');
   const [examSubject, setExamSubject] = useState('كيمياء');
@@ -93,6 +117,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   const [examDifficulty, setExamDifficulty] = useState<'متوسط' | 'متقدم' | 'نموذج وزاري'>('نموذج وزاري');
   const [examBadge, setExamBadge] = useState('بنك أسئلة الوزارة');
   const [examDescription, setExamDescription] = useState('');
+  const [examTargetScope, setExamTargetScope] = useState<'all' | 'specific_plans' | 'specific_students'>('all');
+  const [examAllowedPlans, setExamAllowedPlans] = useState<string[]>(['basic_50', 'pro_100', 'vip_200']);
+  const [examTargetStudentEmails, setExamTargetStudentEmails] = useState<string>('');
   const [examQuestions, setExamQuestions] = useState<ExamQuestion[]>([
     {
       id: 1,
@@ -405,6 +432,11 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       }
     }
 
+    const studentEmailsList = examTargetStudentEmails
+      .split(/[\n,]+/)
+      .map(s => s.trim().toLowerCase())
+      .filter(Boolean);
+
     const newExam: Exam = {
       id: 'exam_' + Date.now(),
       title: examTitle.trim(),
@@ -417,6 +449,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       questionsCount: examQuestions.length,
       badge: examBadge || 'امتحان مدرسي',
       description: examDescription || `امتحان تدريبي في مادة ${examSubject} لطلاب ${examGrade}`,
+      allowedPlans: examTargetScope === 'specific_plans' ? (examAllowedPlans as any) : ['all'],
+      assignedStudentEmails: examTargetScope === 'specific_students' ? studentEmailsList : [],
+      createdByAdmin: true,
       questions: examQuestions.map((q, idx) => ({ ...q, id: idx + 1 }))
     };
 
@@ -425,7 +460,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     setShowExamModal(false);
     resetExamForm();
     onDataChanged();
-    alert('تمت إضافة الامتحان بنجاح وأصبح متاحاً للطلاب فوراً! 🎉');
+    alert('تمت إضافة الامتحان بنجاح وتوجيهه للفئة المختارة! 🎉');
   };
 
   const resetExamForm = () => {
@@ -438,6 +473,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     setExamDifficulty('نموذج وزاري');
     setExamBadge('بنك أسئلة الوزارة');
     setExamDescription('');
+    setExamTargetScope('all');
+    setExamAllowedPlans(['basic_50', 'pro_100', 'vip_200']);
+    setExamTargetStudentEmails('');
     setExamQuestions([
       {
         id: 1,
@@ -937,11 +975,12 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       <nav className="bg-zinc-900/60 border-b border-zinc-800 px-6 flex flex-wrap gap-2 py-2 overflow-x-auto">
         {[
           { id: 'dashboard', label: '📊 لوحة المؤشرات والإحصائيات', icon: BarChart3 },
+          { id: 'subscriptions', label: `⚡ باقات واشتراكات الطلاب ${paymentRequests.filter(p => p.status === 'pending').length ? `(${paymentRequests.filter(p => p.status === 'pending').length} معلق)` : ''}`, icon: Zap },
+          { id: 'exams', label: `🎓 امتحانات الطلاب (${studentExams.length})`, icon: GraduationCap },
           { id: 'books', label: `📚 الكتب والمناهج (${books.length})`, icon: BookOpen },
           { id: 'summaries', label: `🖼️ ملخصات الصور (${summaries.length})`, icon: Image },
           { id: 'videos', label: `🎬 مقاطع الفيديو (${videos.length})`, icon: VideoIcon },
           { id: 'articles', label: `📝 المقالات (${articles.length})`, icon: FileText },
-          { id: 'exams', label: `🎓 امتحانات الطلاب (${studentExams.length})`, icon: GraduationCap },
           { id: 'users', label: `👥 إدارة المستخدمين (${users.length})`, icon: Users },
           { id: 'security', label: '🛡️ مركز الأمان وكلمة المرور والسجلات', icon: KeyRound },
         ].map((tab) => (
@@ -1095,6 +1134,402 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                 ))}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* ------------------------------------------------------------------- */}
+        {/* 1.5 SUBSCRIPTIONS & STUDENT ACCOUNTS MANAGEMENT */}
+        {/* ------------------------------------------------------------------- */}
+        {activeAdminTab === 'subscriptions' && (
+          <div className="space-y-8 animate-in fade-in">
+            
+            {/* 1. Toggle & Control Packages Availability */}
+            <div className="p-6 rounded-3xl bg-zinc-900 border border-zinc-800 space-y-4">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-zinc-800 pb-4">
+                <div>
+                  <h3 className="text-base font-bold text-amber-200 flex items-center gap-2">
+                    <Zap className="w-5 h-5 text-amber-400" />
+                    <span>التحكم في تفعيل وإيقاف باقات الاشتراك الشهرية</span>
+                  </h3>
+                  <p className="text-xs text-zinc-400 mt-1">
+                    يمكنك تفعيل أو إيقاف استقبال الاشتراكات في أي باقة فوراً بضغطة زر.
+                  </p>
+                </div>
+                <span className="text-xs font-bold px-3 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30">
+                  3 باقات شهرية متاحة
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {adminPlans.map((plan) => {
+                  const isActive = plan.isActive !== false;
+                  return (
+                    <div 
+                      key={plan.id}
+                      className={`p-5 rounded-2xl border transition ${
+                        isActive 
+                          ? 'bg-zinc-950/80 border-amber-500/30 shadow-md' 
+                          : 'bg-zinc-950/40 border-zinc-800 opacity-60'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="text-xs font-black text-zinc-200">{plan.name}</span>
+                        <span className="text-xs font-bold text-amber-400 font-mono">{plan.priceEGP} ج.م / شهر</span>
+                      </div>
+
+                      <p className="text-[11px] text-zinc-400 mb-4 min-h-[30px]">{plan.tagline}</p>
+
+                      <div className="flex items-center justify-between pt-3 border-t border-zinc-800/80">
+                        <span className={`text-xs font-bold flex items-center gap-1.5 ${
+                          isActive ? 'text-emerald-400' : 'text-zinc-500'
+                        }`}>
+                          <span className={`w-2 h-2 rounded-full ${isActive ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
+                          <span>{isActive ? 'مفعلة وتستقبل اشتراكات' : 'موقوفة مؤقتاً'}</span>
+                        </span>
+
+                        <button
+                          onClick={() => {
+                            const newStatus = !isActive;
+                            saveAdminPlanStatus(plan.id, newStatus);
+                            setAdminPlans(getAdminPlansConfig());
+                          }}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                            isActive
+                              ? 'bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40'
+                              : 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40'
+                          }`}
+                        >
+                          {isActive ? 'إيقاف الباقة ⛔' : 'تفعيل الباقة ✅'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 2. Payment Proof Verification & Approvals */}
+            <div className="p-6 rounded-3xl bg-zinc-900 border border-zinc-800 space-y-4">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-zinc-800 pb-4">
+                <div>
+                  <h3 className="text-base font-bold text-amber-200 flex items-center gap-2">
+                    <CreditCard className="w-5 h-5 text-amber-400" />
+                    <span>طلبات التحويل وإثباتات الدفع وإيصالات الطلاب</span>
+                  </h3>
+                  <p className="text-xs text-zinc-400 mt-1">
+                    راجع التحويلات الواردة على فودافون كاش (+201092467818)، اتصالات كاش (+201107093454)، وانستاباي (mostafarafat2007@instapay) وتأكيد التفعيل.
+                  </p>
+                </div>
+                <span className="text-xs font-bold px-3 py-1 rounded-full bg-zinc-800 text-zinc-300">
+                  إجمالي الطلبات: {paymentRequests.length}
+                </span>
+              </div>
+
+              {paymentRequests.length === 0 ? (
+                <div className="text-center py-10 bg-zinc-950/40 border border-zinc-800/80 rounded-2xl p-4">
+                  <CreditCard className="w-10 h-10 text-zinc-600 mx-auto mb-2" />
+                  <p className="text-xs text-zinc-400">لا توجد طلبات تحويل جديدة مسجلة حالياً.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-right text-xs">
+                    <thead>
+                      <tr className="border-b border-zinc-800 text-zinc-400">
+                        <th className="py-2.5 px-3">الطالب</th>
+                        <th className="py-2.5 px-3">الباقة والمبلغ</th>
+                        <th className="py-2.5 px-3">وسيلة الدفع</th>
+                        <th className="py-2.5 px-3">رقم الهاتف المحول منه</th>
+                        <th className="py-2.5 px-3">كود التحويل</th>
+                        <th className="py-2.5 px-3 text-center">إثبات التحويل</th>
+                        <th className="py-2.5 px-3">الحالة</th>
+                        <th className="py-2.5 px-3 text-center">الإجراءات</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-800/60">
+                      {paymentRequests.map((req) => (
+                        <tr key={req.id} className="hover:bg-zinc-950/40 transition">
+                          <td className="py-3 px-3">
+                            <span className="font-bold text-zinc-200 block">{req.userName}</span>
+                            <span className="text-[11px] text-zinc-500 font-mono">{req.userEmail}</span>
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className="font-bold text-amber-300 block">{req.planName}</span>
+                            <span className="text-[11px] text-zinc-400">{req.amountEGP} ج.م</span>
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className="px-2 py-0.5 rounded-lg bg-zinc-800 text-zinc-300 font-bold text-[11px]">
+                              {req.paymentMethod === 'vodafone' ? 'فودافون كاش' : req.paymentMethod === 'etisalat' ? 'اتصالات كاش' : 'انستاباي'}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 font-mono text-zinc-300">
+                            {req.senderPhone || '-'}
+                          </td>
+                          <td className="py-3 px-3 font-mono text-zinc-400">
+                            {req.transactionRef || '-'}
+                          </td>
+                          <td className="py-3 px-3 text-center">
+                            {req.receiptImage ? (
+                              <button
+                                onClick={() => setSelectedReceiptPreview(req.receiptImage as string)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[11px] font-bold transition"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                                <span>عرض الإيصال</span>
+                              </button>
+                            ) : (
+                              <span className="text-zinc-600 text-[11px]">لا يوجد صورة</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className={`px-2.5 py-1 rounded-full text-[10px] font-black inline-flex items-center gap-1 ${
+                              req.status === 'approved' 
+                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' 
+                                : req.status === 'rejected'
+                                ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                                : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                            }`}>
+                              {req.status === 'approved' && 'تم القبول والتفعيل ✅'}
+                              {req.status === 'rejected' && 'مرفوض ✕'}
+                              {req.status === 'pending' && 'معلق قيد المراجعة ⏳'}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-center">
+                            <div className="flex items-center justify-center gap-1.5">
+                              {req.status !== 'approved' && (
+                                <button
+                                  onClick={() => {
+                                    updatePaymentRequestStatus(req.id, 'approved');
+                                    setPaymentRequests(getPaymentRequests());
+                                    setStudentSubscriptionsMap(getAllSavedSubscriptions());
+                                    alert(`تم قبول التحويل وتفعيل الباقة للطالب ${req.userName} فوراً! ✅`);
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-zinc-950 font-bold text-[11px] transition"
+                                >
+                                  قبول وتفعيل
+                                </button>
+                              )}
+                              {req.status !== 'rejected' && (
+                                <button
+                                  onClick={() => {
+                                    updatePaymentRequestStatus(req.id, 'rejected');
+                                    setPaymentRequests(getPaymentRequests());
+                                    setStudentSubscriptionsMap(getAllSavedSubscriptions());
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-rose-900/60 text-rose-300 font-bold text-[11px] border border-zinc-700 transition"
+                                >
+                                  رفض
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* 3. Individual Student Subscriptions & 10-Day Free Trial Management */}
+            <div className="p-6 rounded-3xl bg-zinc-900 border border-zinc-800 space-y-4">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-zinc-800 pb-4">
+                <div>
+                  <h3 className="text-base font-bold text-amber-200 flex items-center gap-2">
+                    <Users className="w-5 h-5 text-amber-400" />
+                    <span>حسابات واشتراكات الطلاب الفردية (فترة تجريبية 10 أيام وباقات شهرية)</span>
+                  </h3>
+                  <p className="text-xs text-zinc-400 mt-1">
+                    لكل طالب حسابه الخاص وفترته التجريبية المجانية (10 أيام). يمكنك تفعيل باقة شهرية أو تمديد التجربة أو إيقاف الحساب.
+                  </p>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-right text-xs">
+                  <thead>
+                    <tr className="border-b border-zinc-800 text-zinc-400">
+                      <th className="py-2.5 px-3">الطالب المسجل</th>
+                      <th className="py-2.5 px-3">المرحلة</th>
+                      <th className="py-2.5 px-3">الباقة الحالية</th>
+                      <th className="py-2.5 px-3">الفترة التجريبية / الصلاحية</th>
+                      <th className="py-2.5 px-3">رصيد امتحانات الأسبوع</th>
+                      <th className="py-2.5 px-3 text-center">التحكم الفوري بحساب الطالب</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-800/60">
+                    {users.map((student) => {
+                      const sub = calculateStudentSubscription(student.id, student.createdAt, studentSubscriptionsMap[student.id]);
+                      const isTrial = sub.isTrial;
+                      const daysLeft = sub.trialDaysLeft ?? 0;
+
+                      return (
+                        <tr key={student.id} className="hover:bg-zinc-950/40 transition">
+                          <td className="py-3 px-3">
+                            <span className="font-bold text-zinc-200 block">{student.name}</span>
+                            <span className="text-[11px] text-zinc-500 font-mono">{student.email}</span>
+                          </td>
+                          <td className="py-3 px-3 text-zinc-400">
+                            {student.academicStage || 'الصف الثالث الثانوي'}
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className={`px-2.5 py-1 rounded-xl text-[11px] font-bold inline-block ${
+                              sub.planId === 'vip_200' 
+                                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' 
+                                : sub.planId === 'pro_100'
+                                ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
+                                : sub.planId === 'basic_50'
+                                ? 'bg-blue-500/20 text-blue-300 border border-blue-500/40'
+                                : 'bg-zinc-800 text-zinc-300'
+                            }`}>
+                              {sub.planName}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3">
+                            {isTrial ? (
+                              <span className={`text-xs font-bold ${daysLeft > 0 ? 'text-amber-400' : 'text-rose-400'}`}>
+                                {daysLeft > 0 ? `تجريبي (متبقي ${daysLeft} أيام)` : 'انتهت الـ 10 أيام ⚠️'}
+                              </span>
+                            ) : (
+                              <span className="text-zinc-400 text-xs">
+                                ينتهي في: {new Date(sub.endDate).toLocaleDateString('ar-EG')}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className="font-bold text-amber-400">
+                              {sub.maxExamsPerWeek === -1 ? 'غير محدود VIP 🌟' : `${sub.examsRemainingThisWeek} من ${sub.maxExamsPerWeek}`}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-center">
+                            <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                              {/* Quick Activate 50 */}
+                              <button
+                                onClick={() => {
+                                  const now = new Date();
+                                  const updatedSub: UserSubscription = {
+                                    planId: 'basic_50',
+                                    planName: 'باقة الأساسيات (50 ج.م)',
+                                    status: 'active',
+                                    billingPeriod: 'monthly',
+                                    examsRemainingThisWeek: 2,
+                                    maxExamsPerWeek: 2,
+                                    startDate: now.toISOString(),
+                                    endDate: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+                                    isTrial: false,
+                                    approvedByAdmin: true
+                                  };
+                                  saveStudentSubscription(student.id, updatedSub);
+                                  setStudentSubscriptionsMap(getAllSavedSubscriptions());
+                                  alert(`تم تفعيل باقة الـ 50 ج.م شهرياً للطالب ${student.name}!`);
+                                }}
+                                className="px-2 py-1 rounded-lg bg-blue-600/30 hover:bg-blue-600/50 text-blue-300 border border-blue-500/40 text-[10px] font-bold transition"
+                                title="تفعيل باقة 50 ج.م شهرياً"
+                              >
+                                تفعيل 50ج
+                              </button>
+
+                              {/* Quick Activate 100 */}
+                              <button
+                                onClick={() => {
+                                  const now = new Date();
+                                  const updatedSub: UserSubscription = {
+                                    planId: 'pro_100',
+                                    planName: 'باقة التفوق (100 ج.م)',
+                                    status: 'active',
+                                    billingPeriod: 'monthly',
+                                    examsRemainingThisWeek: 5,
+                                    maxExamsPerWeek: 5,
+                                    startDate: now.toISOString(),
+                                    endDate: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+                                    isTrial: false,
+                                    approvedByAdmin: true
+                                  };
+                                  saveStudentSubscription(student.id, updatedSub);
+                                  setStudentSubscriptionsMap(getAllSavedSubscriptions());
+                                  alert(`تم تفعيل باقة التفوق 100 ج.م شهرياً للطالب ${student.name}!`);
+                                }}
+                                className="px-2 py-1 rounded-lg bg-purple-600/30 hover:bg-purple-600/50 text-purple-300 border border-purple-500/40 text-[10px] font-bold transition"
+                                title="تفعيل باقة 100 ج.م شهرياً"
+                              >
+                                تفعيل 100ج
+                              </button>
+
+                              {/* Quick Activate 200 VIP */}
+                              <button
+                                onClick={() => {
+                                  const now = new Date();
+                                  const updatedSub: UserSubscription = {
+                                    planId: 'vip_200',
+                                    planName: 'باقة أوائل الجمهورية VIP (200 ج.م)',
+                                    status: 'active',
+                                    billingPeriod: 'monthly',
+                                    examsRemainingThisWeek: 9999,
+                                    maxExamsPerWeek: -1,
+                                    startDate: now.toISOString(),
+                                    endDate: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+                                    isTrial: false,
+                                    approvedByAdmin: true
+                                  };
+                                  saveStudentSubscription(student.id, updatedSub);
+                                  setStudentSubscriptionsMap(getAllSavedSubscriptions());
+                                  alert(`تم تفعيل باقة VIP الملكية 200 ج.م شهرياً للطالب ${student.name}! 👑`);
+                                }}
+                                className="px-2 py-1 rounded-lg bg-amber-500/30 hover:bg-amber-500/50 text-amber-300 border border-amber-500/40 text-[10px] font-bold transition"
+                                title="تفعيل باقة VIP 200 ج.م شهرياً"
+                              >
+                                تفعيل VIP (200ج)
+                              </button>
+
+                              {/* Extend Trial +10 days */}
+                              <button
+                                onClick={() => {
+                                  const now = new Date();
+                                  const updatedSub: UserSubscription = {
+                                    ...sub,
+                                    status: 'active',
+                                    isTrial: true,
+                                    trialDaysLeft: 10,
+                                    examsRemainingThisWeek: 2,
+                                    maxExamsPerWeek: 2,
+                                    endDate: new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000).toISOString()
+                                  };
+                                  saveStudentSubscription(student.id, updatedSub);
+                                  setStudentSubscriptionsMap(getAllSavedSubscriptions());
+                                  alert(`تم تمديد الفترة التجريبية 10 أيام إضافية للطالب ${student.name}!`);
+                                }}
+                                className="px-2 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 text-[10px] font-bold transition"
+                                title="تمديد الفترة التجريبية 10 أيام إضافية"
+                              >
+                                +10 أيام تجربة
+                              </button>
+
+                              {/* Reset Exam Quota */}
+                              <button
+                                onClick={() => {
+                                  const maxExams = sub.maxExamsPerWeek === -1 ? 9999 : sub.maxExamsPerWeek;
+                                  const updatedSub: UserSubscription = {
+                                    ...sub,
+                                    examsRemainingThisWeek: maxExams
+                                  };
+                                  saveStudentSubscription(student.id, updatedSub);
+                                  setStudentSubscriptionsMap(getAllSavedSubscriptions());
+                                  alert(`تم تجديد رصيد الامتحانات الأسبوعي للطالب ${student.name}!`);
+                                }}
+                                className="px-2 py-1 rounded-lg bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 border border-emerald-500/30 text-[10px] font-bold transition"
+                                title="تجديد حصة الامتحانات لهذا الأسبوع"
+                              >
+                                تجديد الرصيد ↺
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
           </div>
         )}
 
@@ -2287,6 +2722,118 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                 />
               </div>
 
+              {/* Target Audience Controls (التحكم في انشاء الامتحانات لكل باقة أو لكل طالب) */}
+              <div className="p-4 rounded-2xl bg-zinc-950 border border-amber-500/30 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-bold text-amber-300">
+                    🎯 الفئة الموجه لها الامتحان (التحكم بالباقات والطلاب)
+                  </label>
+                  <span className="text-[10px] text-zinc-400">حدد من يحق له خوض هذا الاختبار</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setExamTargetScope('all')}
+                    className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
+                      examTargetScope === 'all'
+                        ? 'bg-amber-500 text-zinc-950 border-amber-400 font-extrabold'
+                        : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    🌐 متاح لكافة الطلاب
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setExamTargetScope('specific_plans')}
+                    className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
+                      examTargetScope === 'specific_plans'
+                        ? 'bg-amber-500 text-zinc-950 border-amber-400 font-extrabold'
+                        : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    ⚡ لباقات اشتراك محددة
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setExamTargetScope('specific_students')}
+                    className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
+                      examTargetScope === 'specific_students'
+                        ? 'bg-amber-500 text-zinc-950 border-amber-400 font-extrabold'
+                        : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    👤 لطلاب محددين بالاسم
+                  </button>
+                </div>
+
+                {examTargetScope === 'specific_plans' && (
+                  <div className="p-3 rounded-xl bg-zinc-900 border border-zinc-800 space-y-2 text-xs">
+                    <span className="text-[11px] font-bold text-zinc-300 block">اختر الباقات المصرح لها بأداء هذا الامتحان:</span>
+                    <div className="flex flex-wrap gap-3">
+                      {[
+                        { id: 'basic_50', label: 'باقة الأساسيات (50 ج.م)' },
+                        { id: 'pro_100', label: 'باقة التفوق (100 ج.م)' },
+                        { id: 'vip_200', label: 'باقة أوائل الجمهورية VIP (200 ج.م)' },
+                        { id: 'free_trial', label: 'الفترة التجريبية المجانية (10 أيام)' }
+                      ].map(planOption => (
+                        <label key={planOption.id} className="flex items-center gap-2 cursor-pointer text-zinc-300">
+                          <input
+                            type="checkbox"
+                            checked={examAllowedPlans.includes(planOption.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setExamAllowedPlans([...examAllowedPlans, planOption.id]);
+                              } else {
+                                setExamAllowedPlans(examAllowedPlans.filter(p => p !== planOption.id));
+                              }
+                            }}
+                            className="rounded text-amber-500 focus:ring-amber-400 bg-zinc-950"
+                          />
+                          <span>{planOption.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {examTargetScope === 'specific_students' && (
+                  <div className="p-3 rounded-xl bg-zinc-900 border border-zinc-800 space-y-2 text-xs">
+                    <span className="text-[11px] font-bold text-zinc-300 block">
+                      اكتب البريد الإلكتروني للطلاب الموجه لهم الامتحان (مفصولاً بفواصل أو أسطر):
+                    </span>
+                    <textarea
+                      rows={2}
+                      value={examTargetStudentEmails}
+                      onChange={(e) => setExamTargetStudentEmails(e.target.value)}
+                      placeholder="student1@gmail.com, student2@example.com"
+                      className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 font-mono focus:outline-none focus:border-amber-500"
+                    />
+                    {users.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mt-1.5">
+                        <span className="text-[10px] text-zinc-500 block">إضافة سريعة من الطلاب المسجلين:</span>
+                        {users.slice(0, 6).map(u => (
+                          <button
+                            key={u.id}
+                            type="button"
+                            onClick={() => {
+                              if (!examTargetStudentEmails.includes(u.email)) {
+                                setExamTargetStudentEmails(prev => prev ? `${prev}, ${u.email}` : u.email);
+                              }
+                            }}
+                            className="px-2 py-0.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-amber-300 text-[10px] transition"
+                          >
+                            + {u.name} ({u.email})
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {/* Questions Section */}
               <div className="border-t border-zinc-800 pt-4 space-y-4">
                 <div className="flex items-center justify-between">
@@ -2382,6 +2929,39 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Receipt Image Preview Modal */}
+      {selectedReceiptPreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md animate-in fade-in">
+          <div className="relative max-w-xl w-full bg-zinc-950 border border-amber-500/40 rounded-3xl p-6 text-right shadow-2xl">
+            <button
+              onClick={() => setSelectedReceiptPreview(null)}
+              className="absolute top-4 left-4 p-2 rounded-xl bg-zinc-900 text-zinc-400 hover:text-zinc-100 transition"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <h3 className="text-sm font-bold text-amber-300 mb-4 flex items-center gap-2">
+              <Eye className="w-4 h-4" />
+              <span>صورة إثبات التحويل / إيصال الدفع البنكي</span>
+            </h3>
+            <div className="max-h-[70vh] overflow-auto rounded-2xl border border-zinc-800 bg-zinc-900 flex items-center justify-center p-2">
+              <img 
+                src={selectedReceiptPreview} 
+                alt="إيصال التحويل" 
+                className="max-h-[65vh] w-auto object-contain rounded-xl shadow-2xl" 
+              />
+            </div>
+            <div className="mt-4 flex justify-end">
+              <button
+                onClick={() => setSelectedReceiptPreview(null)}
+                className="px-5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-bold transition"
+              >
+                إغلاق
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -1,13 +1,21 @@
 export interface UserSubscription {
-  planId: 'free' | 'basic_50' | 'pro_100' | 'vip_200';
+  planId: 'free_trial' | 'free' | 'basic_50' | 'pro_100' | 'vip_200';
   planName: string;
-  status: 'active' | 'expired' | 'none';
+  status: 'active' | 'expired' | 'suspended' | 'none';
+  billingPeriod?: 'monthly' | 'trial';
   examsRemainingThisWeek: number;
-  maxExamsPerWeek: number; // 2 for basic_50, 5 for pro_100, -1 for unlimited
+  maxExamsPerWeek: number; // 2 for basic_50 and trial, 5 for pro_100, -1 for unlimited
   startDate: string;
   endDate: string;
+  trialDaysLeft?: number;
+  isTrial?: boolean;
   pricePaid?: number;
   paymentMethod?: string;
+  receiptUrl?: string;
+  receiptImage?: string;
+  paymentSenderPhone?: string;
+  transactionRef?: string;
+  approvedByAdmin?: boolean;
 }
 
 export interface SubscriptionPlan {
@@ -15,13 +23,31 @@ export interface SubscriptionPlan {
   name: string;
   tagline: string;
   priceEGP: number;
-  billingPeriod: string;
+  billingPeriod: string; // 'شهرياً'
   badge?: string;
   isPopular?: boolean;
+  isActive?: boolean; // Admin can toggle on/off
   examsPerWeek: number; // 2, 5, or -1 (unlimited)
   features: string[];
   colorTheme: string;
   ctaText: string;
+}
+
+export interface SubscriptionPaymentRequest {
+  id: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  planId: 'basic_50' | 'pro_100' | 'vip_200';
+  planName: string;
+  amountEGP: number;
+  paymentMethod: 'vodafone' | 'etisalat' | 'instapay' | 'fawry';
+  senderPhone: string;
+  transactionRef: string;
+  receiptImage?: string; // Base64 or URL of transfer screenshot
+  submittedAt: string;
+  status: 'pending' | 'approved' | 'rejected';
+  notes?: string;
 }
 
 export interface User {
@@ -153,6 +179,11 @@ export interface Exam {
   questions: ExamQuestion[];
   description: string;
   badge?: string;
+  // Admin-controlled Target Access: By Package or By Student
+  allowedPlans?: ('all' | 'free_trial' | 'basic_50' | 'pro_100' | 'vip_200')[];
+  assignedStudentEmails?: string[]; // Specific students who can access this exam
+  assignedStudentNames?: string[];
+  createdByAdmin?: boolean;
 }
 
 export interface ExamSubmission {

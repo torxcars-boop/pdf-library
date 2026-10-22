@@ -361,6 +361,15 @@
   ],
   "auditLogs": [
     {
+      "id": "log_1792672445765_or45",
+      "timestamp": "2026-10-22T12:34:05.765Z",
+      "type": "login_success",
+      "user": "الأدمن ARM",
+      "details": "تسجيل دخول ناجح إلى لوحة التحكم الإدارية والأمنية",
+      "ip": "197.43.111.144",
+      "status": "success"
+    },
+    {
       "id": "log_init",
       "type": "login_success",
       "user": "ARM (المدير العام)",

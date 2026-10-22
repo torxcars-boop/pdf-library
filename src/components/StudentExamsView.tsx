@@ -72,9 +72,35 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
   const grades = ['الكل', 'الصف الثالث الإعدادي', 'الصف الأول الثانوي', 'الصف الثاني الثانوي', 'الصف الثالث الثانوي'];
   const subjects = ['الكل', 'كيمياء', 'فيزياء', 'أحياء', 'علوم', 'لغة عربية', 'رياضيات', 'لغة إنجليزية', 'جيولوجيا', 'دراسات'];
 
-  // Start Exam handler with subscription quota check
+  // Start Exam handler with subscription quota and access check
   const handleStartExam = (exam: Exam) => {
-    // If student is subscribed to a limited weekly package (e.g. 50 EGP with 2 exams/week)
+    // Check if exam is assigned to specific students
+    if (exam.assignedStudentEmails && exam.assignedStudentEmails.length > 0) {
+      const studentEmail = currentUser?.email?.toLowerCase();
+      const isAllowed = studentEmail && exam.assignedStudentEmails.some(e => e.toLowerCase() === studentEmail);
+      if (!isAllowed) {
+        alert('هذا الامتحان مخصص لطلاب محددين بالاسم من قبل المشرف.');
+        return;
+      }
+    }
+
+    // Check if exam is locked to specific subscription packages
+    if (exam.allowedPlans && exam.allowedPlans.length > 0 && !exam.allowedPlans.includes('all')) {
+      const studentPlan = currentUser?.subscription?.planId || 'free_trial';
+      if (!exam.allowedPlans.includes(studentPlan as any)) {
+        alert('هذا الامتحان التدريبي متاح فقط للمشتركين في الباقات المحددة. اضغط لترقية باقتك.');
+        onOpenSubscriptions?.();
+        return;
+      }
+    }
+
+    // Check if 10-Day Free Trial expired
+    if (currentUser?.subscription?.isTrial && (currentUser.subscription.trialDaysLeft ?? 0) <= 0) {
+      setShowQuotaModal(true);
+      return;
+    }
+
+    // If student is subscribed to a limited weekly package (e.g. 50 EGP with 2 exams/week or Trial with 2 exams/week)
     if (currentUser?.subscription?.status === 'active' && currentUser.subscription.maxExamsPerWeek > 0) {
       if (currentUser.subscription.examsRemainingThisWeek <= 0) {
         setShowQuotaModal(true);
@@ -798,13 +824,21 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <span className="text-xs font-bold text-zinc-200">
-                {currentUser?.subscription?.status === 'active' 
-                  ? `باقة الاشتراك النشطة: ${currentUser.subscription.planName}`
-                  : 'باقات اشتراك منصة الامتحانات تبدأ من 50 ج.م شهرياً'}
+                {currentUser?.subscription?.isTrial ? (
+                  (currentUser.subscription.trialDaysLeft ?? 0) > 0 ? (
+                    <>أنت في <strong className="text-amber-400">الفترة التجريبية المجانية (10 أيام)</strong> — متبقي: {currentUser.subscription.trialDaysLeft} أيام</>
+                  ) : (
+                    <span className="text-rose-400 font-bold">انتهت الفترة التجريبية المجانية (10 أيام)</span>
+                  )
+                ) : currentUser?.subscription?.status === 'active' ? (
+                  `باقة الاشتراك الشهرية: ${currentUser.subscription.planName}`
+                ) : (
+                  'باقات اشتراك منصة الامتحانات الشهرية تبدأ من 50 ج.م'
+                )}
               </span>
               {currentUser?.subscription?.status === 'active' && (
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                  نشط
+                  {currentUser.subscription.isTrial ? 'فترة تجريبية' : 'اشتراك شهري نشط'}
                 </span>
               )}
             </div>
@@ -812,7 +846,7 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
               {currentUser?.subscription?.status === 'active' ? (
                 currentUser.subscription.maxExamsPerWeek > 0 ? (
                   <span>
-                    الرصيد المتاح لهذا الأسبوع: <strong className="text-amber-400">{currentUser.subscription.examsRemainingThisWeek}</strong> من أصل <strong className="text-zinc-200">{currentUser.subscription.maxExamsPerWeek}</strong> امتحانات أسبوعياً.
+                    الرصيد المتاح لهذا الأسبوع: <strong className="text-amber-400">{currentUser.subscription.examsRemainingThisWeek}</strong> من أصل <strong className="text-zinc-200">{currentUser.subscription.maxExamsPerWeek}</strong> امتحانات أسبوعياً (تتجدد أسبوعياً).
                   </span>
                 ) : (
                   <span className="text-emerald-400 font-bold">
@@ -820,7 +854,7 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
                   </span>
                 )
               ) : (
-                <span>احصل على باقة الـ 50 ج.م (امتحانين أسبوعياً مع الشرح)، أو 100 ج.م (5 امتحانات)، أو 200 ج.م VIP غير محدود.</span>
+                <span>للاستمرار في أداء الامتحانات، اختر باقة شهرية تبدأ من 50 ج.م (امتحانين أسبوعياً)، 100 ج.م، أو 200 ج.م VIP.</span>
               )}
             </p>
           </div>
@@ -831,7 +865,7 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
           className="shrink-0 flex items-center gap-2 px-4 py-2 rounded-2xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs shadow-md shadow-amber-500/20 transition active:scale-95"
         >
           <CreditCard className="w-4 h-4" />
-          <span>{currentUser?.subscription?.status === 'active' ? 'تعديل أو ترقية الباقة' : 'استعراض باقات الاشتراك (من 50ج)'}</span>
+          <span>{currentUser?.subscription?.isTrial ? 'الاشتراك في باقة شهرية (من 50ج)' : 'تعديل أو ترقية الباقة'}</span>
         </button>
       </div>
 
