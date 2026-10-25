@@ -16,6 +16,7 @@ import { RatingStars } from './RatingStars';
 import { recordBookDownload } from '../utils/contentStore';
 import { isEducationalFeatureLocked } from '../utils/subscriptionStore';
 import { CommentsSection } from './CommentsSection';
+import { ReviewsSection } from './ReviewsSection';
 
 interface BookDetailModalProps {
   book: Book | null;
@@ -219,6 +220,18 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
             </div>
           </div>
         )}
+
+        {/* Interactive Student Reviews and Text Ratings */}
+        <ReviewsSection
+          itemId={book.id}
+          itemType="book"
+          user={user}
+          onOpenAuth={onOpenAuth}
+          title={`مراجعات وتقييمات الطلاب لكتاب: ${book.title}`}
+          onRatingChanged={(newRating) => {
+            if (onRate) onRate(newRating);
+          }}
+        />
 
         {/* Interactive Student Comments & Questions Section */}
         <CommentsSection

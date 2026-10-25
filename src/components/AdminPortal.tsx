@@ -32,6 +32,7 @@ import {
   BookOpen, 
   FileText, 
   Image, 
+  Image as ImageIcon,
   Video as VideoIcon, 
   Plus, 
   Trash2, 
@@ -64,8 +65,22 @@ import {
   Clock,
   Crown,
   Phone,
-  MessageCircle
+  MessageCircle,
+  Star
 } from 'lucide-react';
+import { 
+  getRegisteredStudents, 
+  updateStudentStatus, 
+  deleteStudentLocally, 
+  STUDENT_REGISTERED_EVENT 
+} from '../utils/studentUserStore';
+import { 
+  getAllReviews, 
+  toggleReviewApproval, 
+  deleteReview, 
+  REVIEWS_UPDATED_EVENT 
+} from '../utils/reviewsStore';
+import { ItemReview } from '../types';
 
 interface AdminPortalProps {
   isOpen: boolean;
@@ -84,13 +99,16 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   const [authLoading, setAuthLoading] = useState(false);
 
   // Active Admin View Tab
-  const [activeAdminTab, setActiveAdminTab] = useState<'dashboard' | 'subscriptions' | 'books' | 'summaries' | 'videos' | 'articles' | 'exams' | 'users' | 'security'>('dashboard');
+  const [activeAdminTab, setActiveAdminTab] = useState<'dashboard' | 'subscriptions' | 'books' | 'summaries' | 'videos' | 'articles' | 'exams' | 'users' | 'reviews' | 'security'>('dashboard');
 
   // Subscriptions & Payment Requests States
   const [adminPlans, setAdminPlans] = useState<SubscriptionPlan[]>(getAdminPlansConfig);
   const [paymentRequests, setPaymentRequests] = useState<SubscriptionPaymentRequest[]>(getPaymentRequests);
   const [studentSubscriptionsMap, setStudentSubscriptionsMap] = useState<Record<string, UserSubscription>>(getAllSavedSubscriptions);
   const [selectedReceiptPreview, setSelectedReceiptPreview] = useState<string | null>(null);
+
+  // Reviews Moderation State
+  const [allReviews, setAllReviews] = useState<ItemReview[]>(getAllReviews);
 
   // Data States
   const [stats, setStats] = useState<AdminStats | null>(null);
@@ -175,12 +193,27 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   // Search in tables
   const [tableSearch, setTableSearch] = useState('');
 
-  // Check stored admin session on mount
+  // Check stored admin session on mount & listen to live student and review updates
   useEffect(() => {
     const savedToken = localStorage.getItem('arm_admin_token');
     if (savedToken) {
       verifyAdminToken(savedToken);
     }
+
+    const handleReviewsSync = () => {
+      setAllReviews(getAllReviews());
+    };
+    const handleStudentSync = () => {
+      fetchAdminData();
+    };
+
+    window.addEventListener(REVIEWS_UPDATED_EVENT, handleReviewsSync);
+    window.addEventListener(STUDENT_REGISTERED_EVENT, handleStudentSync);
+
+    return () => {
+      window.removeEventListener(REVIEWS_UPDATED_EVENT, handleReviewsSync);
+      window.removeEventListener(STUDENT_REGISTERED_EVENT, handleStudentSync);
+    };
   }, []);
 
   const verifyAdminToken = async (token: string) => {
@@ -304,22 +337,61 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         setArticles(aList);
       }
 
+      let uList: User[] = [];
       if (usersRes.ok) {
         const u = await usersRes.json();
-        let uList: User[] = u.users || [];
-        uList = filterOutDeleted('user', uList);
-        setUsers(uList);
+        uList = u.users || [];
       }
+
+      // 1. Merge registered students from local persistent store
+      const localStudents = getRegisteredStudents();
+      localStudents.forEach(ls => {
+        if (!uList.some(eu => eu.id === ls.id || (ls.email && eu.email?.toLowerCase() === ls.email.toLowerCase()))) {
+          uList.push(ls);
+        }
+      });
+
+      // 2. Merge currently active logged in user from localStorage
+      try {
+        const curRaw = localStorage.getItem('arm_current_user');
+        if (curRaw) {
+          const cur = JSON.parse(curRaw);
+          if (cur && cur.id && !uList.some(eu => eu.id === cur.id || (cur.email && eu.email?.toLowerCase() === cur.email.toLowerCase()))) {
+            uList.push(cur);
+          }
+        }
+      } catch (e) {}
+
+      // 3. Merge payment request students
+      const pReqs = getPaymentRequests();
+      pReqs.forEach(pr => {
+        if (pr.userId && !uList.some(eu => eu.id === pr.userId || (pr.userEmail && eu.email?.toLowerCase() === pr.userEmail.toLowerCase()))) {
+          uList.push({
+            id: pr.userId,
+            name: pr.userName || 'طالب مسجل',
+            email: pr.userEmail || `student_${pr.userId.slice(-5)}@student.edu`,
+            role: 'user',
+            status: 'active',
+            academicStage: 'الثانوية العامة',
+            avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
+            createdAt: pr.submittedAt || new Date().toISOString()
+          });
+        }
+      });
+
+      uList = filterOutDeleted('user', uList);
+      setUsers(uList);
 
       if (logsRes.ok) {
         const l = await logsRes.json();
         setLogs(l.logs || []);
       }
 
-      // Synchronize latest subscriber requests and student subscriptions
+      // Synchronize latest subscriber requests, student subscriptions, and reviews
       setPaymentRequests(getPaymentRequests());
       setStudentSubscriptionsMap(getAllSavedSubscriptions());
       setAdminPlans(getAdminPlansConfig());
+      setAllReviews(getAllReviews());
     } catch (err) {
       console.error('Error fetching admin data:', err);
     } finally {
@@ -836,6 +908,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   // USER MANAGEMENT ACTIONS
   const handleToggleUserStatus = async (user: User) => {
     const newStatus = user.status === 'active' ? 'suspended' : 'active';
+    updateStudentStatus(user.id, newStatus);
+    setUsers(prev => prev.map(u => u.id === user.id ? { ...u, status: newStatus } : u));
     try {
       await fetch(`/api/admin/users/${user.id}/status`, {
         method: 'PUT',
@@ -847,7 +921,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       });
       fetchAdminData();
     } catch (e) {
-      alert('فشل تحديث حالة المستخدم');
+      // already applied locally
     }
   };
 
@@ -855,6 +929,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     if (!window.confirm('هل أنت متأكد من حذف هذا المستخدم وسجلاته؟')) return;
     try {
       markItemAsDeleted('user', id);
+      deleteStudentLocally(id);
       setUsers(prev => prev.filter(u => u.id !== id));
       await fetch(`/api/admin/users/${id}`, {
         method: 'DELETE',
@@ -862,7 +937,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       }).catch(() => {});
       fetchAdminData();
     } catch (e) {
-      // handled
+      // already applied locally
     }
   };
 
@@ -1056,6 +1131,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           { id: 'summaries', label: `🖼️ ملخصات الصور (${summaries.length})`, icon: Image },
           { id: 'videos', label: `🎬 مقاطع الفيديو (${videos.length})`, icon: VideoIcon },
           { id: 'articles', label: `📝 المقالات (${articles.length})`, icon: FileText },
+          { id: 'reviews', label: `⭐ مراجعات وتقييمات المواد (${allReviews.length})`, icon: Star },
           { id: 'users', label: `👥 إدارة المستخدمين (${users.length})`, icon: Users },
           { id: 'security', label: '🛡️ مركز الأمان وكلمة المرور والسجلات', icon: KeyRound },
         ].map((tab) => (
@@ -2101,6 +2177,150 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         )}
 
         {/* ------------------------------------------------------------------- */}
+        {/* 6.3 REVIEWS MODERATION (مراجعات وتقييمات الطلاب) */}
+        {/* ------------------------------------------------------------------- */}
+        {activeAdminTab === 'reviews' && (
+          <div className="space-y-6 animate-in fade-in">
+            {/* Header & Metrics */}
+            <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div>
+                <h3 className="text-base font-black text-amber-200 flex items-center gap-2">
+                  <Star className="w-5 h-5 text-amber-400 fill-amber-400" />
+                  <span>إدارة مراجعات وتقييمات الطلاب للمواد والكتب</span>
+                </h3>
+                <p className="text-xs text-zinc-400 mt-1">
+                  يمكنك مراجعة آراء الطلاب، منح شارة الاعتماد الذهبية "معتمد من الإدارة ⭐" للمراجعات المفيدة، وحذف أي مراجعة غير لائقة.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="text-xs font-bold px-3 py-1.5 rounded-xl bg-amber-500/10 text-amber-300 border border-amber-500/30">
+                  إجمالي المراجعات: {allReviews.length}
+                </span>
+                <span className="text-xs font-bold px-3 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-300 border border-emerald-500/30">
+                  معتمد: {allReviews.filter(r => r.isApproved || r.approved).length}
+                </span>
+              </div>
+            </div>
+
+            {/* Reviews List */}
+            {allReviews.length === 0 ? (
+              <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-12 text-center text-zinc-400 text-xs">
+                لا توجد مراجعات مكتوبة بعد. عند كتابة أي طالب لمراجعة ستظهر هنا مباشرة للإدارة.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {allReviews.map((rev) => {
+                  const isApp = rev.isApproved || rev.approved;
+                  const stage = rev.academicStage || rev.userStage;
+                  return (
+                    <div 
+                      key={rev.id}
+                      className={`p-5 rounded-3xl border transition relative flex flex-col justify-between ${
+                        isApp
+                          ? 'bg-zinc-900/90 border-amber-500/40 shadow-lg shadow-amber-500/5'
+                          : 'bg-zinc-900/60 border-zinc-800'
+                      }`}
+                    >
+                      <div>
+                        {/* Top Row: User & Item info */}
+                        <div className="flex items-start justify-between gap-3 mb-3">
+                          <div className="flex items-center gap-3">
+                            <img 
+                              src={rev.userAvatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80'} 
+                              alt={rev.userName} 
+                              className="w-10 h-10 rounded-full object-cover border border-amber-500/30"
+                            />
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <h4 className="font-bold text-xs text-zinc-100">{rev.userName}</h4>
+                                {stage && (
+                                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400 font-medium">
+                                    {stage}
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-[10px] text-zinc-500">{new Date(rev.createdAt).toLocaleDateString('ar-EG')}</span>
+                            </div>
+                          </div>
+
+                          {/* Star Rating Display */}
+                          <div className="flex items-center gap-1 bg-zinc-950/80 px-2.5 py-1 rounded-xl border border-zinc-800">
+                            <div className="flex text-amber-400 text-xs">
+                              {[1, 2, 3, 4, 5].map((s) => (
+                                <span key={s} className={s <= rev.rating ? 'text-amber-400' : 'text-zinc-700'}>★</span>
+                              ))}
+                            </div>
+                            <span className="font-bold text-xs text-amber-300 font-mono mr-1">{rev.rating}</span>
+                          </div>
+                        </div>
+
+                        {/* Material Reference Badge */}
+                        <div className="mb-3 flex items-center gap-1.5 text-[11px] text-amber-400/90 bg-amber-500/5 px-2.5 py-1 rounded-lg border border-amber-500/20 w-fit">
+                          <span>المادة:</span>
+                          <span className="font-bold">{rev.itemTitle || `مادة #${rev.itemId}`}</span>
+                          <span className="text-zinc-500">({rev.itemType === 'book' ? 'كتاب/منهج' : rev.itemType === 'video' ? 'شرح فيديو' : rev.itemType === 'summary' ? 'ملخص/خريطة' : 'مقال'})</span>
+                        </div>
+
+                        {/* Review Comment Text */}
+                        <p className="text-xs text-zinc-200 leading-relaxed bg-zinc-950/50 p-3 rounded-2xl border border-zinc-800/60 mb-4 whitespace-pre-wrap">
+                          {rev.comment}
+                        </p>
+                      </div>
+
+                      {/* Footer Actions: Approve / Delete */}
+                      <div className="flex items-center justify-between pt-3 border-t border-zinc-800/80">
+                        <div>
+                          {isApp ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-400 bg-amber-500/10 px-2.5 py-1 rounded-full border border-amber-500/30">
+                              <Star className="w-3 h-3 fill-amber-400" />
+                              <span>معتمد من الإدارة ⭐</span>
+                            </span>
+                          ) : (
+                            <span className="text-[11px] text-zinc-500">بانتظار الاعتماد</span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => {
+                              toggleReviewApproval(rev.id);
+                              setAllReviews(getAllReviews());
+                            }}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                              isApp
+                                ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700'
+                                : 'bg-amber-500 hover:bg-amber-400 text-zinc-950 font-black shadow-md shadow-amber-500/20'
+                            }`}
+                          >
+                            <Star className={`w-3.5 h-3.5 ${isApp ? '' : 'fill-zinc-950'}`} />
+                            <span>{isApp ? 'إلغاء الاعتماد' : 'اعتماد المراجعة ⭐'}</span>
+                          </button>
+
+                          <button
+                            onClick={() => {
+                              if (window.confirm('هل تريد حذف هذه المراجعة نهائياً؟')) {
+                                deleteReview(rev.id);
+                                setAllReviews(getAllReviews());
+                              }
+                            }}
+                            className="p-1.5 rounded-xl bg-zinc-800 hover:bg-rose-500/20 text-rose-400 border border-zinc-700 transition"
+                            title="حذف المراجعة"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ------------------------------------------------------------------- */}
         {/* 6.5 EXAMS MANAGEMENT FOR STUDENTS */}
         {/* ------------------------------------------------------------------- */}
         {activeAdminTab === 'exams' && (
@@ -3089,6 +3309,97 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                         placeholder={`نص السؤال رقم ${qIdx + 1}...`}
                         className="w-full py-2 px-3 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
                       />
+
+                      {/* Question Image Attachment (Optional) */}
+                      <div className="p-3 rounded-xl bg-zinc-900/90 border border-zinc-800 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[11px] font-bold text-amber-300 flex items-center gap-1.5">
+                            <ImageIcon className="w-3.5 h-3.5" />
+                            <span>إرفاق صورة توضيحية للسؤال (اختياري - رسومات بيانية، دوائر، معادلات):</span>
+                          </label>
+                          {(q.imageUrl || q.image) && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                handleUpdateQuestionField(qIdx, 'imageUrl', '');
+                                handleUpdateQuestionField(qIdx, 'image', '');
+                              }}
+                              className="text-[10px] text-rose-400 hover:underline"
+                            >
+                              إزالة الصورة ✕
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="flex flex-col sm:flex-row items-center gap-2">
+                          <label className="flex-1 w-full py-2 px-3 bg-zinc-950 border border-dashed border-zinc-700 hover:border-amber-500 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition text-xs font-semibold text-zinc-300">
+                            <Upload className="w-3.5 h-3.5 text-amber-400" />
+                            <span>{(q.imageUrl || q.image) ? 'تغيير صورة السؤال من جهازك' : 'رفع صورة من جهازك'}</span>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  const reader = new FileReader();
+                                  reader.onload = () => {
+                                    const img = document.createElement('img');
+                                    img.onload = () => {
+                                      const maxDim = 600;
+                                      let w = img.width;
+                                      let h = img.height;
+                                      if (w > h && w > maxDim) {
+                                        h = Math.round((h * maxDim) / w);
+                                        w = maxDim;
+                                      } else if (h > maxDim) {
+                                        w = Math.round((w * maxDim) / h);
+                                        h = maxDim;
+                                      }
+                                      const canvas = document.createElement('canvas');
+                                      canvas.width = w;
+                                      canvas.height = h;
+                                      const ctx = canvas.getContext('2d');
+                                      if (ctx) {
+                                        ctx.drawImage(img, 0, 0, w, h);
+                                        const compressed = canvas.toDataURL('image/jpeg', 0.85);
+                                        handleUpdateQuestionField(qIdx, 'imageUrl', compressed);
+                                        handleUpdateQuestionField(qIdx, 'image', compressed);
+                                      }
+                                    };
+                                    img.src = reader.result as string;
+                                  };
+                                  reader.readAsDataURL(file);
+                                }
+                              }}
+                            />
+                          </label>
+
+                          <input
+                            type="text"
+                            value={q.imageUrl || q.image || ''}
+                            onChange={(e) => {
+                              handleUpdateQuestionField(qIdx, 'imageUrl', e.target.value);
+                              handleUpdateQuestionField(qIdx, 'image', e.target.value);
+                            }}
+                            placeholder="أو الصق رابط صورة مباشر (URL)..."
+                            className="flex-1 w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 font-mono focus:outline-none focus:border-amber-500"
+                          />
+                        </div>
+
+                        {(q.imageUrl || q.image) && (
+                          <div className="flex items-center gap-3 p-2 rounded-lg bg-zinc-950 border border-amber-500/30">
+                            <img
+                              src={q.imageUrl || q.image}
+                              alt={`معاينة رسم سؤال ${qIdx + 1}`}
+                              className="max-h-24 w-auto rounded-md object-contain border border-zinc-800"
+                            />
+                            <span className="text-[10px] text-emerald-400 font-semibold">
+                              تم إرفاق صورة السؤال بنجاح وتجهيزها للعرض للطلاب ✓
+                            </span>
+                          </div>
+                        )}
+                      </div>
 
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         {q.options.map((opt, optIdx) => (

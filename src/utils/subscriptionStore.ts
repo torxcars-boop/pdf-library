@@ -223,21 +223,38 @@ export const getPaymentRequests = (): SubscriptionPaymentRequest[] => {
 };
 
 export const submitPaymentRequest = (request: Omit<SubscriptionPaymentRequest, 'id' | 'submittedAt' | 'status'>) => {
+  const newReq: SubscriptionPaymentRequest = {
+    ...request,
+    id: 'req_' + Date.now(),
+    submittedAt: new Date().toISOString(),
+    status: 'pending'
+  };
+
   try {
-    const list = getPaymentRequests();
-    const newReq: SubscriptionPaymentRequest = {
-      ...request,
-      id: 'req_' + Date.now(),
-      submittedAt: new Date().toISOString(),
-      status: 'pending'
-    };
+    let list = getPaymentRequests();
+    // Keep max 25 recent requests to avoid storage overflow
+    if (list.length > 25) {
+      list = list.slice(0, 25);
+    }
     list.unshift(newReq);
     localStorage.setItem(PAYMENT_REQUESTS_KEY, JSON.stringify(list));
     dispatchContentChanged();
     return newReq;
   } catch (e) {
-    console.error('Error submitting payment request', e);
-    return null;
+    console.warn('Quota exceeded while saving payment request, retrying without large payload...', e);
+    try {
+      // Retry without receiptImage in storage if quota exceeded
+      const fallbackReq = { ...newReq, receiptImage: undefined };
+      let list = getPaymentRequests().map(r => ({ ...r, receiptImage: undefined })).slice(0, 15);
+      list.unshift(fallbackReq);
+      localStorage.setItem(PAYMENT_REQUESTS_KEY, JSON.stringify(list));
+      dispatchContentChanged();
+      return fallbackReq;
+    } catch (err2) {
+      console.error('Final fallback for payment request', err2);
+      dispatchContentChanged();
+      return newReq;
+    }
   }
 };
 

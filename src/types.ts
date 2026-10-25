@@ -59,8 +59,8 @@ export interface User {
   avatar: string;
   status: 'active' | 'suspended';
   createdAt: string;
-  lastLogin: string;
-  bookmarks: BookmarkItem[];
+  lastLogin?: string;
+  bookmarks?: BookmarkItem[];
   subscription?: UserSubscription;
 }
 
@@ -160,10 +160,29 @@ export interface ExamQuestion {
   id: number;
   question: string;
   image?: string;
+  imageUrl?: string;
   options: string[];
   correctIndex: number;
   explanation: string;
   topic: string;
+}
+
+export interface ItemReview {
+  id: string;
+  itemId: string | number;
+  itemType: 'book' | 'video' | 'article' | 'summary';
+  userId: string;
+  userName: string;
+  userAvatar?: string;
+  academicStage?: string;
+  userStage?: string;
+  itemTitle?: string;
+  rating: number; // 1 to 5
+  comment: string;
+  createdAt: string;
+  isApproved: boolean;
+  approved?: boolean;
+  likesCount?: number;
 }
 
 export interface Exam {

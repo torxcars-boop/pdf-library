@@ -3,6 +3,7 @@ import { Video, User } from '../types';
 import { X, Bookmark, ExternalLink, Play, Eye } from 'lucide-react';
 import { RatingStars } from './RatingStars';
 import { CommentsSection } from './CommentsSection';
+import { ReviewsSection } from './ReviewsSection';
 
 interface VideoDetailModalProps {
   video: Video | null;
@@ -128,6 +129,18 @@ export const VideoDetailModal: React.FC<VideoDetailModalProps> = ({
             </a>
           </div>
         </div>
+
+        {/* Interactive Student Reviews and Text Ratings */}
+        <ReviewsSection
+          itemId={video.id}
+          itemType="video"
+          user={user}
+          onOpenAuth={onOpenAuth}
+          title={`مراجعات وتقييمات الطلاب لشرح: ${video.title}`}
+          onRatingChanged={(newRating) => {
+            if (onRate) onRate(newRating);
+          }}
+        />
 
         {/* Interactive Student Comments & Questions Section */}
         <CommentsSection

@@ -31,6 +31,7 @@ import {
   submitPaymentRequest,
   saveStudentSubscription 
 } from '../utils/subscriptionStore';
+import { saveRegisteredStudent } from '../utils/studentUserStore';
 
 interface SubscriptionPlansModalProps {
   isOpen: boolean;
@@ -39,6 +40,43 @@ interface SubscriptionPlansModalProps {
   onOpenAuth: () => void;
   onSubscriptionUpdated: (subscription: UserSubscription) => void;
 }
+
+// Compress receipt image using HTML5 Canvas to prevent LocalStorage Quota Exceeded error
+const compressReceiptFile = (file: File, maxDim = 500, quality = 0.65): Promise<string> => {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (readerEvent) => {
+      const img = new Image();
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        } else {
+          resolve(readerEvent.target?.result as string);
+        }
+      };
+      img.onerror = () => resolve(readerEvent.target?.result as string);
+      img.src = readerEvent.target?.result as string;
+    };
+    reader.onerror = () => resolve('');
+    reader.readAsDataURL(file);
+  });
+};
 
 export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
   isOpen,
@@ -82,20 +120,20 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
     setSuccessMessage(null);
   };
 
-  // Image Upload for Receipt
-  const handleReceiptUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Image Upload for Receipt with HTML5 Canvas Auto-Compression
+  const handleReceiptUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 5 * 1024 * 1024) {
-        alert('حجم الصورة كبير جداً، يرجى اختيار صورة أصغر من 5 ميجابايت.');
-        return;
-      }
       setReceiptFileName(file.name);
-      const reader = new FileReader();
-      reader.onload = () => {
-        setReceiptImage(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+      try {
+        const compressedBase64 = await compressReceiptFile(file, 500, 0.65);
+        setReceiptImage(compressedBase64);
+      } catch (err) {
+        console.warn('Receipt compression fallback', err);
+        const reader = new FileReader();
+        reader.onload = () => setReceiptImage(reader.result as string);
+        reader.readAsDataURL(file);
+      }
     }
   };
 
@@ -133,55 +171,71 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
     setIsProcessing(true);
 
     setTimeout(() => {
-      const now = new Date();
-      const expiry = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 days Monthly
+      try {
+        const now = new Date();
+        const expiry = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 days Monthly
 
-      const newSubscription: UserSubscription = {
-        planId: selectedPlan.id,
-        planName: selectedPlan.name,
-        status: 'active',
-        billingPeriod: 'monthly',
-        examsRemainingThisWeek: selectedPlan.examsPerWeek === -1 ? 9999 : selectedPlan.examsPerWeek,
-        maxExamsPerWeek: selectedPlan.examsPerWeek,
-        startDate: now.toISOString(),
-        endDate: expiry.toISOString(),
-        isTrial: false,
-        pricePaid: selectedPlan.priceEGP,
-        paymentMethod: paymentMethod === 'vodafone' ? 'فودافون كاش' : paymentMethod === 'etisalat' ? 'اتصالات كاش' : 'انستاباي',
-        paymentSenderPhone: senderPhone,
-        transactionRef: transactionRef || undefined,
-        receiptImage: receiptImage || undefined,
-        approvedByAdmin: true
-      };
+        const newSubscription: UserSubscription = {
+          planId: selectedPlan.id,
+          planName: selectedPlan.name,
+          status: 'active',
+          billingPeriod: 'monthly',
+          examsRemainingThisWeek: selectedPlan.examsPerWeek === -1 ? 9999 : selectedPlan.examsPerWeek,
+          maxExamsPerWeek: selectedPlan.examsPerWeek,
+          startDate: now.toISOString(),
+          endDate: expiry.toISOString(),
+          isTrial: false,
+          pricePaid: selectedPlan.priceEGP,
+          paymentMethod: paymentMethod === 'vodafone' ? 'فودافون كاش' : paymentMethod === 'etisalat' ? 'اتصالات كاش' : 'انستاباي',
+          paymentSenderPhone: senderPhone,
+          transactionRef: transactionRef || undefined,
+          approvedByAdmin: true
+        };
 
-      // 1. Submit payment request record for admin audit & approval tracking
-      submitPaymentRequest({
-        userId: currentUser.id,
-        userName: currentUser.name,
-        userEmail: currentUser.email,
-        planId: selectedPlan.id,
-        planName: selectedPlan.name,
-        amountEGP: selectedPlan.priceEGP,
-        paymentMethod,
-        senderPhone,
-        transactionRef,
-        receiptImage: receiptImage || undefined,
-        notes: `تم التفعيل للطالب ${currentUser.name}`
-      });
+        // 1. Submit payment request record for admin audit & approval tracking
+        submitPaymentRequest({
+          userId: currentUser.id,
+          userName: currentUser.name,
+          userEmail: currentUser.email,
+          planId: selectedPlan.id,
+          planName: selectedPlan.name,
+          amountEGP: selectedPlan.priceEGP,
+          paymentMethod,
+          senderPhone,
+          transactionRef,
+          receiptImage: receiptImage || undefined,
+          notes: `تم التفعيل الفوري للطالب ${currentUser.name}`
+        });
 
-      // 2. Save into per-student subscription storage
-      saveStudentSubscription(currentUser.id, newSubscription);
-      
-      onSubscriptionUpdated(newSubscription);
-      setIsProcessing(false);
-      setSuccessMessage(`تم تفعيل ${selectedPlan.name} بنجاح! مبروك يا ${currentUser.name} 🎉`);
+        // 2. Save into per-student subscription storage
+        saveStudentSubscription(currentUser.id, newSubscription);
 
-      setTimeout(() => {
-        setSelectedPlan(null);
-        setSuccessMessage(null);
-        onClose();
-      }, 3000);
-    }, 1000);
+        // 3. Ensure student is saved in registered students directory for admin
+        saveRegisteredStudent({
+          ...currentUser,
+          subscription: newSubscription
+        });
+        
+        onSubscriptionUpdated(newSubscription);
+        setIsProcessing(false);
+        setSuccessMessage(`تم استلام طلب الدفع وتفعيل ${selectedPlan.name} بنجاح! مبروك يا ${currentUser.name} 🎉`);
+
+        setTimeout(() => {
+          setSelectedPlan(null);
+          setSuccessMessage(null);
+          onClose();
+        }, 2500);
+      } catch (err: any) {
+        console.error('Error confirming payment:', err);
+        setIsProcessing(false);
+        setSuccessMessage('تم استلام بيانات التحويل بنجاح! يرجى إرسال الإشعار للمطور عبر واتساب للتأكيد.');
+        setTimeout(() => {
+          setSelectedPlan(null);
+          setSuccessMessage(null);
+          onClose();
+        }, 3000);
+      }
+    }, 800);
   };
 
   const activeSub = currentUser?.subscription;

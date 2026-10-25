@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { RatingStars } from './RatingStars';
 import { CommentsSection } from './CommentsSection';
+import { ReviewsSection } from './ReviewsSection';
 
 interface ArticleDetailModalProps {
   article: Article | null;
@@ -165,6 +166,18 @@ export const ArticleDetailModal: React.FC<ArticleDetailModalProps> = ({
             <span>{copied ? 'تم نسخ الرابط!' : 'مشاركة'}</span>
           </button>
         </div>
+
+        {/* Interactive Student Reviews and Text Ratings */}
+        <ReviewsSection
+          itemId={article.id}
+          itemType="article"
+          user={user}
+          onOpenAuth={onOpenAuth}
+          title={`مراجعات وتقييمات الطلاب للمقال: ${article.title}`}
+          onRatingChanged={(newRating) => {
+            if (onRate) onRate(newRating);
+          }}
+        />
 
         {/* Unified Interactive Student & Teacher Comments System */}
         <CommentsSection

@@ -3,6 +3,7 @@ import { Summary, User } from '../types';
 import { X, Download, Bookmark, ExternalLink } from 'lucide-react';
 import { RatingStars } from './RatingStars';
 import { CommentsSection } from './CommentsSection';
+import { ReviewsSection } from './ReviewsSection';
 
 interface ImageDetailModalProps {
   summary: Summary | null;
@@ -99,6 +100,18 @@ export const ImageDetailModal: React.FC<ImageDetailModalProps> = ({
             className="max-h-[60vh] w-auto object-contain rounded-xl shadow-lg"
           />
         </div>
+
+        {/* Interactive Student Reviews and Text Ratings */}
+        <ReviewsSection
+          itemId={summary.id}
+          itemType="summary"
+          user={user}
+          onOpenAuth={onOpenAuth}
+          title={`مراجعات وتقييمات الطلاب للملخص: ${summary.title}`}
+          onRatingChanged={(newRating) => {
+            if (onRate) onRate(newRating);
+          }}
+        />
 
         {/* Interactive Student Comments & Questions Section */}
         <CommentsSection

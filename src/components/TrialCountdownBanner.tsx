@@ -6,20 +6,72 @@ import { Clock, ShieldAlert, Sparkles, CreditCard, ChevronLeft, Lock, MessageCir
 interface TrialCountdownBannerProps {
   currentUser: User | null;
   onOpenSubscriptionModal: () => void;
+  onOpenAuth?: () => void;
   variant?: 'top-bar' | 'card';
 }
 
 export const TrialCountdownBanner: React.FC<TrialCountdownBannerProps> = ({
   currentUser,
   onOpenSubscriptionModal,
+  onOpenAuth,
   variant = 'top-bar'
 }) => {
-  // Only show for students who are on trial or expired (skip for active paid plans, admins, or non-logged-in)
+  // Visitor Mode: not logged in yet -> Show enticing 10-day free trial banner
+  if (!currentUser) {
+    if (variant === 'top-bar') {
+      return (
+        <div className="w-full bg-gradient-to-r from-amber-950 via-zinc-950 to-amber-950 text-white border-b border-amber-500/40 shadow-xl relative z-40 animate-in fade-in">
+          <div className="max-w-7xl mx-auto px-4 py-2.5 flex flex-col md:flex-row items-center justify-between gap-3 text-center md:text-right">
+            <div className="flex items-center gap-3">
+              <span className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center flex-shrink-0 animate-pulse">
+                <Sparkles className="w-4 h-4" />
+              </span>
+              <div>
+                <div className="flex items-center gap-2 justify-center md:justify-start">
+                  <span className="px-2.5 py-0.5 rounded-full bg-gradient-to-r from-amber-500 to-amber-400 text-zinc-950 text-[10px] font-black uppercase tracking-wider shadow">
+                    فترة تجريبية مجانية (10 أيام كاملة) 🎁
+                  </span>
+                  <span className="font-bold text-xs sm:text-sm text-zinc-200">
+                    مناهج وامتحانات ونماذج إجابة الصف الثالث الثانوي المصري 2026
+                  </span>
+                </div>
+                <p className="text-[11px] text-zinc-400 mt-0.5 hidden sm:block">
+                  سجل حسابك كطالب الآن مجاناً واستمتع بـ 10 أيام تدريب واختبارات وتحميل كتب بدون أي مصاريف!
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap justify-center flex-shrink-0">
+              {onOpenAuth && (
+                <button
+                  onClick={onOpenAuth}
+                  className="px-4 py-1.5 bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 text-zinc-950 font-black text-xs rounded-xl shadow-lg hover:brightness-110 active:scale-95 transition flex items-center gap-1.5"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>سجل وابدأ الـ 10 أيام مجاناً ✨</span>
+                </button>
+              )}
+              <button
+                onClick={onOpenSubscriptionModal}
+                className="px-3.5 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-amber-300 font-bold text-xs rounded-xl border border-amber-500/30 transition flex items-center gap-1"
+              >
+                <CreditCard className="w-3.5 h-3.5" />
+                <span>باقات الاشتراك (من 50 ج.م)</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return null;
+  }
+
+  // Only show for students who are on trial or expired (skip for active paid plans, admins)
   const isPaidActive = currentUser?.subscription?.status === 'active' && 
                        !currentUser?.subscription?.isTrial && 
                        currentUser?.subscription?.planId !== 'free_trial';
 
-  if (!currentUser || currentUser.role === 'admin' || isPaidActive) {
+  if (currentUser.role === 'admin' || isPaidActive) {
     return null;
   }
 

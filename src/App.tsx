@@ -54,6 +54,7 @@ import {
   saveStudentSubscription, 
   isEducationalFeatureLocked 
 } from './utils/subscriptionStore';
+import { saveRegisteredStudent } from './utils/studentUserStore';
 import { TrialCountdownBanner } from './components/TrialCountdownBanner';
 import { FeatureLockedModal } from './components/FeatureLockedModal';
 
@@ -236,6 +237,7 @@ export default function App() {
         setCurrentUser(data.user);
         setUserToken(token);
         localStorage.setItem('arm_current_user', JSON.stringify(data.user));
+        saveRegisteredStudent(data.user);
       }
     } catch (e) {
       // If offline, keep cached user session from localStorage
@@ -251,6 +253,7 @@ export default function App() {
       setCurrentUser(updatedUser);
       localStorage.setItem('arm_current_user', JSON.stringify(updatedUser));
       saveStudentSubscription(currentUser.id, sub);
+      saveRegisteredStudent(updatedUser);
     }
     showToast(`تم تفعيل باقة الاشتراك بنجاح: ${sub.planName} ⚡`);
   };
@@ -266,6 +269,7 @@ export default function App() {
         const studentSub = calculateStudentSubscription(cachedUser.id, cachedUser.createdAt, cachedUser.subscription);
         cachedUser.subscription = studentSub;
         setCurrentUser(cachedUser);
+        saveRegisteredStudent(cachedUser);
       } catch (err) {
         // ignore parse error
       }
@@ -571,6 +575,7 @@ export default function App() {
         <TrialCountdownBanner
           currentUser={currentUser}
           onOpenSubscriptionModal={() => setIsSubscriptionModalOpen(true)}
+          onOpenAuth={() => setIsAuthOpen(true)}
           variant="top-bar"
         />
 

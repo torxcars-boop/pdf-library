@@ -461,9 +461,20 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
                 </div>
 
                 {/* Question Text */}
-                <p className="text-sm sm:text-base font-bold text-zinc-100 leading-relaxed mb-5">
+                <p className="text-sm sm:text-base font-bold text-zinc-100 leading-relaxed mb-4">
                   {q.question}
                 </p>
+
+                {/* Question Image Attachment (if provided) */}
+                {(q.imageUrl || q.image) && (
+                  <div className="mb-5 rounded-2xl overflow-hidden border border-zinc-800 bg-zinc-950 p-2 flex items-center justify-center">
+                    <img
+                      src={q.imageUrl || q.image}
+                      alt={`رسم توضيحي لسؤال ${idx + 1}`}
+                      className="max-h-56 sm:max-h-72 w-auto object-contain rounded-xl"
+                    />
+                  </div>
+                )}
 
                 {/* Options List */}
                 <div className="space-y-2.5 mb-5">
@@ -620,9 +631,20 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
           </div>
 
           {/* Question Text */}
-          <h3 className="text-base sm:text-lg font-bold text-zinc-100 leading-relaxed mb-6">
+          <h3 className="text-base sm:text-lg font-bold text-zinc-100 leading-relaxed mb-4">
             {q.question}
           </h3>
+
+          {/* Question Image Attachment (if provided) */}
+          {(q.imageUrl || q.image) && (
+            <div className="mb-6 rounded-2xl overflow-hidden border border-amber-500/20 bg-zinc-950/80 p-3 flex items-center justify-center shadow-lg">
+              <img
+                src={q.imageUrl || q.image}
+                alt={`رسم توضيحي لسؤال ${currentQuestionIndex + 1}`}
+                className="max-h-64 sm:max-h-80 w-auto object-contain rounded-xl"
+              />
+            </div>
+          )}
 
           {/* Options */}
           <div className="space-y-3 mb-8">
