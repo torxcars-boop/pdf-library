@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Article, User } from '../types';
 import { 
   X, 
@@ -8,13 +8,15 @@ import {
   Calendar, 
   User as UserIcon, 
   MessageSquare, 
-  Send,
-  ThumbsUp,
-  Clock
+  Send, 
+  ThumbsUp, 
+  Clock 
 } from 'lucide-react';
 import { RatingStars } from './RatingStars';
 import { CommentsSection } from './CommentsSection';
 import { ReviewsSection } from './ReviewsSection';
+import { getRealViews, incrementRealView } from '../utils/contentStore';
+import { getItemRatingStats } from '../utils/reviewsStore';
 
 interface ArticleDetailModalProps {
   article: Article | null;
@@ -35,11 +37,22 @@ export const ArticleDetailModal: React.FC<ArticleDetailModalProps> = ({
   onOpenAuth,
   onRate,
 }) => {
-  const [likes, setLikes] = useState(14);
+  const [viewCount, setViewCount] = useState<number>(0);
+  const [likes, setLikes] = useState(0);
   const [hasLiked, setHasLiked] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  useEffect(() => {
+    if (article?.id) {
+      const views = incrementRealView('article', article.id);
+      setViewCount(views);
+      fetch(`/api/items/article/${article.id}/view`, { method: 'POST' }).catch(() => {});
+    }
+  }, [article?.id]);
+
   if (!article) return null;
+
+  const realRating = getItemRatingStats(article.id, 'article');
 
   const handleLike = () => {
     if (!hasLiked) {
@@ -93,9 +106,9 @@ export const ArticleDetailModal: React.FC<ArticleDetailModalProps> = ({
               <Clock className="w-3.5 h-3.5 text-zinc-500" />
               وقت القراءة: {article.readTime}
             </span>
-            <span className="flex items-center gap-1">
-              <Eye className="w-3.5 h-3.5 text-zinc-500" />
-              {article.views || 0} مشاهدة
+            <span className="flex items-center gap-1 font-mono">
+              <Eye className="w-3.5 h-3.5 text-amber-500" />
+              {viewCount} مشاهدة
             </span>
           </div>
 
@@ -118,16 +131,20 @@ export const ArticleDetailModal: React.FC<ArticleDetailModalProps> = ({
         {/* Rating Bar */}
         <div className="flex items-center justify-between p-3.5 bg-zinc-950/60 border border-zinc-800 rounded-2xl my-4">
           <div>
-            <span className="text-xs font-bold text-amber-300 block mb-1">⭐ قيّم هذه المقالة:</span>
+            <span className="text-xs font-bold text-amber-300 block mb-1">
+              ⭐ تقييم المقال: {realRating.totalReviews > 0 ? `(${realRating.averageRating} من 5)` : '(لم يُقيّم بعد)'}
+            </span>
             <RatingStars
-              rating={article.rating || 4.9}
-              ratingCount={article.ratingCount || 187}
+              rating={realRating.averageRating}
+              ratingCount={realRating.totalReviews}
               size="md"
               interactive={true}
               onRate={onRate}
             />
           </div>
-          <span className="text-[11px] text-zinc-500">اضغط على النجوم لتقييم المقال</span>
+          <span className="text-[11px] text-zinc-400">
+            {realRating.totalReviews > 0 ? `${realRating.totalReviews} تقييم مسجل` : 'كن أول من يشارك تقييمه'}
+          </span>
         </div>
 
         {/* Reaction Bar */}

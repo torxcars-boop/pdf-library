@@ -80,6 +80,10 @@ import {
   deleteReview, 
   REVIEWS_UPDATED_EVENT 
 } from '../utils/reviewsStore';
+import { 
+  getTotalRealDownloads, 
+  getTotalRealViews 
+} from '../utils/contentStore';
 import { ItemReview } from '../types';
 
 interface AdminPortalProps {
@@ -1374,62 +1378,70 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
               </div>
             </div>
 
-            {/* Stat Cards */}
+            {/* Real Stat Cards (100% Genuine Data) */}
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
               <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 relative overflow-hidden">
-                <span className="text-2xl font-black text-amber-400">{books.length}</span>
+                <span className="text-2xl font-black text-amber-400 font-mono">{books.length}</span>
                 <p className="text-xs text-zinc-400 mt-1 font-semibold">إجمالي الكتب والمناهج</p>
                 <div className="text-[11px] text-amber-500 mt-2 font-bold">
-                  {books.filter(b => b.is_student === 1).length} مناهج دراسية للطلاب
+                  {books.filter(b => b.is_student === 1).length} مناهج دراسية معتمدة
                 </div>
               </div>
 
               <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 relative overflow-hidden">
-                <span className="text-2xl font-black text-emerald-400">{users.length}</span>
-                <p className="text-xs text-zinc-400 mt-1 font-semibold">المستخدمون المسجلون</p>
+                <span className="text-2xl font-black text-emerald-400 font-mono">{users.length}</span>
+                <p className="text-xs text-zinc-400 mt-1 font-semibold">الطلاب والمستخدمون</p>
                 <div className="text-[11px] text-emerald-500 mt-2 font-bold">
                   {users.filter(u => u.status === 'active').length} حسابات نشطة حالياً
                 </div>
               </div>
 
               <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 relative overflow-hidden">
-                <span className="text-2xl font-black text-blue-400">{summaries.length}</span>
-                <p className="text-xs text-zinc-400 mt-1 font-semibold">ملخصات الصور والخرائط</p>
-                <div className="text-[11px] text-blue-500 mt-2 font-bold">خرائط ذهنية عالية الدقة</div>
-              </div>
-
-              <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 relative overflow-hidden">
-                <span className="text-2xl font-black text-rose-400">{videos.length}</span>
-                <p className="text-xs text-zinc-400 mt-1 font-semibold">مقاطع الفيديو والشروحات</p>
-                <div className="text-[11px] text-rose-500 mt-2 font-bold">مشغلات مدمجة تفاعلية</div>
-              </div>
-
-              <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 relative overflow-hidden">
-                <span className="text-2xl font-black text-purple-400">{articles.length}</span>
-                <p className="text-xs text-zinc-400 mt-1 font-semibold">المقالات المنشورة</p>
-                <div className="text-[11px] text-purple-500 mt-2 font-bold">مدعومة بصيغة Markdown</div>
-              </div>
-
-              <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 relative overflow-hidden">
-                <span className="text-2xl font-black text-amber-300">
-                  {books.reduce((acc, b) => acc + (b.downloads || 0), 0)}
+                <span className="text-2xl font-black text-amber-300 font-mono">
+                  {getTotalRealDownloads(books)}
                 </span>
-                <p className="text-xs text-zinc-400 mt-1 font-semibold">إجمالي مرات التنزيل</p>
-                <div className="text-[11px] text-amber-500 mt-2 font-bold">تنزيلات PDF للطلاب</div>
+                <p className="text-xs text-zinc-400 mt-1 font-semibold">إجمالي التنزيلات الحقيقية</p>
+                <div className="text-[11px] text-amber-500 mt-2 font-bold">تحميلات PDF فعلية من الطلاب</div>
               </div>
 
               <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 relative overflow-hidden">
-                <span className="text-2xl font-black text-cyan-400">
+                <span className="text-2xl font-black text-cyan-400 font-mono">
+                  {getTotalRealViews(books, summaries, videos, articles)}
+                </span>
+                <p className="text-xs text-zinc-400 mt-1 font-semibold">إجمالي المشاهدات الحقيقية</p>
+                <div className="text-[11px] text-cyan-500 mt-2 font-bold">مشاهدات حقيقية لكافة المواد</div>
+              </div>
+
+              <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 relative overflow-hidden">
+                <span className="text-2xl font-black text-purple-400 font-mono">{studentExams.length}</span>
+                <p className="text-xs text-zinc-400 mt-1 font-semibold">الامتحانات والنماذج</p>
+                <div className="text-[11px] text-purple-400 mt-2 font-bold">بنك أسئلة متاح للطلاب</div>
+              </div>
+
+              <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 relative overflow-hidden">
+                <span className="text-2xl font-black text-blue-400 font-mono">{allReviews.length}</span>
+                <p className="text-xs text-zinc-400 mt-1 font-semibold">تقييمات ومراجعات الطلاب</p>
+                <div className="text-[11px] text-blue-400 mt-2 font-bold">
+                  {allReviews.filter(r => r.isApproved).length} مراجعات معتمدة
+                </div>
+              </div>
+
+              <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 relative overflow-hidden">
+                <span className="text-2xl font-black text-emerald-400 font-mono">
+                  {paymentRequests.filter(r => r.status === 'approved').reduce((acc, r) => acc + (r.amountEGP || 50), 0)} ج.م
+                </span>
+                <p className="text-xs text-zinc-400 mt-1 font-semibold">إيرادات الاشتراكات المؤكدة</p>
+                <div className="text-[11px] text-emerald-500 mt-2 font-bold">
+                  {paymentRequests.filter(r => r.status === 'approved').length} اشتراكات مفعلة
+                </div>
+              </div>
+
+              <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 relative overflow-hidden">
+                <span className="text-2xl font-black text-zinc-300 font-mono">
                   {logs.length}
                 </span>
-                <p className="text-xs text-zinc-400 mt-1 font-semibold">سجلات الرقابة الأمنية</p>
-                <div className="text-[11px] text-cyan-500 mt-2 font-bold">مراقبة على مدار الساعة</div>
-              </div>
-
-              <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 relative overflow-hidden">
-                <span className="text-2xl font-black text-emerald-400">100%</span>
-                <p className="text-xs text-zinc-400 mt-1 font-semibold">مؤشر سلامة وحماية النظام</p>
-                <div className="text-[11px] text-emerald-500 mt-2 font-bold">خالي من الثغرات الأمنية</div>
+                <p className="text-xs text-zinc-400 mt-1 font-semibold">سجلات العمليات الإدارية</p>
+                <div className="text-[11px] text-zinc-400 mt-2 font-bold">أحداث أمنية موثقة</div>
               </div>
             </div>
 

@@ -649,6 +649,38 @@ app.post('/api/books/:id/download', (req: Request, res: Response) => {
   res.json({ success: true, downloads: (book?.downloads || 0) + 1 });
 });
 
+app.post('/api/items/:type/:id/view', (req: Request, res: Response) => {
+  const { type, id } = req.params;
+  const numId = parseInt(id, 10);
+  let views = 1;
+  if (type === 'book') {
+    const book = db.getBooks().find(b => b.id === numId);
+    if (book) {
+      views = (book.views || 0) + 1;
+      db.updateBook(numId, { views });
+    }
+  } else if (type === 'summary') {
+    const sum = db.getSummaries().find(s => s.id === numId);
+    if (sum) {
+      views = (sum.views || 0) + 1;
+      db.updateSummary(numId, { views });
+    }
+  } else if (type === 'video') {
+    const vid = db.getVideos().find(v => v.id === numId);
+    if (vid) {
+      views = (vid.views || 0) + 1;
+      db.updateVideo(numId, { views });
+    }
+  } else if (type === 'article') {
+    const art = db.getArticles().find(a => a.id === numId);
+    if (art) {
+      views = (art.views || 0) + 1;
+      db.updateArticle(numId, { views });
+    }
+  }
+  res.json({ success: true, views });
+});
+
 // SUMMARIES
 app.get('/api/summaries', (req: Request, res: Response) => {
   const { search } = req.query;

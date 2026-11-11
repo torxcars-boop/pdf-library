@@ -213,6 +213,92 @@ export const getDownloadedBooksCount = (): number => {
 };
 
 // ---------------------------------------------------------------------------
+// 100% REAL AUTHENTIC VIEWS & DOWNLOADS TRACKING
+// ---------------------------------------------------------------------------
+const REAL_DOWNLOADS_MAP_KEY = 'arm_real_downloads_map_v1';
+const REAL_VIEWS_MAP_KEY = 'arm_real_views_map_v1';
+
+export const getRealDownloadsMap = (): Record<string, number> => {
+  try {
+    const raw = localStorage.getItem(REAL_DOWNLOADS_MAP_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  return {};
+};
+
+export const getRealViewsMap = (): Record<string, number> => {
+  try {
+    const raw = localStorage.getItem(REAL_VIEWS_MAP_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  return {};
+};
+
+export const getRealDownloads = (bookId: number | string, baseCount = 0): number => {
+  const map = getRealDownloadsMap();
+  const recorded = map[String(bookId)];
+  return typeof recorded === 'number' ? recorded : baseCount;
+};
+
+export const incrementRealDownload = (bookId: number | string): number => {
+  try {
+    const map = getRealDownloadsMap();
+    const key = String(bookId);
+    const updated = (map[key] || 0) + 1;
+    map[key] = updated;
+    localStorage.setItem(REAL_DOWNLOADS_MAP_KEY, JSON.stringify(map));
+    dispatchContentChanged();
+    return updated;
+  } catch (e) {
+    return 1;
+  }
+};
+
+export const getRealViews = (type: string, id: number | string, baseCount = 0): number => {
+  const map = getRealViewsMap();
+  const key = `${type}_${id}`;
+  const recorded = map[key];
+  return typeof recorded === 'number' ? recorded : baseCount;
+};
+
+export const incrementRealView = (type: string, id: number | string): number => {
+  try {
+    const map = getRealViewsMap();
+    const key = `${type}_${id}`;
+    const updated = (map[key] || 0) + 1;
+    map[key] = updated;
+    localStorage.setItem(REAL_VIEWS_MAP_KEY, JSON.stringify(map));
+    dispatchContentChanged();
+    return updated;
+  } catch (e) {
+    return 1;
+  }
+};
+
+export const getTotalRealDownloads = (books: { id: number | string; downloads?: number }[]): number => {
+  const map = getRealDownloadsMap();
+  return books.reduce((acc, b) => {
+    const count = typeof map[String(b.id)] === 'number' ? map[String(b.id)] : (b.downloads || 0);
+    return acc + count;
+  }, 0);
+};
+
+export const getTotalRealViews = (
+  books: { id: number | string; views?: number }[],
+  summaries: { id: number | string; views?: number }[],
+  videos: { id: number | string; views?: number }[],
+  articles: { id: number | string; views?: number }[]
+): number => {
+  const map = getRealViewsMap();
+  let total = 0;
+  books.forEach(b => { total += (typeof map[`book_${b.id}`] === 'number' ? map[`book_${b.id}`] : (b.views || 0)); });
+  summaries.forEach(s => { total += (typeof map[`summary_${s.id}`] === 'number' ? map[`summary_${s.id}`] : (s.views || 0)); });
+  videos.forEach(v => { total += (typeof map[`video_${v.id}`] === 'number' ? map[`video_${v.id}`] : (v.views || 0)); });
+  articles.forEach(a => { total += (typeof map[`article_${a.id}`] === 'number' ? map[`article_${a.id}`] : (a.views || 0)); });
+  return total;
+};
+
+// ---------------------------------------------------------------------------
 // EVENT BUS FOR INSTANT REAL-TIME SYNC
 // ---------------------------------------------------------------------------
 export const dispatchContentChanged = () => {

@@ -1,9 +1,11 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Video, User } from '../types';
 import { X, Bookmark, ExternalLink, Play, Eye } from 'lucide-react';
 import { RatingStars } from './RatingStars';
 import { CommentsSection } from './CommentsSection';
 import { ReviewsSection } from './ReviewsSection';
+import { getRealViews, incrementRealView } from '../utils/contentStore';
+import { getItemRatingStats } from '../utils/reviewsStore';
 
 interface VideoDetailModalProps {
   video: Video | null;
@@ -24,7 +26,19 @@ export const VideoDetailModal: React.FC<VideoDetailModalProps> = ({
   onOpenAuth,
   onRate,
 }) => {
+  const [viewCount, setViewCount] = useState<number>(0);
+
+  useEffect(() => {
+    if (video?.id) {
+      const views = incrementRealView('video', video.id);
+      setViewCount(views);
+      fetch(`/api/items/video/${video.id}/view`, { method: 'POST' }).catch(() => {});
+    }
+  }, [video?.id]);
+
   if (!video) return null;
+
+  const realRating = getItemRatingStats(video.id, 'video');
 
   const getEmbedUrl = (url: string) => {
     if (!url) return '';
@@ -89,19 +103,25 @@ export const VideoDetailModal: React.FC<VideoDetailModalProps> = ({
               <span className="text-xs text-zinc-500">
                 ⏱️ {video.duration || '25:00'}
               </span>
+              <span className="text-xs text-zinc-400 flex items-center gap-1 font-mono">
+                <Eye className="w-3.5 h-3.5 text-amber-500" />
+                {viewCount} مشاهدة
+              </span>
             </div>
             <h2 className="text-base sm:text-lg font-bold text-zinc-100">{video.title}</h2>
             
             {/* Interactive Rating */}
             <div className="flex items-center gap-3 mt-2">
               <RatingStars
-                rating={video.rating || 4.9}
-                ratingCount={video.ratingCount || 420}
+                rating={realRating.averageRating}
+                ratingCount={realRating.totalReviews}
                 size="md"
                 interactive={true}
                 onRate={onRate}
               />
-              <span className="text-[10px] text-zinc-500">اضغط لتقييم الشرح</span>
+              <span className="text-[10px] text-zinc-400">
+                {realRating.totalReviews > 0 ? `(${realRating.averageRating} من 5 - ${realRating.totalReviews} تقييم حقيقي)` : 'لم يُقيّم بعد'}
+              </span>
             </div>
           </div>
 

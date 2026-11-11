@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Book, User } from '../types';
 import { 
   X, 
@@ -13,7 +13,14 @@ import {
   Lock
 } from 'lucide-react';
 import { RatingStars } from './RatingStars';
-import { recordBookDownload } from '../utils/contentStore';
+import { 
+  recordBookDownload, 
+  getRealDownloads, 
+  incrementRealDownload, 
+  getRealViews, 
+  incrementRealView 
+} from '../utils/contentStore';
+import { getItemRatingStats } from '../utils/reviewsStore';
 import { isEducationalFeatureLocked } from '../utils/subscriptionStore';
 import { CommentsSection } from './CommentsSection';
 import { ReviewsSection } from './ReviewsSection';
@@ -39,12 +46,23 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
   onRate,
   onOpenSubscriptions,
 }) => {
-  const [downloadCount, setDownloadCount] = useState<number>(book?.downloads || 0);
+  const [downloadCount, setDownloadCount] = useState<number>(0);
+  const [viewCount, setViewCount] = useState<number>(0);
   const [downloading, setDownloading] = useState(false);
   const [showReader, setShowReader] = useState(false);
 
+  useEffect(() => {
+    if (book?.id) {
+      const views = incrementRealView('book', book.id);
+      setViewCount(views);
+      setDownloadCount(getRealDownloads(book.id, 0));
+      fetch(`/api/items/book/${book.id}/view`, { method: 'POST' }).catch(() => {});
+    }
+  }, [book?.id]);
+
   if (!book) return null;
 
+  const realRating = getItemRatingStats(book.id, 'book');
   const isLocked = isEducationalFeatureLocked(user);
 
   const handleDownload = async () => {
@@ -59,14 +77,12 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
     }
 
     setDownloading(true);
-    // Record download for Student Dashboard tracking
+    // Record download for Student Dashboard tracking & update real metrics
     recordBookDownload(book);
+    const newCount = incrementRealDownload(book.id);
+    setDownloadCount(newCount);
     try {
-      const res = await fetch(`/api/books/${book.id}/download`, { method: 'POST' });
-      if (res.ok) {
-        const data = await res.json();
-        setDownloadCount(data.downloads);
-      }
+      await fetch(`/api/books/${book.id}/download`, { method: 'POST' }).catch(() => {});
     } catch (e) {
       // ignore
     } finally {
@@ -133,16 +149,20 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
             {/* Ratings Bar */}
             <div className="flex items-center justify-between p-3 bg-zinc-950/60 border border-zinc-800 rounded-2xl">
               <div>
-                <span className="text-xs font-bold text-amber-300 block mb-1">⭐ تقييم الكتاب:</span>
+                <span className="text-xs font-bold text-amber-300 block mb-1">
+                  ⭐ تقييم الكتاب: {realRating.totalReviews > 0 ? `(${realRating.averageRating} من 5)` : '(لم يُقيّم بعد)'}
+                </span>
                 <RatingStars
-                  rating={book.rating || 4.9}
-                  ratingCount={book.ratingCount || 154}
+                  rating={realRating.averageRating}
+                  ratingCount={realRating.totalReviews}
                   size="md"
                   interactive={true}
                   onRate={onRate}
                 />
               </div>
-              <span className="text-[11px] text-zinc-500">اضغط لتقييم المحتوى</span>
+              <span className="text-[11px] text-zinc-500">
+                {realRating.totalReviews > 0 ? `${realRating.totalReviews} تقييم حقيقي` : 'كن أول طالب يقيّم هذا الكتاب'}
+              </span>
             </div>
 
             {/* Metrics */}
@@ -153,7 +173,7 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
               </span>
               <span className="flex items-center gap-1">
                 <Eye className="w-3.5 h-3.5 text-amber-500" />
-                <strong className="text-zinc-200">{book.views || 0}</strong> مشاهدة
+                <strong className="text-zinc-200">{viewCount}</strong> مشاهدة
               </span>
               <span className="text-zinc-500 text-[11px]">
                 أُضيف في: {new Date(book.created_at).toLocaleDateString('ar-EG')}

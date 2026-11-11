@@ -47,7 +47,9 @@ import {
   applyEditedOverrides, 
   recordBookDownload, 
   getDownloadedBooksCount, 
-  listenToContentChanged 
+  listenToContentChanged,
+  getRealDownloads,
+  getRealViews 
 } from './utils/contentStore';
 import { 
   calculateStudentSubscription, 
@@ -406,69 +408,77 @@ export default function App() {
   // Handle Content Rating (1-5 stars)
   const handleRateItem = async (type: 'book' | 'summary' | 'video' | 'article', id: number, star: number) => {
     try {
-      // 1. Optimistic updates
+      // 1. Optimistic updates based on genuine math
       if (type === 'book') {
         setBooks(prev => prev.map(b => {
           if (b.id === id) {
-            const count = (b.ratingCount || 100) + 1;
-            const current = b.rating || 4.9;
-            const newRating = Math.round((((current * (count - 1)) + star) / count) * 10) / 10;
+            const prevCount = b.ratingCount || 0;
+            const prevRating = b.rating || 0;
+            const count = prevCount + 1;
+            const newRating = prevCount === 0 ? star : Math.round((((prevRating * prevCount) + star) / count) * 10) / 10;
             return { ...b, rating: newRating, ratingCount: count };
           }
           return b;
         }));
         if (selectedBook && selectedBook.id === id) {
-          const count = (selectedBook.ratingCount || 100) + 1;
-          const current = selectedBook.rating || 4.9;
-          const newRating = Math.round((((current * (count - 1)) + star) / count) * 10) / 10;
+          const prevCount = selectedBook.ratingCount || 0;
+          const prevRating = selectedBook.rating || 0;
+          const count = prevCount + 1;
+          const newRating = prevCount === 0 ? star : Math.round((((prevRating * prevCount) + star) / count) * 10) / 10;
           setSelectedBook({ ...selectedBook, rating: newRating, ratingCount: count });
         }
       } else if (type === 'video') {
         setVideos(prev => prev.map(v => {
           if (v.id === id) {
-            const count = (v.ratingCount || 200) + 1;
-            const current = v.rating || 4.9;
-            const newRating = Math.round((((current * (count - 1)) + star) / count) * 10) / 10;
+            const prevCount = v.ratingCount || 0;
+            const prevRating = v.rating || 0;
+            const count = prevCount + 1;
+            const newRating = prevCount === 0 ? star : Math.round((((prevRating * prevCount) + star) / count) * 10) / 10;
             return { ...v, rating: newRating, ratingCount: count };
           }
           return v;
         }));
         if (selectedVideo && selectedVideo.id === id) {
-          const count = (selectedVideo.ratingCount || 200) + 1;
-          const current = selectedVideo.rating || 4.9;
-          const newRating = Math.round((((current * (count - 1)) + star) / count) * 10) / 10;
+          const prevCount = selectedVideo.ratingCount || 0;
+          const prevRating = selectedVideo.rating || 0;
+          const count = prevCount + 1;
+          const newRating = prevCount === 0 ? star : Math.round((((prevRating * prevCount) + star) / count) * 10) / 10;
           setSelectedVideo({ ...selectedVideo, rating: newRating, ratingCount: count });
         }
       } else if (type === 'summary') {
         setSummaries(prev => prev.map(s => {
           if (s.id === id) {
-            const count = (s.ratingCount || 150) + 1;
-            const current = s.rating || 5.0;
-            const newRating = Math.round((((current * (count - 1)) + star) / count) * 10) / 10;
+            const prevCount = s.ratingCount || 0;
+            const prevRating = s.rating || 0;
+            const count = prevCount + 1;
+            const newRating = prevCount === 0 ? star : Math.round((((prevRating * prevCount) + star) / count) * 10) / 10;
             return { ...s, rating: newRating, ratingCount: count };
           }
           return s;
         }));
         if (selectedSummary && selectedSummary.id === id) {
-          const count = (selectedSummary.ratingCount || 150) + 1;
-          const current = selectedSummary.rating || 5.0;
-          const newRating = Math.round((((current * (count - 1)) + star) / count) * 10) / 10;
+          const prevCount = selectedSummary.ratingCount || 0;
+          const prevRating = selectedSummary.rating || 0;
+          const count = prevCount + 1;
+          const newRating = prevCount === 0 ? star : Math.round((((prevRating * prevCount) + star) / count) * 10) / 10;
           setSelectedSummary({ ...selectedSummary, rating: newRating, ratingCount: count });
         }
       } else if (type === 'article') {
         setArticles(prev => prev.map(a => {
           if (a.id === id) {
-            const count = (a.ratingCount || 120) + 1;
-            const current = a.rating || 4.9;
-            const newRating = Math.round((((current * (count - 1)) + star) / count) * 10) / 10;
+            const prevCount = a.ratingCount || 0;
+            const prevRating = a.rating || 0;
+            const count = prevCount + 1;
+            const newRating = prevCount === 0 ? star : Math.round((((prevRating * prevCount) + star) / count) * 10) / 10;
             return { ...a, rating: newRating, ratingCount: count };
           }
           return a;
         }));
         if (selectedArticle && selectedArticle.id === id) {
-          const count = (selectedArticle.ratingCount || 120) + 1;
-          const current = selectedArticle.rating || 4.9;
-          const newRating = Math.round((((current * (count - 1)) + star) / count) * 10) / 10;
+          const prevCount = selectedArticle.ratingCount || 0;
+          const prevRating = selectedArticle.rating || 0;
+          const count = prevCount + 1;
+          const newRating = prevCount === 0 ? star : Math.round((((prevRating * prevCount) + star) / count) * 10) / 10;
           setSelectedArticle({ ...selectedArticle, rating: newRating, ratingCount: count });
         }
       }
@@ -979,13 +989,13 @@ export default function App() {
                         {/* Interactive Rating */}
                         <div className="flex items-center justify-between pt-2">
                           <RatingStars
-                            rating={vid.rating || 4.9}
-                            ratingCount={vid.ratingCount || 420}
+                            rating={vid.rating || 0}
+                            ratingCount={vid.ratingCount || 0}
                             size="sm"
                             interactive
                             onRate={(star) => handleRateItem('video', vid.id, star)}
                           />
-                          <span className="text-[10px] text-zinc-500">👁️ {vid.views.toLocaleString('ar-EG')}</span>
+                          <span className="text-[10px] text-zinc-500 font-mono">👁️ {getRealViews('video', vid.id, vid.views || 0).toLocaleString('ar-EG')}</span>
                         </div>
                       </div>
 
@@ -1064,13 +1074,13 @@ export default function App() {
                       {/* Interactive Rating */}
                       <div className="flex items-center justify-between px-1">
                         <RatingStars
-                          rating={sum.rating || 5.0}
-                          ratingCount={sum.ratingCount || 245}
+                          rating={sum.rating || 0}
+                          ratingCount={sum.ratingCount || 0}
                           size="sm"
                           interactive
                           onRate={(star) => handleRateItem('summary', sum.id, star)}
                         />
-                        <span className="text-[10px] text-zinc-500">👁️ {sum.views}</span>
+                        <span className="text-[10px] text-zinc-500 font-mono">👁️ {getRealViews('summary', sum.id, sum.views || 0)}</span>
                       </div>
 
                       <div className="flex items-center gap-2">
@@ -1142,8 +1152,8 @@ export default function App() {
                           </h3>
                           <div className="my-1.5">
                             <RatingStars
-                              rating={art.rating || 4.9}
-                              ratingCount={art.ratingCount || 187}
+                              rating={art.rating || 0}
+                              ratingCount={art.ratingCount || 0}
                               size="sm"
                               interactive
                               onRate={(star) => handleRateItem('article', art.id, star)}
@@ -1230,14 +1240,14 @@ export default function App() {
                           {/* Rating and Downloads */}
                           <div className="flex items-center justify-between pt-2.5 mt-2 border-t border-zinc-800/60">
                             <RatingStars
-                              rating={pdf.rating || 4.9}
-                              ratingCount={pdf.ratingCount || 154}
+                              rating={pdf.rating || 0}
+                              ratingCount={pdf.ratingCount || 0}
                               size="sm"
                               interactive
                               onRate={(star) => handleRateItem('book', pdf.id, star)}
                             />
                             <span className="text-[10px] text-zinc-400 font-mono">
-                              📥 {pdf.downloads.toLocaleString('ar-EG')}
+                              📥 {getRealDownloads(pdf.id, pdf.downloads || 0).toLocaleString('ar-EG')}
                             </span>
                           </div>
                         </div>

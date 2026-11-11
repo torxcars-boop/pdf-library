@@ -12,7 +12,7 @@ interface RatingStarsProps {
 }
 
 export const RatingStars: React.FC<RatingStarsProps> = ({
-  rating = 5.0,
+  rating = 0,
   ratingCount = 0,
   size = 'sm',
   interactive = false,
@@ -80,11 +80,15 @@ export const RatingStars: React.FC<RatingStarsProps> = ({
       </div>
 
       <div className="flex items-center gap-1 text-[11px] font-bold">
-        <span className="text-amber-300 font-mono">
-          {Number(rating).toFixed(1)}
-        </span>
-        {showCount && ratingCount > 0 && (
-          <span className="text-zinc-400 text-[10px] font-normal">
+        {rating > 0 ? (
+          <span className="text-amber-300 font-mono">
+            {Number(rating).toFixed(1)}
+          </span>
+        ) : (
+          <span className="text-zinc-500 text-[10px] font-normal">جديد</span>
+        )}
+        {showCount && (
+          <span className="text-zinc-500 text-[10px] font-normal">
             ({ratingCount.toLocaleString('ar-EG')})
           </span>
         )}

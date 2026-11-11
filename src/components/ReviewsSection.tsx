@@ -138,28 +138,37 @@ export const ReviewsSection: React.FC<ReviewsSectionProps> = ({
         </div>
 
         {/* Big Rating Badge */}
-        <div className="flex items-center gap-3 bg-zinc-900 px-4 py-2 rounded-2xl border border-amber-500/30">
-          <div className="text-center">
-            <span className="text-2xl font-black text-amber-300 font-mono">{stats.averageRating}</span>
-            <span className="text-[10px] text-zinc-500 block">من 5.0</span>
-          </div>
-          <div className="space-y-1">
-            <div className="flex items-center gap-0.5">
-              {[1, 2, 3, 4, 5].map((star) => (
-                <Star
-                  key={star}
-                  className={`w-3.5 h-3.5 ${
-                    star <= Math.round(stats.averageRating)
-                      ? 'fill-amber-400 text-amber-400'
-                      : 'text-zinc-700'
-                  }`}
-                />
-              ))}
+        <div className="flex items-center gap-3 bg-zinc-900 px-4 py-2.5 rounded-2xl border border-amber-500/30">
+          {stats.totalReviews > 0 ? (
+            <>
+              <div className="text-center">
+                <span className="text-2xl font-black text-amber-300 font-mono">{stats.averageRating}</span>
+                <span className="text-[10px] text-zinc-500 block">من 5.0</span>
+              </div>
+              <div className="space-y-1">
+                <div className="flex items-center gap-0.5">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <Star
+                      key={star}
+                      className={`w-3.5 h-3.5 ${
+                        star <= Math.round(stats.averageRating)
+                          ? 'fill-amber-400 text-amber-400'
+                          : 'text-zinc-700'
+                      }`}
+                    />
+                  ))}
+                </div>
+                <span className="text-[10px] text-zinc-400 block font-mono">
+                  ({stats.totalReviews} مراجعة مسجلة)
+                </span>
+              </div>
+            </>
+          ) : (
+            <div className="text-right">
+              <span className="text-xs font-bold text-amber-400 block">لم يتم التقييم بعد</span>
+              <span className="text-[10px] text-zinc-400">كن أول طالب يشارك رأيه وتقييمه ⭐</span>
             </div>
-            <span className="text-[10px] text-zinc-400 block font-mono">
-              ({stats.totalReviews} مراجعة مسجلة)
-            </span>
-          </div>
+          )}
         </div>
       </div>
 

@@ -39,8 +39,8 @@ let memoryStore = {
       is_student: 1,
       grade: 'الصف الثالث الثانوي (المصري) - شعبة علمي',
       description: 'المنهج الكامل لفيزياء الثانوية العامة المصرية: التيار الكهربي وقانون أوم وكيرشوف، التأثير المغناطيسي، الحث الكهرومغناطيسي والدينامو، والفيزياء الحديثة وازدواجية الموجة والجسيم والأطياف الذرية والليزر.',
-      downloads: 6420,
-      views: 18900
+      downloads: 0,
+      views: 0
     },
     {
       id: 2,
@@ -51,8 +51,8 @@ let memoryStore = {
       is_student: 1,
       grade: 'الصف الثالث الثانوي (المصري) - شعبة علمي',
       description: 'العناصر الانتقالية وخامات الحديد، التحليل الكيميائي الوصفي والكمي، الاتزان الكيميائي والأيوني، الخلايا الجلفانية، والكيمياء العضوية الشاملة.',
-      downloads: 7120,
-      views: 21400
+      downloads: 0,
+      views: 0
     },
     {
       id: 3,
@@ -63,8 +63,8 @@ let memoryStore = {
       is_student: 1,
       grade: 'الصف الثالث الثانوي (المصري) - عام وأدبي وعلمي',
       description: 'شرح وتدريبات الوحدات السبع في النحو: المشتقات، الأفعال، النواسخ، المنصوبات، حروف الجر، أساليب النحو، مع ملخص المدارس الشعرية وفنون البلاغة.',
-      downloads: 8940,
-      views: 26300
+      downloads: 0,
+      views: 0
     },
     {
       id: 4,
@@ -75,8 +75,8 @@ let memoryStore = {
       is_student: 1,
       grade: 'الصف الثالث الثانوي (المصري) - شعبة علمي رياضة',
       description: 'تفاضل وتكامل الدوال الأسية واللوغاريتمية وتطبيقات القيم العظمى والصغرى، التباديل والتوافيق وذات الحدين، الأعداد المركبة، والهندسة الفراغية ثلاثية الأبعاد.',
-      downloads: 4890,
-      views: 14500
+      downloads: 0,
+      views: 0
     },
     {
       id: 5,
@@ -87,8 +87,8 @@ let memoryStore = {
       is_student: 1,
       grade: 'الصف الثالث الثانوي (المصري) - علمي رياضة',
       description: 'الاحتكاك، العزوم في المستوى والفراغ، القوى المتوازية المستوية، الاتزان العام، مركز الثقل، قوانين نيوتن، الشغل والقدرة والطاقة، والدفع والتصادم.',
-      downloads: 4120,
-      views: 12800
+      downloads: 0,
+      views: 0
     },
     {
       id: 6,
@@ -99,8 +99,8 @@ let memoryStore = {
       is_student: 1,
       grade: 'الصف الثالث الثانوي (المصري) - شعبة علمي علوم',
       description: 'الدعامة والحركة، الهرمونات، التكاثر في الكائنات الحية والإنسان، جهاز المناعة، والبيولوجيا الجزيئية والهندسة الوراثية وتخليق البروتين.',
-      downloads: 5780,
-      views: 16900
+      downloads: 0,
+      views: 0
     },
     {
       id: 7,
@@ -111,8 +111,8 @@ let memoryStore = {
       is_student: 1,
       grade: 'الصف الثالث الثانوي (المصري) - علمي علوم',
       description: 'التراكيب الجيولوجية الأولية والطيّات والفوالق، علم المعادن والأنظمة البلورية، دورة الصخور، الحركات البنائية والهادمة، واستنزاف الموارد الطبيعية.',
-      downloads: 4610,
-      views: 13200
+      downloads: 0,
+      views: 0
     },
     {
       id: 8,
@@ -123,8 +123,8 @@ let memoryStore = {
       is_student: 1,
       grade: 'الصف الثالث الثانوي (المصري) - الشعبة الأدبية',
       description: 'من الحملة الفرنسية وبناء الدولة الحديثة في عهد محمد علي، إلى الثورة العرابية، ثورة 1919، ثورة 23 يوليو 1952، والحروب العربية حتى نصر أكتوبر.',
-      downloads: 3950,
-      views: 11400
+      downloads: 0,
+      views: 0
     },
     {
       id: 9,
@@ -135,8 +135,8 @@ let memoryStore = {
       is_student: 1,
       grade: 'الصف الثالث الثانوي (المصري) - الشعبة الأدبية',
       description: 'الدولة والمقومات الطبيعية والبشرية، الحدود السياسية وتطورها، التكتلات الاقتصادية والأحلاف العسكرية، والنظام العالمي الجديد.',
-      downloads: 3820,
-      views: 10900
+      downloads: 0,
+      views: 0
     },
     {
       id: 10,
@@ -147,8 +147,8 @@ let memoryStore = {
       is_student: 1,
       grade: 'الصف الثالث الثانوي (المصري) - عام',
       description: 'قواعد الوحدات الـ 12 كاملة، الكلمات المربكة، استراتيجيات حل القطع المتحررة وفنون الترجمة المقالية المتقدمة بنظام البابل شيت.',
-      downloads: 5410,
-      views: 15300
+      downloads: 0,
+      views: 0
     }
   ],
   videos: [
@@ -159,7 +159,7 @@ let memoryStore = {
       category: 'كتب الطلاب',
       channel: 'الأستاذ محمد عبد المعبود - فيزياء',
       duration: '1:15:30',
-      views: 145000
+      views: 0
     },
     {
       id: 2,
@@ -168,7 +168,7 @@ let memoryStore = {
       category: 'كتب الطلاب',
       channel: 'الأستاذ خالد صقر - كيمياء',
       duration: '54:20',
-      views: 182000
+      views: 0
     },
     {
       id: 3,
@@ -177,7 +177,7 @@ let memoryStore = {
       category: 'كتب الطلاب',
       channel: 'الأستاذ رضا الفاروق - لغة عربية',
       duration: '1:32:00',
-      views: 210000
+      views: 0
     },
     {
       id: 4,
@@ -186,7 +186,7 @@ let memoryStore = {
       category: 'كتب الطلاب',
       channel: 'بسطتهالك - مستر محمد صلاح',
       duration: '48:15',
-      views: 164000
+      views: 0
     },
     {
       id: 5,
@@ -195,7 +195,7 @@ let memoryStore = {
       category: 'كتب الطلاب',
       channel: 'د. أحمد الجوهري - أحياء ثانوية عامة',
       duration: '1:05:40',
-      views: 128000
+      views: 0
     },
     {
       id: 6,
@@ -204,7 +204,7 @@ let memoryStore = {
       category: 'كتب الطلاب',
       channel: 'مقهى الرياضيات - ثانوية عامة علمي رياضة',
       duration: '1:20:00',
-      views: 98000
+      views: 0
     }
   ],
   summaries: [
@@ -213,21 +213,21 @@ let memoryStore = {
       title: 'خريطة ذهنية: الوحدات السبع في النحو لشهادة الثانوية العامة المصرية في ورقة واحدة',
       imagepath: 'https://images.unsplash.com/photo-1456513080510-7bf3a84b82f8?w=800&auto=format&fit=crop&q=80',
       category: 'لغة عربية (ثانوية عامة)',
-      views: 14200
+      views: 0
     },
     {
       id: 2,
       title: 'شجرة تفاعلات الكيمياء العضوية وتسمية IUPAC كاملة في صفحة واحدة للمصريين',
       imagepath: 'https://images.unsplash.com/photo-1603126857599-f6e157fa2fe6?w=800&auto=format&fit=crop&q=80',
       category: 'كيمياء (ثانوية عامة)',
-      views: 12900
+      views: 0
     },
     {
       id: 3,
       title: 'ملخص بصري: قوانين الكهربية وكيرشوف والحث والدينامو (فيزياء 3 ثانوي مصري)',
       imagepath: 'https://images.unsplash.com/photo-1507668077129-56e32842fceb?w=800&auto=format&fit=crop&q=80',
       category: 'فيزياء (ثانوية عامة)',
-      views: 15400
+      views: 0
     }
   ],
   articles: [
@@ -238,7 +238,7 @@ let memoryStore = {
       imagepath: 'https://images.unsplash.com/photo-1434030216411-0b793f4b4173?w=800&auto=format&fit=crop&q=80',
       author: 'المصمم Ahmed Raafat & فريق المناهج',
       readTime: '4 دقائق',
-      views: 8940
+      views: 0
     }
   ],
   users: [
@@ -336,25 +336,56 @@ app.post(['/api/admin/login', '/admin/login'], (req, res) => {
 });
 
 app.get(['/api/admin/stats', '/admin/stats'], (req, res) => {
+  const totalDownloads = memoryStore.books.reduce((acc, b) => acc + (b.downloads || 0), 0);
+  const totalBookViews = memoryStore.books.reduce((acc, b) => acc + (b.views || 0), 0);
+  const totalVideoViews = memoryStore.videos.reduce((acc, v) => acc + (v.views || 0), 0);
+  const totalSummaryViews = memoryStore.summaries.reduce((acc, s) => acc + (s.views || 0), 0);
+  const totalArticleViews = memoryStore.articles.reduce((acc, a) => acc + (a.views || 0), 0);
+  const totalViews = totalBookViews + totalVideoViews + totalSummaryViews + totalArticleViews;
+
   res.json({
     counts: {
       books: memoryStore.books.length,
-      studentBooks: memoryStore.books.length,
+      studentBooks: memoryStore.books.filter(b => b.is_student === 1).length,
       videos: memoryStore.videos.length,
       summaries: memoryStore.summaries.length,
       articles: memoryStore.articles.length,
       users: memoryStore.users.length,
-      activeUsers: 1,
+      activeUsers: memoryStore.users.filter(u => u.status === 'active').length,
       logsCount: memoryStore.auditLogs.length
     },
     analytics: {
-      totalDownloads: 45000,
-      totalViews: 120000,
-      systemHealth: '100% ممتاز ومحمي',
+      totalDownloads,
+      totalViews,
+      systemHealth: '100% متصل ومحمي',
       database: 'Vercel Serverless Ready',
       securityStatus: 'نشط'
     }
   });
+});
+
+app.post(['/api/books/:id/download', '/books/:id/download'], (req, res) => {
+  const id = Number(req.params.id);
+  const book = memoryStore.books.find(b => b.id === id);
+  if (book) {
+    book.downloads = (book.downloads || 0) + 1;
+  }
+  res.json({ success: true, downloads: book ? book.downloads : 1 });
+});
+
+app.post(['/api/items/:type/:id/view', '/items/:type/:id/view'], (req, res) => {
+  const { type, id } = req.params;
+  const numId = Number(id);
+  let list = [];
+  if (type === 'book') list = memoryStore.books;
+  else if (type === 'summary') list = memoryStore.summaries;
+  else if (type === 'video') list = memoryStore.videos;
+  else if (type === 'article') list = memoryStore.articles;
+  const item = list.find(i => i.id === numId);
+  if (item) {
+    item.views = (item.views || 0) + 1;
+  }
+  res.json({ success: true, views: item ? item.views : 1 });
 });
 
 app.post(['/api/rate', '/rate'], (req, res) => {

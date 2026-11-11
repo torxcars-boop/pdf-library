@@ -2,78 +2,7 @@ import { ItemReview } from '../types';
 
 const REVIEWS_STORAGE_KEY = 'arm_item_reviews_v2';
 
-const SEED_REVIEWS: ItemReview[] = [
-  {
-    id: 'rev_seed_1',
-    itemId: '1',
-    itemType: 'book',
-    userId: 'usr_rev_1',
-    userName: 'محمود عبد السلام',
-    userAvatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=120',
-    academicStage: '3 ثانوي - علمي علوم',
-    rating: 5,
-    comment: 'كتاب فيزياء شامل ومتقن جداً، خصوصاً توضيح قوانين كيرشوف وحسابات أجهزة القياس بنظام البابل شيت. أنصح كل طالب باقتنائه.',
-    createdAt: new Date(Date.now() - 3600000 * 24 * 2).toISOString(),
-    isApproved: true,
-    likesCount: 18,
-  },
-  {
-    id: 'rev_seed_2',
-    itemId: '1',
-    itemType: 'book',
-    userId: 'usr_rev_2',
-    userName: 'سارة إبراهيم',
-    userAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=120',
-    academicStage: '3 ثانوي - علمي رياضة',
-    rating: 5,
-    comment: 'المسائل متدرجة من السهل إلى مسائل المستويات العليا الوزارية، مع إجابات نموذجية وتفسيرات واضحة.',
-    createdAt: new Date(Date.now() - 3600000 * 14).toISOString(),
-    isApproved: true,
-    likesCount: 12,
-  },
-  {
-    id: 'rev_seed_3',
-    itemId: '2',
-    itemType: 'book',
-    userId: 'usr_rev_3',
-    userName: 'يوسف الهواري',
-    userAvatar: 'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=120',
-    academicStage: '3 ثانوي - علمي',
-    rating: 5,
-    comment: 'مخططات الكيمياء العضوية وتفاعلات الحديد في الباب الأول قمة في الإبداع والتبسيط.',
-    createdAt: new Date(Date.now() - 3600000 * 36).toISOString(),
-    isApproved: true,
-    likesCount: 9,
-  },
-  {
-    id: 'rev_seed_4',
-    itemId: '1',
-    itemType: 'video',
-    userId: 'usr_rev_4',
-    userName: 'كريم نادر',
-    userAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=120',
-    academicStage: '3 ثانوي',
-    rating: 5,
-    comment: 'أفضل شرح للتيار المتردد والدينامو بدون تعقيد، شكراً لمستر محمد عبد المعبود وللمنصة.',
-    createdAt: new Date(Date.now() - 3600000 * 18).toISOString(),
-    isApproved: true,
-    likesCount: 22,
-  },
-  {
-    id: 'rev_seed_5',
-    itemId: '1',
-    itemType: 'article',
-    userId: 'usr_rev_5',
-    userName: 'هند أحمد',
-    userAvatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=120',
-    academicStage: '3 ثانوي - أدبي',
-    rating: 5,
-    comment: 'دليل البابل شيت وإدارة وقت الامتحان في 3 ساعات أنقذني في تجربة الامتحانات الشاملة.',
-    createdAt: new Date(Date.now() - 3600000 * 40).toISOString(),
-    isApproved: true,
-    likesCount: 15,
-  }
-];
+const SEED_REVIEWS: ItemReview[] = [];
 
 export function getAllReviews(): ItemReview[] {
   try {
@@ -94,10 +23,10 @@ export function getReviewsForItem(itemId: string | number, itemType: string): It
   return all.filter(r => String(r.itemId) === String(itemId) && r.itemType === itemType);
 }
 
-export function getItemRatingStats(itemId: string | number, itemType: string, defaultRating = 4.9, defaultCount = 120): { averageRating: number; totalReviews: number } {
+export function getItemRatingStats(itemId: string | number, itemType: string): { averageRating: number; totalReviews: number } {
   const reviews = getReviewsForItem(itemId, itemType);
   if (reviews.length === 0) {
-    return { averageRating: defaultRating, totalReviews: defaultCount };
+    return { averageRating: 0, totalReviews: 0 };
   }
   const sum = reviews.reduce((acc, r) => acc + r.rating, 0);
   const avg = Math.round((sum / reviews.length) * 10) / 10;

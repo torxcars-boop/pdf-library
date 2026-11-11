@@ -1,9 +1,11 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Summary, User } from '../types';
-import { X, Download, Bookmark, ExternalLink } from 'lucide-react';
+import { X, Download, Bookmark, ExternalLink, Eye } from 'lucide-react';
 import { RatingStars } from './RatingStars';
 import { CommentsSection } from './CommentsSection';
 import { ReviewsSection } from './ReviewsSection';
+import { getRealViews, incrementRealView } from '../utils/contentStore';
+import { getItemRatingStats } from '../utils/reviewsStore';
 
 interface ImageDetailModalProps {
   summary: Summary | null;
@@ -24,7 +26,19 @@ export const ImageDetailModal: React.FC<ImageDetailModalProps> = ({
   onOpenAuth,
   onRate,
 }) => {
+  const [viewCount, setViewCount] = useState<number>(0);
+
+  useEffect(() => {
+    if (summary?.id) {
+      const views = incrementRealView('summary', summary.id);
+      setViewCount(views);
+      fetch(`/api/items/summary/${summary.id}/view`, { method: 'POST' }).catch(() => {});
+    }
+  }, [summary?.id]);
+
   if (!summary) return null;
+
+  const realRating = getItemRatingStats(summary.id, 'summary');
 
   const handleBookmark = () => {
     if (!user) {
@@ -49,20 +63,28 @@ export const ImageDetailModal: React.FC<ImageDetailModalProps> = ({
 
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between pb-4 border-b border-zinc-800 mb-4 gap-4 pr-2">
           <div>
-            <span className="text-xs text-amber-400 font-bold bg-amber-500/10 px-2 py-0.5 rounded-lg border border-amber-500/20">
-              {summary.category || 'ملخص بصري'}
-            </span>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-amber-400 font-bold bg-amber-500/10 px-2 py-0.5 rounded-lg border border-amber-500/20">
+                {summary.category || 'ملخص بصري'}
+              </span>
+              <span className="text-xs text-zinc-400 flex items-center gap-1 font-mono">
+                <Eye className="w-3.5 h-3.5 text-amber-500" />
+                {viewCount} مشاهدة
+              </span>
+            </div>
             <h2 className="text-lg font-bold text-zinc-100 mt-1">{summary.title}</h2>
             
             <div className="flex items-center gap-2 mt-2">
               <RatingStars
-                rating={summary.rating || 5.0}
-                ratingCount={summary.ratingCount || 245}
+                rating={realRating.averageRating}
+                ratingCount={realRating.totalReviews}
                 size="md"
                 interactive={true}
                 onRate={onRate}
               />
-              <span className="text-[10px] text-zinc-500">اضغط لتقييم الملخص</span>
+              <span className="text-[10px] text-zinc-400">
+                {realRating.totalReviews > 0 ? `(${realRating.averageRating} من 5 - ${realRating.totalReviews} تقييم)` : 'لم يُقيّم بعد'}
+              </span>
             </div>
           </div>
 
