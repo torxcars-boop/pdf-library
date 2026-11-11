@@ -147,7 +147,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   const [examBadge, setExamBadge] = useState('بنك أسئلة الوزارة');
   const [examDescription, setExamDescription] = useState('');
   const [examTargetScope, setExamTargetScope] = useState<'all' | 'specific_plans' | 'specific_students'>('all');
-  const [examAllowedPlans, setExamAllowedPlans] = useState<string[]>(['basic_50', 'pro_100', 'vip_200']);
+  const [examAllowedPlans, setExamAllowedPlans] = useState<string[]>(['basic_50', 'free_trial']);
   const [examTargetStudentEmails, setExamTargetStudentEmails] = useState<string>('');
   const [examQuestions, setExamQuestions] = useState<ExamQuestion[]>([
     {
@@ -162,9 +162,11 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
   // Form States - Summary
   const [showSummaryModal, setShowSummaryModal] = useState(false);
+  const [editingSummaryId, setEditingSummaryId] = useState<number | null>(null);
   const [summaryTitle, setSummaryTitle] = useState('');
   const [summaryImagePath, setSummaryImagePath] = useState('');
   const [summaryCategory, setSummaryCategory] = useState('عام');
+  const [summaryImageFilePreview, setSummaryImageFilePreview] = useState('');
 
   // Form States - Video
   const [showVideoModal, setShowVideoModal] = useState(false);
@@ -180,6 +182,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   const [articleTitle, setArticleTitle] = useState('');
   const [articleContent, setArticleContent] = useState('');
   const [articleImagePath, setArticleImagePath] = useState('');
+  const [articleImageFilePreview, setArticleImageFilePreview] = useState('');
   const [articleAuthor, setArticleAuthor] = useState('ARM');
   const [articleReadTime, setArticleReadTime] = useState('5 دقائق');
 
@@ -598,7 +601,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     setExamBadge('بنك أسئلة الوزارة');
     setExamDescription('');
     setExamTargetScope('all');
-    setExamAllowedPlans(['basic_50', 'pro_100', 'vip_200']);
+    setExamAllowedPlans(['basic_50', 'free_trial']);
     setExamTargetStudentEmails('');
     setExamQuestions([
       {
@@ -652,13 +655,86 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     });
   };
 
-  // SUMMARY ACTIONS
-  const [editingSummaryId, setEditingSummaryId] = useState<number | null>(null);
+  // Helper for Summary and Article local image upload with canvas compression
+  const compressLocalImage = (file: File, maxDim = 800): Promise<string> => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new (window as any).Image();
+        img.onload = () => {
+          let width = img.width;
+          let height = img.height;
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            resolve(canvas.toDataURL('image/jpeg', 0.82));
+          } else {
+            resolve(e.target?.result as string);
+          }
+        };
+        img.onerror = () => resolve(e.target?.result as string);
+        img.src = e.target?.result as string;
+      };
+      reader.onerror = () => resolve('');
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleSummaryFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const compressed = await compressLocalImage(file);
+      setSummaryImagePath(compressed);
+      setSummaryImageFilePreview(compressed);
+    } catch (err) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (reader.result) {
+          setSummaryImagePath(reader.result as string);
+          setSummaryImageFilePreview(reader.result as string);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleArticleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const compressed = await compressLocalImage(file);
+      setArticleImagePath(compressed);
+      setArticleImageFilePreview(compressed);
+    } catch (err) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (reader.result) {
+          setArticleImagePath(reader.result as string);
+          setArticleImageFilePreview(reader.result as string);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
   const openEditSummary = (s: Summary) => {
     setEditingSummaryId(s.id);
     setSummaryTitle(s.title);
     setSummaryImagePath(s.imagepath);
+    setSummaryImageFilePreview(s.imagepath);
     setSummaryCategory(s.category);
     setShowSummaryModal(true);
   };
@@ -701,6 +777,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       setEditingSummaryId(null);
       setSummaryTitle('');
       setSummaryImagePath('');
+      setSummaryImageFilePreview('');
       fetchAdminData();
       onDataChanged();
     } catch (err: any) {
@@ -846,6 +923,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       setArticleTitle('');
       setArticleContent('');
       setArticleImagePath('');
+      setArticleImageFilePreview('');
       fetchAdminData();
       onDataChanged();
     } catch (err: any) {
@@ -1446,11 +1524,11 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                   </p>
                 </div>
                 <span className="text-xs font-bold px-3 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30">
-                  3 باقات شهرية متاحة
+                  باقة الـ 50 ج.م الاختيارية
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {adminPlans.map((plan) => {
                   const isActive = plan.isActive !== false;
                   return (
@@ -1698,59 +1776,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                                   const now = new Date();
                                   const updatedSub: UserSubscription = {
                                     planId: 'basic_50',
-                                    planName: 'باقة الأساسيات (50 ج.م)',
-                                    status: 'active',
-                                    billingPeriod: 'monthly',
-                                    examsRemainingThisWeek: 2,
-                                    maxExamsPerWeek: 2,
-                                    startDate: now.toISOString(),
-                                    endDate: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-                                    isTrial: false,
-                                    approvedByAdmin: true
-                                  };
-                                  saveStudentSubscription(student.id, updatedSub);
-                                  setStudentSubscriptionsMap(getAllSavedSubscriptions());
-                                  alert(`تم تفعيل باقة الـ 50 ج.م شهرياً للطالب ${student.name}!`);
-                                }}
-                                className="px-2 py-1 rounded-lg bg-blue-600/30 hover:bg-blue-600/50 text-blue-300 border border-blue-500/40 text-[10px] font-bold transition"
-                                title="تفعيل باقة 50 ج.م شهرياً"
-                              >
-                                تفعيل 50ج
-                              </button>
-
-                              {/* Quick Activate 100 */}
-                              <button
-                                onClick={() => {
-                                  const now = new Date();
-                                  const updatedSub: UserSubscription = {
-                                    planId: 'pro_100',
-                                    planName: 'باقة التفوق (100 ج.م)',
-                                    status: 'active',
-                                    billingPeriod: 'monthly',
-                                    examsRemainingThisWeek: 5,
-                                    maxExamsPerWeek: 5,
-                                    startDate: now.toISOString(),
-                                    endDate: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-                                    isTrial: false,
-                                    approvedByAdmin: true
-                                  };
-                                  saveStudentSubscription(student.id, updatedSub);
-                                  setStudentSubscriptionsMap(getAllSavedSubscriptions());
-                                  alert(`تم تفعيل باقة التفوق 100 ج.م شهرياً للطالب ${student.name}!`);
-                                }}
-                                className="px-2 py-1 rounded-lg bg-purple-600/30 hover:bg-purple-600/50 text-purple-300 border border-purple-500/40 text-[10px] font-bold transition"
-                                title="تفعيل باقة 100 ج.م شهرياً"
-                              >
-                                تفعيل 100ج
-                              </button>
-
-                              {/* Quick Activate 200 VIP */}
-                              <button
-                                onClick={() => {
-                                  const now = new Date();
-                                  const updatedSub: UserSubscription = {
-                                    planId: 'vip_200',
-                                    planName: 'باقة أوائل الجمهورية VIP (200 ج.م)',
+                                    planName: 'باقة التفوق الشاملة (50 ج.م)',
                                     status: 'active',
                                     billingPeriod: 'monthly',
                                     examsRemainingThisWeek: 9999,
@@ -1762,13 +1788,15 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                                   };
                                   saveStudentSubscription(student.id, updatedSub);
                                   setStudentSubscriptionsMap(getAllSavedSubscriptions());
-                                  alert(`تم تفعيل باقة VIP الملكية 200 ج.م شهرياً للطالب ${student.name}! 👑`);
+                                  alert(`تم تفعيل باقة التفوق الشاملة (50 ج.م شهرياً) للطالب ${student.name}! ✨`);
                                 }}
-                                className="px-2 py-1 rounded-lg bg-amber-500/30 hover:bg-amber-500/50 text-amber-300 border border-amber-500/40 text-[10px] font-bold transition"
-                                title="تفعيل باقة VIP 200 ج.م شهرياً"
+                                className="px-3 py-1.5 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 border border-emerald-500/40 text-xs font-bold transition flex items-center gap-1 shadow-sm"
+                                title="تفعيل باقة 50 ج.م شهرياً الشاملة"
                               >
-                                تفعيل VIP (200ج)
+                                <Check className="w-3.5 h-3.5" />
+                                <span>تفعيل اشتراك 50ج</span>
                               </button>
+
 
                               {/* Extend Trial +10 days */}
                               <button
@@ -1929,7 +1957,14 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           <div className="space-y-4 animate-in fade-in">
             <div className="flex justify-between items-center">
               <button
-                onClick={() => setShowSummaryModal(true)}
+                onClick={() => {
+                  setEditingSummaryId(null);
+                  setSummaryTitle('');
+                  setSummaryImagePath('');
+                  setSummaryImageFilePreview('');
+                  setSummaryCategory('عام');
+                  setShowSummaryModal(true);
+                }}
                 className="px-4 py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-2xl shadow-md hover:brightness-110 transition flex items-center gap-2"
               >
                 <Plus className="w-4 h-4" />
@@ -1959,13 +1994,23 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                       <ExternalLink className="w-3 h-3" />
                       عرض بدقة كاملة
                     </a>
-                    <button
-                      onClick={() => handleDeleteSummary(sum.id)}
-                      className="p-1.5 rounded-xl bg-zinc-800 hover:bg-rose-500/20 text-rose-400 transition"
-                      title="حذف الملخص"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => openEditSummary(sum)}
+                        className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-amber-500 hover:text-zinc-950 text-amber-300 text-xs font-bold transition flex items-center gap-1"
+                        title="تعديل الملخص"
+                      >
+                        <Edit3 className="w-3 h-3" />
+                        <span>تعديل</span>
+                      </button>
+                      <button
+                        onClick={() => handleDeleteSummary(sum.id)}
+                        className="p-1.5 rounded-xl bg-zinc-800 hover:bg-rose-500/20 text-rose-400 transition"
+                        title="حذف الملخص"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -2035,6 +2080,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                   setArticleTitle('');
                   setArticleContent('');
                   setArticleImagePath('');
+                  setArticleImageFilePreview('');
                   setShowArticleModal(true);
                 }}
                 className="px-4 py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-2xl shadow-md hover:brightness-110 transition flex items-center gap-2"
@@ -2069,6 +2115,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                         setArticleTitle(art.title);
                         setArticleContent(art.content);
                         setArticleImagePath(art.imagepath);
+                        setArticleImageFilePreview(art.imagepath);
                         setArticleAuthor(art.author);
                         setArticleReadTime(art.readTime);
                         setShowArticleModal(true);
@@ -2832,23 +2879,49 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1">رابط الصورة (URL)</label>
+              {/* Summary Image Picker: Device Upload or Direct URL */}
+              <div className="space-y-2 p-3 rounded-2xl bg-zinc-950/80 border border-zinc-800">
+                <label className="block text-xs font-bold text-amber-300">
+                  صورة الملخص أو الخريطة الذهنية (رفع من جهازك أو وضع رابط) 🖼️
+                </label>
+
+                <div className="flex items-center gap-3">
+                  <label
+                    htmlFor="adminLocalSummaryInput"
+                    className="flex-1 py-2.5 px-3 bg-zinc-900 border-2 border-dashed border-zinc-700 hover:border-amber-500 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition text-xs font-semibold text-zinc-300 group"
+                  >
+                    <Upload className="w-3.5 h-3.5 text-amber-400 group-hover:scale-110 transition" />
+                    <span>{summaryImageFilePreview ? 'تغيير صورة الملخص من جهازك' : 'رفع صورة ملخص من جهازك'}</span>
+                  </label>
+                  <input
+                    id="adminLocalSummaryInput"
+                    type="file"
+                    accept="image/*"
+                    onChange={handleSummaryFileChange}
+                    className="hidden"
+                  />
+
+                  {summaryImageFilePreview && (
+                    <img 
+                      src={summaryImageFilePreview} 
+                      alt="Summary Preview" 
+                      className="w-12 h-12 object-cover rounded-xl border border-amber-500/50 shadow flex-shrink-0" 
+                    />
+                  )}
+                </div>
+
                 <input
-                  type="url"
+                  type="text"
                   required
                   value={summaryImagePath}
-                  onChange={(e) => setSummaryImagePath(e.target.value)}
-                  placeholder="https://images.unsplash.com/..."
-                  className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                  onChange={(e) => {
+                    setSummaryImagePath(e.target.value);
+                    setSummaryImageFilePreview(e.target.value);
+                  }}
+                  placeholder="أو ضع رابط صورة مباشر (URL)..."
+                  className="w-full py-2 px-3 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
-
-              {summaryImagePath && (
-                <div className="h-40 rounded-xl overflow-hidden bg-black border border-zinc-800">
-                  <img src={summaryImagePath} alt="preview" className="w-full h-full object-cover" />
-                </div>
-              )}
 
               <button
                 type="submit"
@@ -2993,19 +3066,53 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1">رابط صورة المقال</label>
+              {/* Article Image: Upload from Device or Direct URL */}
+              <div className="space-y-2 p-3 rounded-2xl bg-zinc-950/80 border border-zinc-800">
+                <label className="block text-xs font-bold text-amber-300">
+                  صورة غلاف المقال (رفع من جهازك أو وضع رابط صورة) 🖼️
+                </label>
+
+                <div className="flex items-center gap-3">
+                  <label
+                    htmlFor="adminLocalArticleInput"
+                    className="flex-1 py-2.5 px-3 bg-zinc-900 border-2 border-dashed border-zinc-700 hover:border-amber-500 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition text-xs font-semibold text-zinc-300 group"
+                  >
+                    <Upload className="w-3.5 h-3.5 text-amber-400 group-hover:scale-110 transition" />
+                    <span>{articleImageFilePreview ? 'تغيير صورة المقال من جهازك' : 'رفع صورة المقال من جهازك'}</span>
+                  </label>
+                  <input
+                    id="adminLocalArticleInput"
+                    type="file"
+                    accept="image/*"
+                    onChange={handleArticleFileChange}
+                    className="hidden"
+                  />
+
+                  {articleImageFilePreview && (
+                    <img 
+                      src={articleImageFilePreview} 
+                      alt="Article Preview" 
+                      className="w-16 h-12 object-cover rounded-xl border border-amber-500/50 shadow flex-shrink-0" 
+                    />
+                  )}
+                </div>
+
                 <input
-                  type="url"
+                  type="text"
                   value={articleImagePath}
-                  onChange={(e) => setArticleImagePath(e.target.value)}
-                  placeholder="https://images.unsplash.com/..."
-                  className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100"
+                  onChange={(e) => {
+                    setArticleImagePath(e.target.value);
+                    setArticleImageFilePreview(e.target.value);
+                  }}
+                  placeholder="أو أدخل رابط صورة مباشر (URL)..."
+                  className="w-full py-2 px-3 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1">محتوى المقال (يدعم Markdown)</label>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1">
+                  نص ومحتوى المقال (اكتب الشرح والملاحظات بالتفصيل) ✍️
+                </label>
                 <textarea
                   rows={8}
                   required
@@ -3208,9 +3315,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                     <span className="text-[11px] font-bold text-zinc-300 block">اختر الباقات المصرح لها بأداء هذا الامتحان:</span>
                     <div className="flex flex-wrap gap-3">
                       {[
-                        { id: 'basic_50', label: 'باقة الأساسيات (50 ج.م)' },
-                        { id: 'pro_100', label: 'باقة التفوق (100 ج.م)' },
-                        { id: 'vip_200', label: 'باقة أوائل الجمهورية VIP (200 ج.م)' },
+                        { id: 'basic_50', label: 'باقة التفوق الشاملة (50 ج.م)' },
                         { id: 'free_trial', label: 'الفترة التجريبية المجانية (10 أيام)' }
                       ].map(planOption => (
                         <label key={planOption.id} className="flex items-center gap-2 cursor-pointer text-zinc-300">

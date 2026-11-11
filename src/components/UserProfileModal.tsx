@@ -144,11 +144,16 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
       });
       const data = await res.json();
       
-      const updatedUser: User = data.user || {
+      const updatedUser: User = {
         ...user,
+        ...(data.user || {}),
         name: name.trim(),
         academicStage: stage.trim(),
         avatar: avatar.trim(),
+        // CRITICAL: Always keep subscription, createdAt, and bookmarks from the original user
+        createdAt: user.createdAt || data.user?.createdAt,
+        subscription: user.subscription || data.user?.subscription,
+        bookmarks: user.bookmarks || data.user?.bookmarks || [],
       };
 
       // Persist locally for instant seamless session maintenance
@@ -163,6 +168,9 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
         name: name.trim(),
         academicStage: stage.trim(),
         avatar: avatar.trim(),
+        createdAt: user.createdAt,
+        subscription: user.subscription,
+        bookmarks: user.bookmarks,
       };
       localStorage.setItem('arm_current_user', JSON.stringify(updatedUser));
       onUpdateUser(updatedUser);

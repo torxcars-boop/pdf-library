@@ -259,13 +259,13 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
         <div className="text-center max-w-2xl mx-auto mb-6">
           <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-black mb-3">
             <Sparkles className="w-4 h-4" />
-            <span>باقات الاشتراك الشهرية المعتمدة لطلاب الثانوية 2026</span>
+            <span>باقة التفوق الشاملة الاختيارية لطلاب الثانوية 2026</span>
           </div>
           <h2 className="text-2xl sm:text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-amber-100 via-amber-300 to-amber-500 mb-2">
-            اختر باقتك الشهرية وتدرب على نماذج الامتحانات الوزارية
+            باقة واحدة موحدة شاملة لكافة المميزات بـ 50 ج.م فقط (اختيارية)
           </h2>
           <p className="text-xs sm:text-sm text-zinc-400 leading-relaxed">
-            الاشتراك شهري بالكامل ويشمل بنك الامتحانات الأسبوعي، مذكرات PDF الأصلية، والتدريب على النطق بالذكاء الاصطناعي.
+            احصل على وصول كامل غير محدود لجميع الامتحانات، الكتب الدراسية والمذكرات، تدريب الإنجليزية بالذكاء الاصطناعي، والشهادات المعتمدة.
           </p>
         </div>
 
@@ -291,11 +291,11 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
               <div>
                 <span className="text-xs font-bold block">
                   {isTrial && trialDaysLeft > 0 ? (
-                    <>أنت حالياً في <strong className="text-amber-400">الفترة التجريبية المجانية (10 أيام)</strong> — متبقي لك: <span className="underline">{trialDaysLeft} أيام</span> (لك 2 امتحان أسبوعياً)</>
+                    <>أنت حالياً في <strong className="text-amber-400">الفترة التجريبية المجانية (10 أيام)</strong> — متبقي لك: <span className="underline">{trialDaysLeft} أيام</span> (جميع المميزات متاحة لك مجاناً)</>
                   ) : activeSub?.status === 'active' && !isTrial ? (
                     <>باقتك الشهرية النشطة: <strong className="text-emerald-400">{activeSub.planName}</strong> (تنتهي في {new Date(activeSub.endDate).toLocaleDateString('ar-EG')})</>
                   ) : (
-                    <>تنبيه: انتهت فترتك التجريبية المجانية (10 أيام). يرجى الاشتراك في إحدى الباقات الشهرية للاستمرار في الامتحانات.</>
+                    <>فترتك التجريبية المجانية انتهت. يمكنك ترقية حسابك للباقة الشاملة (50 ج.م فقط) لمتابعة تدريبك.</>
                   )}
                 </span>
                 <span className="text-[11px] text-zinc-400 block mt-0.5">
@@ -318,7 +318,7 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
         {/* STEP 1: PLANS DIRECTORY VIEW */}
         {/* ----------------------------------------------------------------- */}
         {!selectedPlan && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+          <div className="max-w-xl mx-auto w-full">
             {plans.map((plan) => {
               const isCurrent = activeSub?.status === 'active' && activeSub?.planId === plan.id;
               const isClosed = plan.isActive === false;
@@ -326,12 +326,10 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
               return (
                 <div
                   key={plan.id}
-                  className={`rounded-3xl p-6 border transition-all duration-300 flex flex-col justify-between relative ${
+                  className={`rounded-3xl p-6 sm:p-8 border transition-all duration-300 flex flex-col justify-between relative ${
                     isCurrent
                       ? 'bg-zinc-900/90 border-emerald-500/50 shadow-xl shadow-emerald-500/10'
-                      : plan.isPopular
-                      ? 'bg-gradient-to-b from-zinc-900/90 via-zinc-950 to-zinc-950 border-amber-500/50 shadow-2xl shadow-amber-500/10 scale-[1.02]'
-                      : 'bg-zinc-900/50 border-zinc-800/80 hover:border-zinc-700'
+                      : 'bg-gradient-to-b from-zinc-900/90 via-zinc-950 to-zinc-950 border-amber-500/50 shadow-2xl shadow-amber-500/15'
                   }`}
                 >
                   {/* Badge */}
@@ -344,11 +342,9 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
                   <div>
                     {/* Header: Name & Tagline */}
                     <div className="mb-4">
-                      <h3 className="text-lg font-black text-zinc-100 mb-1 flex items-center justify-between">
+                      <h3 className="text-xl font-black text-zinc-100 mb-1 flex items-center justify-between">
                         <span>{plan.name}</span>
-                        {plan.id === 'vip_200' && <Crown className="w-5 h-5 text-amber-400" />}
-                        {plan.id === 'pro_100' && <Zap className="w-5 h-5 text-amber-400" />}
-                        {plan.id === 'basic_50' && <GraduationCap className="w-5 h-5 text-blue-400" />}
+                        <Crown className="w-6 h-6 text-amber-400" />
                       </h3>
                       <p className="text-[11px] text-zinc-400 leading-relaxed min-h-[32px]">
                         {plan.tagline}

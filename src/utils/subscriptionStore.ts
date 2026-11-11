@@ -31,70 +31,29 @@ const PLANS_CONFIG_KEY = 'arm_admin_plans_config_v1';
 const PAYMENT_REQUESTS_KEY = 'arm_payment_requests_v1';
 const STUDENTS_SUBSCRIPTIONS_MAP_KEY = 'arm_students_subscriptions_map_v1';
 
-// Default 3 Plans (Monthly billing, weekly exams)
+// Unified 50 EGP Optional Plan with comprehensive attractive features
 export const DEFAULT_SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
   {
     id: 'basic_50',
-    name: 'باقة الأساسيات والمتابعة',
-    tagline: 'مثالية للتدريب الدوري والمراجعة الأسبوعية المستمرة',
+    name: 'باقة التفوق الشاملة (اختيارية)',
+    tagline: 'الباقة الموحدة الشاملة لكل المناهج والامتحانات ونماذج الإجابة',
     priceEGP: 50,
     billingPeriod: 'شهرياً',
-    badge: 'بداية قوية 🎯',
-    examsPerWeek: 2,
-    isActive: true,
-    features: [
-      '2 امتحان إلكتروني أسبوعياً (8 امتحانات شهرياً)',
-      'تصحيح فوري للامتحانات مع إظهار الإجابات النموذجية والشرح',
-      'تحميل حتى 10 كتب ومذكرات دراسية PDF عالية الجودة شهرياً',
-      'تصفح كامل لجميع ملخصات الصور والخرائط الذهنية',
-      'تقرير أداء أسبوعي لمتوسط الدرجات ونسبة الإتقان',
-      'دعم عبر الواتساب للاستفسارات العامة'
-    ],
-    colorTheme: 'from-blue-600 to-indigo-600',
-    ctaText: 'اشترك الآن بـ 50 ج.م / شهرياً'
-  },
-  {
-    id: 'pro_100',
-    name: 'باقة التفوق الدراسي',
-    tagline: 'الخيار الأفضل والأكثر طلباً لطلاب الشهادات والسنوية',
-    priceEGP: 100,
-    billingPeriod: 'شهرياً',
-    badge: 'الأكثر طلباً ⭐',
+    badge: 'الباقة الموحدة الشاملة 💎',
     isPopular: true,
-    examsPerWeek: 5,
+    examsPerWeek: -1, // Unlimited exams
     isActive: true,
     features: [
-      '5 امتحانات أسبوعياً (20 امتحان شهرياً شامل كافة المواد)',
-      'تحميل غير محدود لجميع الكتب والمذكرات الدراسية PDF',
-      'تدريب مفتوح مع معلم نطق الإنجليزية بالذكاء الاصطناعي (AI Tutor)',
-      'إتاحة بنك أسئلة الوزارة ونماذج امتحانات المحافظات السابقة',
-      'تحليل ذكي لنقاط الضعف والقوة والمواضيع التي تحتاج مراجعة',
-      'مؤقت بومودورو للمذاكرة والتركيز مع إحصائيات متقدمة',
-      'أولوية في الدعم الفني والمتابعة الدراسية'
+      'امتحانات إلكترونية شاملة غير محدودة أسبوعياً مع تصحيح فوري وشرح تفصيلي',
+      'تحميل فوري وغير محدود لجميع الكتب والمذكرات الدراسية PDF بجودة فائقة',
+      'وصول كامل لمعلم نطق اللغة الإنجليزية الذكي (AI English Tutor)',
+      'تصفح كامل للخرائط الذهنية الذكية ونماذج امتحانات الثانوية العامة والوزارة',
+      'متابعة أسبوعية دقيقة للدرجات وإحصائيات نقاط القوة والضعف للطالب',
+      'شهادة تفوق إلكترونية معتمدة تصدر باسم الطالب عند اجتياز الاختبارات',
+      'دعم مباشر وسريع عبر الواتساب للاستفسارات والمتابعة الدراسية'
     ],
     colorTheme: 'from-amber-600 via-amber-500 to-amber-400',
-    ctaText: 'اشترك في باقة التفوق بـ 100 ج.م / شهرياً'
-  },
-  {
-    id: 'vip_200',
-    name: 'باقة أوائل الجمهورية VIP',
-    tagline: 'الاشتراك الملكي الشامل لكل ما يحتاجه طالب المجموع والقمة',
-    priceEGP: 200,
-    billingPeriod: 'شهرياً',
-    badge: 'شاملة كل شيء 👑',
-    examsPerWeek: -1, // Unlimited
-    isActive: true,
-    features: [
-      'امتحانات غير محدودة طوال الأسبوع والشهر لكافة الصفوف (3 إعدادي - 3 ثانوي)',
-      'تحميل فوري وسريع لكافة الكتب والملازم والخرائط الذهنية والشروحات',
-      'وصول غير محدود لمعلم نطق الإنجليزية بالذكاء الاصطناعي مع تقييم الصوت بالمايكروفون',
-      'نماذج ليلة الامتحان الوزارية المتوقعة مع شروحات الفيديو التفاعلية',
-      'استشارات وتواصل مباشر مع نخبة المشرفين التعليميين عبر الواتساب VIP',
-      'شهادة تفوق إلكترونية معتمدة تصدر باسم الطالب عند إتمام الاختبارات',
-      'شارة طالب VIP ذهبي تظهر في الملف الشخصي ولوحة المتصدرين'
-    ],
-    colorTheme: 'from-emerald-600 via-teal-500 to-amber-500',
-    ctaText: 'اشترك في باقة VIP بـ 200 ج.م / شهرياً'
+    ctaText: 'اشترك الآن في الباقة الشاملة بـ 50 ج.م فقط'
   }
 ];
 
@@ -157,7 +116,22 @@ export const calculateStudentSubscription = (
     }
 
     // 2. Otherwise: Automatic 10-Day Free Trial for every student account
-    const start = userCreatedAt ? new Date(userCreatedAt) : new Date();
+    // CRITICAL: Look up if this student already has a trial start date saved to prevent resetting/expiring upon avatar or profile changes!
+    let savedStartDate: string | undefined;
+    try {
+      const storedTrialStart = localStorage.getItem(`arm_trial_start_${userId}`);
+      if (storedTrialStart) {
+        savedStartDate = storedTrialStart;
+      } else if (userCreatedAt) {
+        savedStartDate = userCreatedAt;
+        localStorage.setItem(`arm_trial_start_${userId}`, userCreatedAt);
+      } else {
+        savedStartDate = new Date().toISOString();
+        localStorage.setItem(`arm_trial_start_${userId}`, savedStartDate);
+      }
+    } catch (e) {}
+
+    const start = savedStartDate ? new Date(savedStartDate) : new Date();
     const end = new Date(start.getTime() + 10 * 24 * 60 * 60 * 1000);
     const msLeft = end.getTime() - Date.now();
     const daysLeft = Math.max(0, Math.ceil(msLeft / (1000 * 60 * 60 * 24)));

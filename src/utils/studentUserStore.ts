@@ -63,16 +63,20 @@ export const saveRegisteredStudent = (user: User): void => {
     const students = getRegisteredStudents();
     const idx = students.findIndex(s => s.id === user.id || s.email?.toLowerCase() === user.email?.toLowerCase());
     
+    const existingStudent = idx >= 0 ? students[idx] : null;
     const userToSave: User = {
+      ...existingStudent,
       ...user,
-      status: user.status || 'active',
-      role: user.role || 'user',
-      academicStage: user.academicStage || 'طالب ثانوية عامة',
-      createdAt: user.createdAt || new Date().toISOString()
+      // CRITICAL: Preserve original creation date and subscription to avoid resetting or prematurely expiring 10-day trial!
+      createdAt: user.createdAt || existingStudent?.createdAt || new Date().toISOString(),
+      subscription: user.subscription || existingStudent?.subscription,
+      status: user.status || existingStudent?.status || 'active',
+      role: user.role || existingStudent?.role || 'user',
+      academicStage: user.academicStage || existingStudent?.academicStage || 'طالب ثانوية عامة',
     };
 
     if (idx >= 0) {
-      students[idx] = { ...students[idx], ...userToSave };
+      students[idx] = userToSave;
     } else {
       students.unshift(userToSave);
     }

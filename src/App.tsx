@@ -1329,8 +1329,15 @@ export default function App() {
           user={currentUser}
           token={userToken}
           onUpdateUser={(u) => {
-            setCurrentUser(u);
-            localStorage.setItem('arm_current_user', JSON.stringify(u));
+            const preservedUser: User = {
+              ...currentUser,
+              ...u,
+              subscription: currentUser.subscription || u.subscription,
+              createdAt: currentUser.createdAt || u.createdAt,
+            };
+            setCurrentUser(preservedUser);
+            localStorage.setItem('arm_current_user', JSON.stringify(preservedUser));
+            saveRegisteredStudent(preservedUser);
           }}
           onRemoveBookmark={handleRemoveBookmark}
           onOpenItem={handleOpenBookmarkItem}
