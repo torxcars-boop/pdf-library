@@ -361,6 +361,59 @@ app.post(['/api/books/:id/download', '/books/:id/download'], (req, res) => {
   res.json({ success: true, downloads: book ? book.downloads : 1 });
 });
 
+app.get(['/api/download-pdf', '/download-pdf'], async (req, res) => {
+  const rawUrl = typeof req.query.url === 'string' ? req.query.url.trim() : '';
+  const rawName = typeof req.query.filename === 'string' ? req.query.filename : 'book.pdf';
+  if (!rawUrl) {
+    return res.status(400).json({ error: 'رابط الملف غير صالح' });
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return res.status(400).json({ error: 'صيغة الرابط غير صالحة' });
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return res.status(400).json({ error: 'بروتوكول الرابط غير مدعوم' });
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  if (
+    host === 'localhost' ||
+    host === '127.0.0.1' ||
+    host === '0.0.0.0' ||
+    host === '::1' ||
+    host.startsWith('10.') ||
+    host.startsWith('192.168.') ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
+    host.startsWith('169.254.')
+  ) {
+    return res.status(403).json({ error: 'غير مسموح بالوصول إلى عناوين محلية' });
+  }
+
+  const safeName = rawName.replace(/[\\/:*?"<>|\r\n]/g, '_').slice(0, 80) || 'book.pdf';
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+
+  try {
+    const upstream = await fetch(parsed.toString(), { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!upstream.ok) {
+      return res.redirect(parsed.toString());
+    }
+    const arrayBuffer = await upstream.arrayBuffer();
+    res.setHeader('Content-Type', upstream.headers.get('content-type') || 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="book.pdf"; filename*=UTF-8''${encodeURIComponent(safeName)}`);
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    return res.send(Buffer.from(arrayBuffer));
+  } catch {
+    clearTimeout(timeout);
+    return res.redirect(parsed.toString());
+  }
+});
+
 app.post(['/api/items/:type/:id/view', '/items/:type/:id/view'], (req, res) => {
   const { type, id } = req.params;
   const numId = Number(id);

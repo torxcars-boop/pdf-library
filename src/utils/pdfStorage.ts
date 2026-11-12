@@ -1,5 +1,5 @@
 // IndexedDB helper for large PDF files when server storage is unavailable (e.g., serverless limits)
-// Also safely resolves idb:// and data:application/pdf URLs into ObjectURLs for iframe/download compatibility
+// Also safely resolves idb://, data:application/pdf, /uploads/*, and external PDFs for fast preview & instant download
 
 const DB_NAME = 'arm_pdf_blobs_v1';
 const STORE_NAME = 'pdfs';
@@ -114,28 +114,77 @@ export async function resolveBookPdfUrl(filepath: string): Promise<{ url: string
   return { url: filepath, isObjectUrl: false };
 }
 
-export async function triggerPdfDownload(filepath: string, title: string): Promise<boolean> {
-  const { url, isObjectUrl } = await resolveBookPdfUrl(filepath);
-  if (!url) return false;
+function sanitizePdfFilename(title: string): string {
+  const cleaned = (title || 'book').replace(/\.pdf$/i, '').replace(/[\\/:*?"<>|]/g, '_').trim();
+  return `${(cleaned || 'book').slice(0, 80)}.pdf`;
+}
 
-  const safeFilename = `${(title || 'book').replace(/[\\/:*?"<>|]/g, '_').slice(0, 80)}.pdf`;
-  try {
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = safeFilename;
-    a.target = '_blank';
-    a.rel = 'noopener noreferrer';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    if (isObjectUrl) {
-      setTimeout(() => URL.revokeObjectURL(url), 15000);
+function triggerAnchorDownload(href: string, filename: string): void {
+  const a = document.createElement('a');
+  a.href = href;
+  a.download = filename;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+export async function triggerPdfDownload(filepath: string, title: string): Promise<boolean> {
+  if (!filepath) return false;
+  const safeFilename = sanitizePdfFilename(title);
+
+  // 1. Fast path for idb:// and data:application/pdf URLs
+  if (filepath.startsWith('idb://') || filepath.startsWith('data:application/pdf')) {
+    const { url, isObjectUrl } = await resolveBookPdfUrl(filepath);
+    if (!url) return false;
+    try {
+      triggerAnchorDownload(url, safeFilename);
+      if (isObjectUrl) {
+        setTimeout(() => URL.revokeObjectURL(url), 20000);
+      }
+      return true;
+    } catch {
+      if (isObjectUrl) URL.revokeObjectURL(url);
+      return false;
     }
+  }
+
+  // 2. Fast same-origin download (e.g., /uploads/*.pdf)
+  const isSameOrigin =
+    filepath.startsWith('/') ||
+    (typeof window !== 'undefined' && filepath.startsWith(window.location.origin));
+
+  if (isSameOrigin) {
+    try {
+      triggerAnchorDownload(filepath, safeFilename);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // 3. External PDF URLs: try fast direct CORS blob fetch first, otherwise download via same-origin stream proxy
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3500);
+    const res = await fetch(filepath, { mode: 'cors', signal: controller.signal });
+    clearTimeout(timeoutId);
+    if (res.ok) {
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      triggerAnchorDownload(blobUrl, safeFilename);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 20000);
+      return true;
+    }
+  } catch {
+    // CORS or timeout — fall through to same-origin download proxy
+  }
+
+  try {
+    const proxyUrl = `/api/download-pdf?url=${encodeURIComponent(filepath)}&filename=${encodeURIComponent(safeFilename)}`;
+    triggerAnchorDownload(proxyUrl, safeFilename);
     return true;
   } catch {
-    if (isObjectUrl) {
-      URL.revokeObjectURL(url);
-    }
     return false;
   }
 }

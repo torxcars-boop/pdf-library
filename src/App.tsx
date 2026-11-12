@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { User, Book, Summary, Video, Article, BookmarkItem, UserSubscription } from './types';
 import { Navbar } from './components/Navbar';
 import { AuthModal } from './components/AuthModal';
@@ -40,11 +40,13 @@ import {
   getDownloadedBooksCount, 
   listenToContentChanged,
   getRealDownloads,
-  getRealViews 
+  getRealViews,
+  incrementRealDownload
 } from './utils/contentStore';
 import { 
   calculateStudentSubscription, 
-  saveStudentSubscription, 
+  saveStudentSubscription,
+  isEducationalFeatureLocked
 } from './utils/subscriptionStore';
 import { saveRegisteredStudent } from './utils/studentUserStore';
 import { triggerPdfDownload } from './utils/pdfStorage';
@@ -83,6 +85,7 @@ export default function App() {
   const [selectedArticle, setSelectedArticle] = useState<Article | null>(null);
   const [selectedSummary, setSelectedSummary] = useState<Summary | null>(null);
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null);
+  const deepLinkResolvedRef = useRef<boolean>(false);
 
   // Filter & Navigation
   const [activeTab, setActiveTab] = useState<string>('all');
@@ -247,6 +250,61 @@ export default function App() {
       setLoading(false);
     }
   };
+
+  // Resolve shared deep links (?item=book|article|video&id=... or ?book=..., ?article=..., ?video=...)
+  useEffect(() => {
+    if (loading || deepLinkResolvedRef.current) return;
+    deepLinkResolvedRef.current = true;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const itemType = params.get('item');
+      const itemId = params.get('id');
+
+      const bookId = (itemType === 'book' && itemId) || params.get('book');
+      const articleId = (itemType === 'article' && itemId) || params.get('article');
+      const videoId = (itemType === 'video' && itemId) || params.get('video');
+
+      if (bookId) {
+        const match = books.find(b => String(b.id) === String(bookId));
+        if (match) setSelectedBook(match);
+      } else if (articleId) {
+        const match = articles.find(a => String(a.id) === String(articleId));
+        if (match) setSelectedArticle(match);
+      } else if (videoId) {
+        const match = videos.find(v => String(v.id) === String(videoId));
+        if (match) setSelectedVideo(match);
+      }
+    } catch {
+      // ignore invalid URL search strings
+    }
+  }, [loading, books, articles, videos]);
+
+  // Keep URL query synchronized with currently open shareable modal
+  useEffect(() => {
+    if (!deepLinkResolvedRef.current) return;
+    try {
+      const url = new URL(window.location.href);
+      if (selectedBook) {
+        url.searchParams.set('item', 'book');
+        url.searchParams.set('id', String(selectedBook.id));
+      } else if (selectedArticle) {
+        url.searchParams.set('item', 'article');
+        url.searchParams.set('id', String(selectedArticle.id));
+      } else if (selectedVideo) {
+        url.searchParams.set('item', 'video');
+        url.searchParams.set('id', String(selectedVideo.id));
+      } else {
+        url.searchParams.delete('item');
+        url.searchParams.delete('id');
+        url.searchParams.delete('book');
+        url.searchParams.delete('article');
+        url.searchParams.delete('video');
+      }
+      window.history.replaceState({}, '', url.toString());
+    } catch {
+      // ignore history errors inside restricted contexts
+    }
+  }, [selectedBook, selectedArticle, selectedVideo]);
 
   // Restore user session from token
   const restoreUserSession = async (token: string) => {
@@ -1284,11 +1342,19 @@ export default function App() {
 
                             <button
                               onClick={() => {
+                                if (isEducationalFeatureLocked(currentUser)) {
+                                  setIsFeatureLockedModalOpen(true);
+                                  return;
+                                }
                                 recordBookDownload(pdf);
-                                triggerPdfDownload(pdf.filepath, `${pdf.title}.pdf`);
-                                showToast(`تم بدء تحميل كتاب: ${pdf.title}`);
+                                const updatedDownloads = incrementRealDownload(pdf.id);
+                                setDownloadedCount(getDownloadedBooksCount());
+                                setBooks(prev => prev.map(b => b.id === pdf.id ? { ...b, downloads: updatedDownloads } : b));
+                                void fetch(`/api/books/${pdf.id}/download`, { method: 'POST' }).catch(() => {});
+                                void triggerPdfDownload(pdf.filepath, `${pdf.title}.pdf`);
+                                showToast(`بدأ تحميل كتاب: ${pdf.title} ⚡`);
                               }}
-                              className="px-3.5 py-1.5 bg-gradient-to-r from-amber-600 to-amber-500 text-zinc-950 text-xs font-bold rounded-xl shadow hover:brightness-110 transition flex items-center gap-1"
+                              className="px-3.5 py-1.5 bg-gradient-to-r from-amber-600 to-amber-500 text-zinc-950 text-xs font-bold rounded-xl shadow hover:brightness-110 active:scale-95 transition flex items-center gap-1"
                             >
                               <span>تحميل</span> ⬇️
                             </button>

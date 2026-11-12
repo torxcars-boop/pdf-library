@@ -4,6 +4,7 @@ import { X, Bookmark, ExternalLink, Play, Eye } from 'lucide-react';
 import { RatingStars } from './RatingStars';
 import { CommentsSection } from './CommentsSection';
 import { ReviewsSection } from './ReviewsSection';
+import { ShareMenuButton } from './ShareMenuButton';
 import { getRealViews, incrementRealView } from '../utils/contentStore';
 import { getItemRatingStats } from '../utils/reviewsStore';
 
@@ -125,7 +126,7 @@ export const VideoDetailModal: React.FC<VideoDetailModalProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <button
               onClick={handleBookmark}
               className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold border transition ${
@@ -137,6 +138,13 @@ export const VideoDetailModal: React.FC<VideoDetailModalProps> = ({
               <Bookmark className="w-3.5 h-3.5 fill-current" />
               <span>{isBookmarked ? 'محفوظ في المفضلة' : 'حفظ في المفضلة'}</span>
             </button>
+
+            <ShareMenuButton
+              itemType="video"
+              itemId={video.id}
+              title={video.title}
+              subtitle={`${video.channel || 'المكتبة الرقمية'} - ${video.category || 'شرح تعليمي'}`}
+            />
 
             <a
               href={video.videourl}

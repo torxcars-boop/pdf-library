@@ -19,6 +19,7 @@ import { isEducationalFeatureLocked } from '../utils/subscriptionStore';
 import { resolveBookPdfUrl, triggerPdfDownload } from '../utils/pdfStorage';
 import { CommentsSection } from './CommentsSection';
 import { ReviewsSection } from './ReviewsSection';
+import { ShareMenuButton } from './ShareMenuButton';
 
 interface BookDetailModalProps {
   book: Book | null;
@@ -111,8 +112,8 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
     recordBookDownload(book);
     const newCount = incrementRealDownload(book.id);
     setDownloadCount(newCount);
+    void fetch(`/api/books/${book.id}/download`, { method: 'POST' }).catch(() => {});
     try {
-      await fetch(`/api/books/${book.id}/download`, { method: 'POST' }).catch(() => {});
       await triggerPdfDownload(book.filepath, `${book.title || 'book'}.pdf`);
     } catch {
       // fallback already handled cleanly
@@ -236,6 +237,13 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
                 <BookOpen className="w-4 h-4" />
                 <span>{showReader ? 'إخفاء المعاينة' : 'معاينة مباشرة'}</span>
               </button>
+
+              <ShareMenuButton
+                itemType="book"
+                itemId={book.id}
+                title={book.title}
+                subtitle={book.description || `كتاب ${book.category} - ${book.grade || ''}`}
+              />
 
               <button
                 onClick={handleBookmarkClick}

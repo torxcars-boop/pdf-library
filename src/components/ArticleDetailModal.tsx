@@ -3,18 +3,15 @@ import { Article, User } from '../types';
 import { 
   X, 
   Bookmark, 
-  Share2, 
   Eye, 
-  Calendar, 
   User as UserIcon, 
-  MessageSquare, 
-  Send, 
   ThumbsUp, 
   Clock 
 } from 'lucide-react';
 import { RatingStars } from './RatingStars';
 import { CommentsSection } from './CommentsSection';
 import { ReviewsSection } from './ReviewsSection';
+import { ShareMenuButton } from './ShareMenuButton';
 import { getRealViews, incrementRealView } from '../utils/contentStore';
 import { getItemRatingStats } from '../utils/reviewsStore';
 
@@ -40,7 +37,6 @@ export const ArticleDetailModal: React.FC<ArticleDetailModalProps> = ({
   const [viewCount, setViewCount] = useState<number>(0);
   const [likes, setLikes] = useState(0);
   const [hasLiked, setHasLiked] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     if (article?.id) {
@@ -62,12 +58,6 @@ export const ArticleDetailModal: React.FC<ArticleDetailModalProps> = ({
       setLikes(likes - 1);
       setHasLiked(false);
     }
-  };
-
-  const handleShare = () => {
-    navigator.clipboard?.writeText(window.location.href);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
   };
 
   const handleBookmark = () => {
@@ -175,13 +165,12 @@ export const ArticleDetailModal: React.FC<ArticleDetailModalProps> = ({
             </button>
           </div>
 
-          <button
-            onClick={handleShare}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 text-xs font-semibold border border-zinc-300 dark:border-zinc-700 transition"
-          >
-            <Share2 className="w-3.5 h-3.5" />
-            <span>{copied ? 'تم نسخ الرابط!' : 'مشاركة'}</span>
-          </button>
+          <ShareMenuButton
+            itemType="article"
+            itemId={article.id}
+            title={article.title}
+            subtitle={`مقال بقلم ${article.author} - المكتبة الرقمية الفاخرة`}
+          />
         </div>
 
         {/* Interactive Student Reviews and Text Ratings */}

@@ -426,7 +426,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     }
   };
 
-  // Upload PDF via XMLHttpRequest to get real byte-level progress, with IndexedDB fallback
+  // Upload PDF via XMLHttpRequest to get real byte-level progress, with fast IndexedDB fallback
   const uploadPdfWithProgress = async (
     file: File,
     token: string,
@@ -437,29 +437,34 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         const xhr = new XMLHttpRequest();
         const formData = new FormData();
         formData.append('file', file);
+        xhr.timeout = 5000;
 
         xhr.upload.onprogress = (ev) => {
           if (ev.lengthComputable && ev.total > 0) {
-            const pct = Math.min(75, Math.max(12, Math.round((ev.loaded / ev.total) * 65) + 10));
+            const pct = Math.min(78, Math.max(15, Math.round((ev.loaded / ev.total) * 63) + 15));
             onProgress(pct);
           }
         };
 
         xhr.onload = () => {
           if (xhr.status >= 200 && xhr.status < 300) {
-            try {
-              const data = JSON.parse(xhr.responseText);
-              if (data.url) {
-                resolve(data.url);
-                return;
+            const contentType = xhr.getResponseHeader('content-type') || '';
+            if (contentType.includes('application/json')) {
+              try {
+                const data = JSON.parse(xhr.responseText);
+                if (data.url) {
+                  resolve(data.url);
+                  return;
+                }
+              } catch {
+                // fallback below
               }
-            } catch {
-              // fallback below
             }
           }
-          reject(new Error(`Server upload failed (${xhr.status})`));
+          reject(new Error(`Server upload unavailable (${xhr.status})`));
         };
 
+        xhr.ontimeout = () => reject(new Error('Upload timeout - switching to fast local storage'));
         xhr.onerror = () => reject(new Error('Network error during upload'));
         xhr.open('POST', '/api/admin/upload-pdf');
         if (token) {
@@ -469,10 +474,10 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       });
       return serverUrl;
     } catch {
-      // Fallback to IndexedDB (supports large files reliably even on serverless deployments)
-      onProgress(55);
+      // Fast fallback to IndexedDB (near-instant local storage, works reliably even on serverless deployments)
+      onProgress(65);
       const idbKey = await savePdfToIdb(`book_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, file);
-      onProgress(75);
+      onProgress(82);
       return idbKey;
     }
   };
@@ -493,24 +498,24 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     }
 
     setIsPublishingBook(true);
-    setBookPublishProgress(8);
-    setBookPublishStage('جاري تجهيز ملف الكتاب وبيانات النشر...');
+    setBookPublishProgress(15);
+    setBookPublishStage('جاري تجهيز الكتاب للنشر الفوري...');
 
     try {
       let finalFilePath = bookFilePath.trim();
 
       if (selectedPdfFile) {
-        setBookPublishStage(`جاري رفع ملف "${selectedPdfFile.name}" (${bookPdfSize})...`);
-        setBookPublishProgress(14);
+        setBookPublishStage(`جاري معالجة ورفع "${selectedPdfFile.name}" (${bookPdfSize})...`);
+        setBookPublishProgress(22);
         finalFilePath = await uploadPdfWithProgress(selectedPdfFile, adminToken, (pct) => {
           setBookPublishProgress(pct);
         });
       } else {
-        setBookPublishProgress(65);
+        setBookPublishProgress(72);
       }
 
-      setBookPublishStage('جاري حفظ الكتاب ونشره للطلاب فوراً...');
-      setBookPublishProgress(82);
+      setBookPublishStage('جاري حفظ الكتاب ونشره للطلاب...');
+      setBookPublishProgress(88);
 
       const url = editingBookId ? `/api/books/${editingBookId}` : '/api/books';
       const method = editingBookId ? 'PUT' : 'POST';
@@ -526,6 +531,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       };
 
       let savedBookFromServer: Book | null = null;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
       try {
         const res = await fetch(url, {
           method,
@@ -534,6 +541,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
             'Authorization': `Bearer ${adminToken}`,
           },
           body: JSON.stringify(payload),
+          signal: controller.signal,
         });
         if (res.ok) {
           const data = await res.json();
@@ -542,10 +550,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           }
         }
       } catch {
-        // Offline / serverless fallback handled cleanly below
+        // Fast offline / timeout fallback handled cleanly below
+      } finally {
+        clearTimeout(timeoutId);
       }
 
-      setBookPublishProgress(94);
+      const publishedTitle = bookTitle.trim();
+      const isEditMode = Boolean(editingBookId);
 
       if (editingBookId) {
         const updatedBook: Book = savedBookFromServer || {
@@ -565,34 +576,28 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           views: 0,
           created_at: new Date().toISOString(),
         };
-        // Save to local store cleanly (guaranteed non-duplicate id when synced with server!)
         saveCustomItem('book', createdBook);
         setBooks(prev => [createdBook, ...prev.filter(b => b.id !== createdBook.id)]);
       }
 
-      dispatchContentChanged();
       setBookPublishProgress(100);
       setBookPublishStage('تم نشر الكتاب وإتاحته للطلاب بنجاح!');
+      dispatchContentChanged();
 
-      const publishedTitle = bookTitle.trim();
-      const isEditMode = Boolean(editingBookId);
-
-      // Brief delay so admin clearly sees 100% completion bar inside modal before closing
-      setTimeout(() => {
-        setShowBookModal(false);
-        resetBookForm();
-        setIsPublishingBook(false);
-        setBookPublishProgress(0);
-        setBookPublishStage('');
-        setAdminToastMessage({
-          title: isEditMode
-            ? `تم تحديث ونشر الكتاب "${publishedTitle}" بنجاح`
-            : `تم نشر الكتاب "${publishedTitle}" وإتاحته لجميع الطلاب بنجاح`,
-          subtitle: 'أصبح الكتاب ظاهراً الآن في المكتبة ومتاحاً للقراءة والتحميل الفوري.'
-        });
-        fetchAdminData();
-        onDataChanged();
-      }, 650);
+      // Immediately close modal, show confirmation banner, and sync in background
+      setShowBookModal(false);
+      resetBookForm();
+      setIsPublishingBook(false);
+      setBookPublishProgress(0);
+      setBookPublishStage('');
+      setAdminToastMessage({
+        title: isEditMode
+          ? `تم تحديث ونشر الكتاب "${publishedTitle}" بنجاح`
+          : `تم نشر الكتاب "${publishedTitle}" وإتاحته لجميع الطلاب بنجاح`,
+        subtitle: 'أصبح الكتاب ظاهراً الآن في المكتبة ومتاحاً للقراءة والتحميل الفوري.'
+      });
+      void fetchAdminData();
+      onDataChanged();
     } catch (err: any) {
       setIsPublishingBook(false);
       setBookPublishProgress(0);
