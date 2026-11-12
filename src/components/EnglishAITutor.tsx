@@ -189,6 +189,7 @@ export const EnglishAITutor: React.FC = () => {
   const [isRecording, setIsRecording] = useState<boolean>(false);
   const [pronunciationResult, setPronunciationResult] = useState<PronunciationResult | null>(null);
   const [speechRecognitionSupported, setSpeechRecognitionSupported] = useState<boolean>(true);
+  const [speechError, setSpeechError] = useState<string | null>(null);
   const recognitionRef = useRef<any>(null);
 
   // Initialize Speech Recognition on mount if available
@@ -203,11 +204,13 @@ export const EnglishAITutor: React.FC = () => {
       recognition.onresult = (event: any) => {
         const transcript = event.results[0][0].transcript;
         setIsRecording(false);
+        setSpeechError(null);
         evaluatePronunciation(transcript, customText);
       };
 
       recognition.onerror = () => {
         setIsRecording(false);
+        setSpeechError('تعذر التقاط الصوت من الميكروفون. تأكد من منح صلاحية الميكروفون ثم أعد المحاولة.');
       };
 
       recognition.onend = () => {
@@ -223,9 +226,10 @@ export const EnglishAITutor: React.FC = () => {
   // Text-To-Speech Synthesis function
   const speakText = (text: string, id?: string) => {
     if (!('speechSynthesis' in window)) {
-      alert('متصفحك لا يدعم محرك نطق الأصوات Web Speech API');
+      setSpeechError('متصفحك لا يدعم محرك نطق الأصوات Web Speech API.');
       return;
     }
+    setSpeechError(null);
 
     window.speechSynthesis.cancel();
 
@@ -294,10 +298,11 @@ export const EnglishAITutor: React.FC = () => {
   };
 
   const handleStartRecording = () => {
-    if (!recognitionRef.current) {
-      alert('خاصية التعرف على الصوت المباشر غير متوفرة في هذا المتصفح، جرب استخدام متصفح Google Chrome.');
+    if (!recognitionRef.current || !speechRecognitionSupported) {
+      setSpeechError('خاصية التعرف على الصوت المباشر غير متوفرة في هذا المتصفح، جرب استخدام متصفح Google Chrome.');
       return;
     }
+    setSpeechError(null);
     setPronunciationResult(null);
     setIsRecording(true);
     try {
@@ -327,44 +332,46 @@ export const EnglishAITutor: React.FC = () => {
       {/* ------------------------------------------------------------------- */}
       {/* HERO BANNER: AI English Pronunciation Coach */}
       {/* ------------------------------------------------------------------- */}
-      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-blue-950/40 via-zinc-900 to-amber-950/20 border border-blue-500/30 p-6 sm:p-8 shadow-2xl">
+      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-blue-50 via-white to-amber-50 dark:from-blue-950/40 dark:via-zinc-900 dark:to-amber-950/20 border border-blue-500/30 p-6 sm:p-8 shadow-xl dark:shadow-2xl">
         <div className="absolute top-0 right-0 w-80 h-80 bg-blue-500/10 rounded-full blur-3xl pointer-events-none" />
         <div className="absolute bottom-0 left-0 w-80 h-80 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
 
         <div className="relative z-10 flex flex-col md:flex-row items-center justify-between gap-6">
           <div className="text-right">
             <div className="flex items-center gap-2 mb-2 flex-wrap">
-              <span className="p-2 rounded-2xl bg-blue-500/20 text-blue-400 border border-blue-500/30">
+              <span className="p-2 rounded-2xl bg-blue-500/15 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 border border-blue-500/30">
                 <Volume2 className="w-6 h-6" />
               </span>
-              <h1 className="text-xl sm:text-2xl font-black text-zinc-100">
+              <h1 className="text-xl sm:text-2xl font-black text-zinc-900 dark:text-zinc-100">
                 معلم نطق اللغة الإنجليزية الذكي للطلاب (AI Pronunciation Coach) 🇬🇧 🇺🇸
               </h1>
-              <span className="px-2.5 py-0.5 rounded-full bg-blue-500/20 text-blue-300 text-xs font-bold border border-blue-500/30">
-                ذكاء اصطناعي تفاعلي
+              <span className="px-2.5 py-0.5 rounded-full bg-blue-500/15 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300 text-xs font-bold border border-blue-500/30">
+                نطق صوتي تفاعلي
               </span>
             </div>
-            <p className="text-xs sm:text-sm text-zinc-400 max-w-2xl leading-relaxed">
+            <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-400 max-w-2xl leading-relaxed">
               استمع للنطق الإنجليزي الصحيح لمناهج الثانوية العامة والإعدادية، اختبر نطقك المباشر بالميكروفون، وتعرّف على الفونيمز (Phonetics) ومخارج الحروف الصعبة.
             </p>
           </div>
 
           {/* Quick Voice Settings Controls */}
-          <div className="flex items-center gap-3 bg-zinc-950/80 p-3 rounded-2xl border border-zinc-800">
+          <div className="flex items-center gap-3 bg-white/90 dark:bg-zinc-950/80 p-3 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm dark:shadow-none">
             {/* Accent Toggle */}
-            <div className="flex rounded-xl bg-zinc-900 p-1 border border-zinc-800">
+            <div className="flex rounded-xl bg-zinc-100 dark:bg-zinc-900 p-1 border border-zinc-200 dark:border-zinc-800">
               <button
+                type="button"
                 onClick={() => setSelectedAccent('UK')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                  selectedAccent === 'UK' ? 'bg-blue-500 text-zinc-950 shadow' : 'text-zinc-400 hover:text-zinc-200'
+                  selectedAccent === 'UK' ? 'bg-blue-500 text-white dark:text-zinc-950 shadow' : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
                 }`}
               >
                 🇬🇧 بريطاني (UK)
               </button>
               <button
+                type="button"
                 onClick={() => setSelectedAccent('US')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                  selectedAccent === 'US' ? 'bg-blue-500 text-zinc-950 shadow' : 'text-zinc-400 hover:text-zinc-200'
+                  selectedAccent === 'US' ? 'bg-blue-500 text-white dark:text-zinc-950 shadow' : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
                 }`}
               >
                 🇺🇸 أمريكي (US)
@@ -372,12 +379,12 @@ export const EnglishAITutor: React.FC = () => {
             </div>
 
             {/* Speed selection */}
-            <div className="flex items-center gap-1.5 text-xs text-zinc-300">
+            <div className="flex items-center gap-1.5 text-xs text-zinc-700 dark:text-zinc-300">
               <span className="text-[11px] text-zinc-500">السرعة:</span>
               <select
                 value={speechRate}
                 onChange={(e) => setSpeechRate(parseFloat(e.target.value))}
-                className="bg-zinc-900 border border-zinc-800 text-amber-300 font-bold rounded-lg px-2 py-1 text-xs focus:outline-none"
+                className="bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-amber-700 dark:text-amber-300 font-bold rounded-lg px-2 py-1 text-xs focus:outline-none"
               >
                 <option value="0.75">0.75x متمهل</option>
                 <option value="0.9">0.9x قياسي</option>
@@ -389,10 +396,27 @@ export const EnglishAITutor: React.FC = () => {
         </div>
       </div>
 
+      {/* Inline Speech Error Banner */}
+      {speechError && (
+        <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-500/10 border border-rose-300 dark:border-rose-500/30 text-rose-700 dark:text-rose-300 text-xs font-bold flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0 text-rose-500" />
+            <span>{speechError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSpeechError(null)}
+            className="text-rose-600 dark:text-rose-300 hover:underline text-[11px]"
+          >
+            إغلاق
+          </button>
+        </div>
+      )}
+
       {/* ------------------------------------------------------------------- */}
       {/* TABS NAVIGATION: Vocabulary vs Free Speech Practice vs Secret Tips */}
       {/* ------------------------------------------------------------------- */}
-      <div className="flex items-center gap-2 border-b border-zinc-800 pb-3 overflow-x-auto">
+      <div className="flex items-center gap-2 border-b border-zinc-200 dark:border-zinc-800 pb-3 overflow-x-auto">
         {[
           { id: 'vocab', label: '📚 بنك مفردات المناهج والنطق (3 إعدادي - 3 ثانوي)', icon: BookOpen },
           { id: 'free_practice', label: '🎙️ اختبر نطقك واكتب أي جملة للتدرب', icon: Mic },
@@ -403,11 +427,12 @@ export const EnglishAITutor: React.FC = () => {
           return (
             <button
               key={tab.id}
+              type="button"
               onClick={() => setActiveTab(tab.id as any)}
               className={`px-4 py-2.5 rounded-2xl text-xs font-bold transition flex items-center gap-2 whitespace-nowrap ${
                 isActive
-                  ? 'bg-blue-500 text-zinc-950 shadow-md shadow-blue-500/20 font-extrabold'
-                  : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-850'
+                  ? 'bg-blue-500 text-white dark:text-zinc-950 shadow-md shadow-blue-500/20 font-extrabold'
+                  : 'bg-zinc-100 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 hover:bg-zinc-200 dark:hover:bg-zinc-800'
               }`}
             >
               <Icon className="w-4 h-4" />
@@ -424,7 +449,7 @@ export const EnglishAITutor: React.FC = () => {
         <div className="space-y-6 animate-in fade-in">
           {/* Grade Filters */}
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-xs text-zinc-400 font-semibold ml-2">تصفية حسب الصف الدراسي:</span>
+            <span className="text-xs text-zinc-600 dark:text-zinc-400 font-semibold ml-2">تصفية حسب الصف الدراسي:</span>
             {[
               'الكل',
               'الصف الثالث الإعدادي',
@@ -434,11 +459,12 @@ export const EnglishAITutor: React.FC = () => {
             ].map(grade => (
               <button
                 key={grade}
+                type="button"
                 onClick={() => setSelectedGrade(grade)}
                 className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition ${
                   selectedGrade === grade
                     ? 'bg-amber-500 text-zinc-950 shadow-md font-extrabold'
-                    : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200 border border-zinc-800'
+                    : 'bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 border border-zinc-200 dark:border-zinc-800'
                 }`}
               >
                 {grade}
@@ -453,12 +479,12 @@ export const EnglishAITutor: React.FC = () => {
               return (
                 <div
                   key={item.id}
-                  className="bg-zinc-900/90 border border-zinc-800 hover:border-blue-500/50 rounded-3xl p-5 shadow-xl transition flex flex-col justify-between space-y-4 group"
+                  className="bg-white dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 hover:border-blue-500/50 rounded-3xl p-5 shadow-md dark:shadow-xl transition flex flex-col justify-between space-y-4 group"
                 >
                   <div>
                     {/* Header: Grade & Category badges */}
                     <div className="flex items-center justify-between mb-3">
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-blue-500/10 text-blue-300 border border-blue-500/20">
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-500/20">
                         {item.grade}
                       </span>
                       <span className="text-[10px] text-zinc-500 font-semibold">
@@ -469,16 +495,17 @@ export const EnglishAITutor: React.FC = () => {
                     {/* Word & Phonetic IPA */}
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <h3 className="text-xl font-black text-zinc-100 tracking-wide font-sans group-hover:text-blue-300 transition">
+                        <h3 className="text-xl font-black text-zinc-900 dark:text-zinc-100 tracking-wide font-sans group-hover:text-blue-600 dark:group-hover:text-blue-300 transition">
                           {item.word}
                         </h3>
-                        <span className="text-xs text-amber-400/90 font-mono block mt-0.5">
+                        <span className="text-xs text-amber-600 dark:text-amber-400/90 font-mono block mt-0.5">
                           {item.phonetic}
                         </span>
                       </div>
 
                       {/* Play Audio Button */}
                       <button
+                        type="button"
                         onClick={() => speakText(item.word, item.id)}
                         className={`p-3 rounded-2xl transition shadow-lg ${
                           isPlaying
@@ -492,17 +519,17 @@ export const EnglishAITutor: React.FC = () => {
                     </div>
 
                     {/* Arabic Translation */}
-                    <p className="text-xs font-bold text-zinc-300 mt-2.5">
+                    <p className="text-xs font-bold text-zinc-700 dark:text-zinc-300 mt-2.5">
                       {item.arabicTranslation}
                     </p>
 
                     {/* Example Sentence */}
-                    <div className="mt-3 p-3 rounded-2xl bg-zinc-950/70 border border-zinc-800/80 space-y-1">
-                      <p className="text-xs text-zinc-200 font-sans italic leading-relaxed">
+                    <div className="mt-3 p-3 rounded-2xl bg-zinc-50 dark:bg-zinc-950/70 border border-zinc-200 dark:border-zinc-800/80 space-y-1">
+                      <p className="text-xs text-zinc-800 dark:text-zinc-200 font-sans italic leading-relaxed">
                         "{item.exampleSentence}"
                       </p>
                       {item.exampleTranslation && (
-                        <p className="text-[11px] text-zinc-400">
+                        <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
                           {item.exampleTranslation}
                         </p>
                       )}
@@ -510,7 +537,7 @@ export const EnglishAITutor: React.FC = () => {
 
                     {/* Linguistic Pronunciation Tip */}
                     {item.tips && (
-                      <p className="text-[10px] text-amber-400/90 mt-2.5 flex items-start gap-1.5 bg-amber-500/5 p-2 rounded-xl border border-amber-500/20">
+                      <p className="text-[10px] text-amber-700 dark:text-amber-400/90 mt-2.5 flex items-start gap-1.5 bg-amber-50 dark:bg-amber-500/5 p-2 rounded-xl border border-amber-500/20">
                         <span className="text-xs">💡</span>
                         <span>{item.tips}</span>
                       </p>
@@ -518,21 +545,23 @@ export const EnglishAITutor: React.FC = () => {
                   </div>
 
                   {/* Actions: Listen sentence or test */}
-                  <div className="flex items-center gap-2 pt-2 border-t border-zinc-800/80">
+                  <div className="flex items-center gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-800/80">
                     <button
+                      type="button"
                       onClick={() => speakText(item.exampleSentence, `${item.id}_sent`)}
-                      className="flex-1 py-1.5 px-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-750 text-zinc-300 hover:text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition"
+                      className="flex-1 py-1.5 px-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition"
                     >
-                      <Volume2 className="w-3.5 h-3.5 text-blue-400" />
+                      <Volume2 className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
                       <span>نطق الجملة كاملة</span>
                     </button>
 
                     <button
+                      type="button"
                       onClick={() => {
                         setCustomText(item.word);
                         setActiveTab('free_practice');
                       }}
-                      className="py-1.5 px-3 rounded-xl bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 text-xs font-bold border border-blue-500/30 transition"
+                      className="py-1.5 px-3 rounded-xl bg-blue-500/15 dark:bg-blue-500/20 hover:bg-blue-500/25 dark:hover:bg-blue-500/30 text-blue-700 dark:text-blue-300 text-xs font-bold border border-blue-500/30 transition"
                       title="تدرب على النطق بنفسك"
                     >
                       <span>اختبر نطقك 🎙️</span>
@@ -550,20 +579,20 @@ export const EnglishAITutor: React.FC = () => {
       {/* ------------------------------------------------------------------- */}
       {activeTab === 'free_practice' && (
         <div className="max-w-3xl mx-auto space-y-6 animate-in fade-in">
-          <div className="bg-zinc-900 border border-blue-500/30 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-5">
+          <div className="bg-white dark:bg-zinc-900 border border-blue-500/30 rounded-3xl p-6 sm:p-8 shadow-xl dark:shadow-2xl space-y-5">
             <div>
-              <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
-                <Mic className="w-5 h-5 text-blue-400" />
-                <span>مختبر التدريب والنطق الذكي التفاعلي</span>
+              <h3 className="text-base font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+                <Mic className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                <span>مختبر التدريب والنطق التفاعلي</span>
               </h3>
-              <p className="text-xs text-zinc-400 mt-1">
+              <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
                 اكتب أي كلمة، عبارة، أو فقرة إنجليزية ترغب في إتقانها، استمع لنطقها، ثم تحدث بالميكروفون ليقوم النظام بتقييم دقة نطقك!
               </p>
             </div>
 
             {/* Target Text Input */}
             <div>
-              <label className="block text-xs font-bold text-zinc-300 mb-1.5">
+              <label className="block text-xs font-bold text-zinc-700 dark:text-zinc-300 mb-1.5">
                 النص الإنجليزي المستهدف للتدريب:
               </label>
               <textarea
@@ -571,7 +600,7 @@ export const EnglishAITutor: React.FC = () => {
                 value={customText}
                 onChange={(e) => setCustomText(e.target.value)}
                 placeholder="Type or paste any English sentence..."
-                className="w-full py-3 px-4 bg-zinc-950 border border-zinc-800 rounded-2xl text-sm font-sans text-zinc-100 focus:outline-none focus:border-blue-500 transition leading-relaxed"
+                className="w-full py-3 px-4 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-2xl text-sm font-sans text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-blue-500 transition leading-relaxed"
               />
             </div>
 
@@ -586,8 +615,9 @@ export const EnglishAITutor: React.FC = () => {
               ].map(phrase => (
                 <button
                   key={phrase}
+                  type="button"
                   onClick={() => setCustomText(phrase)}
-                  className="px-2.5 py-1 rounded-lg bg-zinc-800/80 hover:bg-zinc-750 text-zinc-300 text-[11px] font-sans transition"
+                  className="px-2.5 py-1 rounded-lg bg-zinc-100 dark:bg-zinc-800/80 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 text-[11px] font-sans transition"
                 >
                   {phrase}
                 </button>
@@ -597,19 +627,21 @@ export const EnglishAITutor: React.FC = () => {
             {/* Actions: Listen vs Speak */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
               <button
+                type="button"
                 onClick={() => speakText(customText)}
-                className="py-3 px-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 text-xs font-bold rounded-xl border border-zinc-700 transition flex items-center justify-center gap-2 shadow-md"
+                className="py-3 px-4 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-900 dark:text-zinc-100 text-xs font-bold rounded-xl border border-zinc-300 dark:border-zinc-700 transition flex items-center justify-center gap-2 shadow-sm dark:shadow-md"
               >
-                <Volume2 className="w-4 h-4 text-blue-400" />
+                <Volume2 className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                 <span>1. استمع للنطق النموذجي 🔊</span>
               </button>
 
               <button
+                type="button"
                 onClick={isRecording ? handleStopRecording : handleStartRecording}
                 className={`py-3 px-4 text-xs font-bold rounded-xl shadow-lg transition flex items-center justify-center gap-2 ${
                   isRecording
                     ? 'bg-rose-500 hover:bg-rose-600 text-white animate-pulse'
-                    : 'bg-gradient-to-r from-blue-600 to-cyan-500 text-zinc-950 font-black hover:brightness-110'
+                    : 'bg-gradient-to-r from-blue-600 to-cyan-500 text-white dark:text-zinc-950 font-black hover:brightness-110'
                 }`}
               >
                 {isRecording ? (
@@ -628,28 +660,28 @@ export const EnglishAITutor: React.FC = () => {
 
             {/* Evaluation Result Feedback Card */}
             {pronunciationResult && (
-              <div className="p-5 rounded-2xl bg-zinc-950 border border-blue-500/40 shadow-xl space-y-3 animate-in fade-in">
+              <div className="p-5 rounded-2xl bg-zinc-50 dark:bg-zinc-950 border border-blue-500/40 shadow-md dark:shadow-xl space-y-3 animate-in fade-in">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className="text-xl">
                       {pronunciationResult.accuracyScore >= 85 ? '🎉' : pronunciationResult.accuracyScore >= 60 ? '✨' : '🎯'}
                     </span>
-                    <h4 className="text-xs font-bold text-zinc-200">نتيجة تقييم الذكاء الاصطناعي:</h4>
+                    <h4 className="text-xs font-bold text-zinc-900 dark:text-zinc-200">نتيجة تقييم النطق:</h4>
                   </div>
                   <span className={`text-base font-black px-3 py-1 rounded-xl ${
                     pronunciationResult.accuracyScore >= 80 
-                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' 
-                      : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                      ? 'bg-emerald-500/15 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30' 
+                      : 'bg-amber-500/15 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400 border border-amber-500/30'
                   }`}>
                     {pronunciationResult.accuracyScore}% دقة النطق
                   </span>
                 </div>
 
-                <p className="text-xs text-zinc-300">
+                <p className="text-xs text-zinc-700 dark:text-zinc-300">
                   {pronunciationResult.feedback}
                 </p>
 
-                <div className="p-3 rounded-xl bg-zinc-900 text-xs font-sans text-zinc-300">
+                <div className="p-3 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs font-sans text-zinc-700 dark:text-zinc-300">
                   <span className="text-[10px] text-zinc-500 block mb-1 font-sans">ما تم التقاطه من صوتك (Transcript):</span>
                   "{pronunciationResult.spokenText || 'لم يتم التقاط صوت واضح'}"
                 </div>
@@ -664,63 +696,63 @@ export const EnglishAITutor: React.FC = () => {
       {/* ------------------------------------------------------------------- */}
       {activeTab === 'tips' && (
         <div className="max-w-4xl mx-auto space-y-4 animate-in fade-in">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
+          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 sm:p-8 shadow-lg dark:shadow-xl space-y-6">
             <div>
-              <h3 className="text-base font-bold text-amber-200 flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-amber-400" />
+              <h3 className="text-base font-bold text-amber-700 dark:text-amber-200 flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-amber-500 dark:text-amber-400" />
                 <span>دليل الطالب المصري لإتقان النطق الإنجليزي وتفادي الأخطاء الشائعة</span>
               </h3>
-              <p className="text-xs text-zinc-400 mt-1">
+              <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
                 نصائح لغوية محددة صممها خبراء اللغة لمساعدة الطلاب على التمييز بين الأصوات الدقيقة:
               </p>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               
-              <div className="p-4 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-2">
-                <h4 className="text-xs font-bold text-blue-400 flex items-center gap-2">
+              <div className="p-4 rounded-2xl bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 space-y-2">
+                <h4 className="text-xs font-bold text-blue-600 dark:text-blue-400 flex items-center gap-2">
                   <span>1. التمييز الصوتي بين /P/ و /B/</span>
                 </h4>
-                <p className="text-xs text-zinc-300 leading-relaxed">
+                <p className="text-xs text-zinc-700 dark:text-zinc-300 leading-relaxed">
                   صوت <b>P</b> صوت انفجاري غير مجهور (Voiceless)، يخرج معه هواء ملحوظ من الشفتين (ضع ورقة أمام فمك عند نطق Pen لتتحرك). أما <b>B</b> فهو مجهور تهتز معه الأحبال الصوتية.
                 </p>
-                <div className="text-[11px] text-amber-400 font-mono">
+                <div className="text-[11px] text-amber-700 dark:text-amber-400 font-mono">
                   مثال: Park ≠ Bark | Pen ≠ Ben | Pin ≠ Bin
                 </div>
               </div>
 
-              <div className="p-4 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-2">
-                <h4 className="text-xs font-bold text-cyan-400 flex items-center gap-2">
+              <div className="p-4 rounded-2xl bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 space-y-2">
+                <h4 className="text-xs font-bold text-cyan-600 dark:text-cyan-400 flex items-center gap-2">
                   <span>2. نطق صوت /TH/ (الثاء والذال)</span>
                 </h4>
-                <p className="text-xs text-zinc-300 leading-relaxed">
+                <p className="text-xs text-zinc-700 dark:text-zinc-300 leading-relaxed">
                   لا تنطق TH كحرف السين أو الزاي! ضع طرف اللسان بين الأسنان العلوية والسفلية لخروج صوت /θ/ مثل <i>Think, Three</i> أو /ð/ مثل <i>This, That, The</i>.
                 </p>
-                <div className="text-[11px] text-amber-400 font-mono">
+                <div className="text-[11px] text-amber-700 dark:text-amber-400 font-mono">
                   مثال: Think ≠ Sink | Thank ≠ Sank
                 </div>
               </div>
 
-              <div className="p-4 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-2">
-                <h4 className="text-xs font-bold text-emerald-400 flex items-center gap-2">
+              <div className="p-4 rounded-2xl bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 space-y-2">
+                <h4 className="text-xs font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-2">
                   <span>3. الحروف الصامتة (Silent Letters)</span>
                 </h4>
-                <p className="text-xs text-zinc-300 leading-relaxed">
+                <p className="text-xs text-zinc-700 dark:text-zinc-300 leading-relaxed">
                   في الإنجليزية كلمات كثيرة تتضمن حروفاً تُكتب ولا تُنطق. احرص على عدم نطق الحرف الصامت:
                 </p>
-                <div className="text-[11px] text-amber-400 font-mono">
+                <div className="text-[11px] text-amber-700 dark:text-amber-400 font-mono">
                   Doubt (الـ b صامتة) | Knife (الـ k صامتة) | Wednesday (الـ d صامتة)
                 </div>
               </div>
 
-              <div className="p-4 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-2">
-                <h4 className="text-xs font-bold text-purple-400 flex items-center gap-2">
+              <div className="p-4 rounded-2xl bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 space-y-2">
+                <h4 className="text-xs font-bold text-purple-600 dark:text-purple-400 flex items-center gap-2">
                   <span>4. النبر الصوتي للكلمات (Word Stress)</span>
                 </h4>
-                <p className="text-xs text-zinc-300 leading-relaxed">
+                <p className="text-xs text-zinc-700 dark:text-zinc-300 leading-relaxed">
                   الكلمات الإنجليزية الطويلة تحتوي على مقطع مشدد واحد رئيسي (Primary Stress). إعطاء النبرة للمقطع الصحيح يجعل كلامك مفهوماً وسلساً للمستمعين.
                 </p>
-                <div className="text-[11px] text-amber-400 font-mono">
+                <div className="text-[11px] text-amber-700 dark:text-amber-400 font-mono">
                   مثال: PHO-to-graph مقابل pho-TO-gra-phy
                 </div>
               </div>

@@ -3,25 +3,20 @@ import { Book, User } from '../types';
 import { 
   X, 
   Download, 
-  ExternalLink, 
   Bookmark, 
   Eye, 
-  GraduationCap, 
-  CheckCircle2, 
-  Share2,
   BookOpen,
-  Lock
 } from 'lucide-react';
 import { RatingStars } from './RatingStars';
 import { 
   recordBookDownload, 
   getRealDownloads, 
   incrementRealDownload, 
-  getRealViews, 
   incrementRealView 
 } from '../utils/contentStore';
 import { getItemRatingStats } from '../utils/reviewsStore';
 import { isEducationalFeatureLocked } from '../utils/subscriptionStore';
+import { resolveBookPdfUrl, triggerPdfDownload } from '../utils/pdfStorage';
 import { CommentsSection } from './CommentsSection';
 import { ReviewsSection } from './ReviewsSection';
 
@@ -50,15 +45,53 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
   const [viewCount, setViewCount] = useState<number>(0);
   const [downloading, setDownloading] = useState(false);
   const [showReader, setShowReader] = useState(false);
+  const [resolvedReaderUrl, setResolvedReaderUrl] = useState<string>('');
+  const [readerError, setReaderError] = useState<string | null>(null);
 
   useEffect(() => {
     if (book?.id) {
       const views = incrementRealView('book', book.id);
       setViewCount(views);
       setDownloadCount(getRealDownloads(book.id, 0));
+      setShowReader(false);
+      setResolvedReaderUrl('');
+      setReaderError(null);
       fetch(`/api/items/book/${book.id}/view`, { method: 'POST' }).catch(() => {});
     }
   }, [book?.id]);
+
+  // Resolve PDF URL for inline reader when opened and clean up created blob URLs
+  useEffect(() => {
+    let active = true;
+    let objectUrlToRevoke: string | null = null;
+
+    if (showReader && book?.filepath) {
+      setReaderError(null);
+      resolveBookPdfUrl(book.filepath)
+        .then(({ url, isObjectUrl }) => {
+          if (!active) {
+            if (isObjectUrl && url) URL.revokeObjectURL(url);
+            return;
+          }
+          if (isObjectUrl && url) {
+            objectUrlToRevoke = url;
+          }
+          setResolvedReaderUrl(url);
+        })
+        .catch(() => {
+          if (active) {
+            setReaderError('تعذر فتح معاينة هذا الملف مباشرة، يمكنك الضغط على "تحميل الكتاب الآن (PDF)".');
+          }
+        });
+    }
+
+    return () => {
+      active = false;
+      if (objectUrlToRevoke) {
+        URL.revokeObjectURL(objectUrlToRevoke);
+      }
+    };
+  }, [showReader, book?.filepath]);
 
   if (!book) return null;
 
@@ -70,25 +103,21 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
       if (onOpenSubscriptions) {
         onClose();
         onOpenSubscriptions();
-      } else {
-        alert('انتهت فترتك التجريبية المجانية (10 أيام). يرجى تفعيل اشتراكك الشهري (من 50 ج.م) لتحميل المناهج PDF.');
       }
       return;
     }
 
     setDownloading(true);
-    // Record download for Student Dashboard tracking & update real metrics
     recordBookDownload(book);
     const newCount = incrementRealDownload(book.id);
     setDownloadCount(newCount);
     try {
       await fetch(`/api/books/${book.id}/download`, { method: 'POST' }).catch(() => {});
-    } catch (e) {
-      // ignore
+      await triggerPdfDownload(book.filepath, `${book.title || 'book'}.pdf`);
+    } catch {
+      // fallback already handled cleanly
     } finally {
       setDownloading(false);
-      // Trigger download in new window/tab
-      window.open(book.filepath, '_blank');
     }
   };
 
@@ -101,25 +130,25 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
       <div 
-        className="relative w-full max-w-2xl bg-zinc-900 border border-amber-500/30 rounded-3xl p-6 sm:p-8 shadow-2xl text-right max-h-[90vh] overflow-y-auto"
+        className="relative w-full max-w-2xl bg-white dark:bg-zinc-900 border border-amber-500/30 rounded-3xl p-6 sm:p-8 shadow-2xl text-right max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Close Button */}
         <button
           onClick={onClose}
-          className="absolute top-5 left-5 p-2 rounded-xl bg-zinc-800 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-700 transition"
+          className="absolute top-5 left-5 p-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-200 dark:hover:bg-zinc-700 transition"
         >
           <X className="w-4 h-4" />
         </button>
 
         <div className="flex flex-col sm:flex-row gap-6 items-start">
           {/* Book Cover */}
-          <div className="w-full sm:w-48 h-64 rounded-2xl overflow-hidden bg-black border border-zinc-800 flex-shrink-0 shadow-xl relative group">
+          <div className="w-full sm:w-48 h-64 rounded-2xl overflow-hidden bg-slate-100 dark:bg-black border border-zinc-200 dark:border-zinc-800 flex-shrink-0 shadow-lg relative group">
             <img src={book.coverpath} alt={book.title} className="w-full h-full object-cover" />
             <span className={`absolute top-2.5 right-2.5 px-2.5 py-1 rounded-xl text-[10px] font-bold ${
-              book.is_student ? 'bg-amber-500 text-zinc-950 shadow-md' : 'bg-black/70 text-amber-300'
+              book.is_student ? 'bg-amber-500 text-zinc-950 shadow-md' : 'bg-black/75 text-amber-300'
             }`}>
               {book.is_student ? '🎓 منهج دراسي' : book.category}
             </span>
@@ -128,28 +157,28 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
           {/* Book Info */}
           <div className="flex-1 space-y-3">
             <div className="flex items-center gap-2">
-              <span className="text-xs text-amber-400 font-bold bg-amber-500/10 px-2 py-0.5 rounded-lg border border-amber-500/20">
+              <span className="text-xs text-amber-700 dark:text-amber-400 font-bold bg-amber-500/10 px-2 py-0.5 rounded-lg border border-amber-500/20">
                 {book.category}
               </span>
               {book.grade && (
-                <span className="text-xs text-zinc-400 bg-zinc-800 px-2 py-0.5 rounded-lg">
+                <span className="text-xs text-zinc-700 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 rounded-lg">
                   {book.grade}
                 </span>
               )}
             </div>
 
-            <h2 className="text-xl font-bold text-zinc-100 leading-snug">
+            <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-100 leading-snug">
               {book.title}
             </h2>
 
-            <p className="text-xs text-zinc-400 leading-relaxed">
+            <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">
               {book.description || 'كتاب قيم متاح للقراءة والتحميل المباشر ضمن مكتبتنا الرقمية التعليمية.'}
             </p>
 
             {/* Ratings Bar */}
-            <div className="flex items-center justify-between p-3 bg-zinc-950/60 border border-zinc-800 rounded-2xl">
+            <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-zinc-950/60 border border-zinc-200 dark:border-zinc-800 rounded-2xl">
               <div>
-                <span className="text-xs font-bold text-amber-300 block mb-1">
+                <span className="text-xs font-bold text-amber-700 dark:text-amber-300 block mb-1">
                   ⭐ تقييم الكتاب: {realRating.totalReviews > 0 ? `(${realRating.averageRating} من 5)` : '(لم يُقيّم بعد)'}
                 </span>
                 <RatingStars
@@ -166,14 +195,14 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
             </div>
 
             {/* Metrics */}
-            <div className="flex items-center gap-4 py-2 border-y border-zinc-800 text-xs text-zinc-400">
+            <div className="flex items-center gap-4 py-2 border-y border-zinc-200 dark:border-zinc-800 text-xs text-zinc-600 dark:text-zinc-400">
               <span className="flex items-center gap-1">
-                <Download className="w-3.5 h-3.5 text-amber-500" />
-                <strong className="text-zinc-200">{downloadCount}</strong> تحميل
+                <Download className="w-3.5 h-3.5 text-amber-600 dark:text-amber-500" />
+                <strong className="text-zinc-900 dark:text-zinc-200">{downloadCount}</strong> تحميل
               </span>
               <span className="flex items-center gap-1">
-                <Eye className="w-3.5 h-3.5 text-amber-500" />
-                <strong className="text-zinc-200">{viewCount}</strong> مشاهدة
+                <Eye className="w-3.5 h-3.5 text-amber-600 dark:text-amber-500" />
+                <strong className="text-zinc-900 dark:text-zinc-200">{viewCount}</strong> مشاهدة
               </span>
               <span className="text-zinc-500 text-[11px]">
                 أُضيف في: {new Date(book.created_at).toLocaleDateString('ar-EG')}
@@ -197,14 +226,12 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
                     if (onOpenSubscriptions) {
                       onClose();
                       onOpenSubscriptions();
-                    } else {
-                      alert('انتهت فترتك التجريبية المجانية (10 أيام). يرجى تفعيل اشتراكك الشهري (من 50 ج.م) لقراءة وتصفح الكتب.');
                     }
                     return;
                   }
                   setShowReader(!showReader);
                 }}
-                className="py-2.5 px-4 bg-zinc-800 hover:bg-zinc-700 text-amber-300 font-bold text-xs rounded-xl border border-zinc-700 transition flex items-center gap-1.5"
+                className="py-2.5 px-4 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-amber-700 dark:text-amber-300 font-bold text-xs rounded-xl border border-zinc-200 dark:border-zinc-700 transition flex items-center gap-1.5"
               >
                 <BookOpen className="w-4 h-4" />
                 <span>{showReader ? 'إخفاء المعاينة' : 'معاينة مباشرة'}</span>
@@ -215,7 +242,7 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
                 className={`p-2.5 rounded-xl border transition flex items-center justify-center ${
                   isBookmarked
                     ? 'bg-amber-500 text-zinc-950 border-amber-400 shadow-md'
-                    : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border-zinc-700'
+                    : 'bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700'
                 }`}
                 title={isBookmarked ? 'إزالة من المفضلة' : 'حفظ في المفضلة'}
               >
@@ -227,17 +254,29 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
 
         {/* Inline PDF Preview Iframe */}
         {showReader && (
-          <div className="mt-6 pt-6 border-t border-zinc-800 animate-in fade-in">
-            <h4 className="text-xs font-bold text-amber-300 mb-2 flex items-center gap-1.5">
+          <div className="mt-6 pt-6 border-t border-zinc-200 dark:border-zinc-800 animate-in fade-in">
+            <h4 className="text-xs font-bold text-amber-700 dark:text-amber-300 mb-2 flex items-center gap-1.5">
               <span>📖 قارئ المستندات المدمج:</span>
             </h4>
-            <div className="w-full h-96 rounded-2xl overflow-hidden bg-black border border-zinc-800">
-              <iframe
-                src={book.filepath}
-                title={book.title}
-                className="w-full h-full"
-              />
-            </div>
+            {readerError ? (
+              <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-800 dark:text-amber-200 text-xs">
+                {readerError}
+              </div>
+            ) : (
+              <div className="w-full h-96 rounded-2xl overflow-hidden bg-slate-100 dark:bg-black border border-zinc-200 dark:border-zinc-800">
+                {resolvedReaderUrl ? (
+                  <iframe
+                    src={resolvedReaderUrl}
+                    title={book.title}
+                    className="w-full h-full"
+                  />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-xs text-zinc-500">
+                    جاري تجهيز قارئ الكتاب...
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 

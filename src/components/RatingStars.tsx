@@ -68,10 +68,10 @@ export const RatingStars: React.FC<RatingStarsProps> = ({
               <Star
                 className={`${starSizeClass} ${
                   isFilled
-                    ? 'text-amber-400 fill-amber-400 filter drop-shadow-[0_0_4px_rgba(251,191,36,0.5)]'
+                    ? 'text-amber-500 dark:text-amber-400 fill-amber-400 filter drop-shadow-[0_0_4px_rgba(251,191,36,0.5)]'
                     : isHalf
-                    ? 'text-amber-400 fill-amber-400/50'
-                    : 'text-zinc-600 fill-zinc-800/40'
+                    ? 'text-amber-500 dark:text-amber-400 fill-amber-400/50'
+                    : 'text-slate-300 dark:text-zinc-600 fill-slate-200/60 dark:fill-zinc-800/40'
                 } transition-colors`}
               />
             </button>
@@ -81,7 +81,7 @@ export const RatingStars: React.FC<RatingStarsProps> = ({
 
       <div className="flex items-center gap-1 text-[11px] font-bold">
         {rating > 0 ? (
-          <span className="text-amber-300 font-mono">
+          <span className="text-amber-700 dark:text-amber-300 font-mono">
             {Number(rating).toFixed(1)}
           </span>
         ) : (
@@ -95,7 +95,7 @@ export const RatingStars: React.FC<RatingStarsProps> = ({
       </div>
 
       {userRated !== null && (
-        <span className="text-[10px] text-emerald-400 font-bold animate-in fade-in mr-1">
+        <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold animate-in fade-in mr-1">
           ✓ تم التقييم!
         </span>
       )}

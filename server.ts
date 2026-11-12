@@ -2,17 +2,57 @@ import express, { Request, Response, NextFunction } from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
+import multer from 'multer';
 import { db, Book, Summary, Video, Article, User } from './server/db.ts';
 
 dotenv.config();
 process.env.DISABLE_HMR = 'true';
 
 const app = express();
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+const cliPortIndex = process.argv.indexOf('--port');
+const cliPort = cliPortIndex !== -1 ? parseInt(process.argv[cliPortIndex + 1], 10) : NaN;
+const envPort = process.env.PORT ? parseInt(process.env.PORT, 10) : NaN;
 const isProduction = process.env.NODE_ENV === 'production';
+// Ensure dev server binds port 3000 instead of colliding with container proxy on 8080
+const PORT = !Number.isNaN(cliPort)
+  ? cliPort
+  : (!isProduction && (Number.isNaN(envPort) || envPort === 8080))
+    ? 3000
+    : (!Number.isNaN(envPort) ? envPort : 3000);
+
+const UPLOADS_DIR = path.resolve(process.cwd(), 'uploads');
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
+
+const pdfStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    cb(null, UPLOADS_DIR);
+  },
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname || '.pdf').toLowerCase() === '.pdf' ? '.pdf' : '.pdf';
+    const uniqueSuffix = `${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    cb(null, `book_${uniqueSuffix}${ext}`);
+  },
+});
+
+const uploadPdf = multer({
+  storage: pdfStorage,
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const isPdf = file.mimetype === 'application/pdf' || file.originalname.toLowerCase().endsWith('.pdf');
+    if (isPdf) {
+      cb(null, true);
+    } else {
+      cb(new Error('يرجى رفع ملف بصيغة PDF فقط'));
+    }
+  },
+});
 
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(express.json({ limit: '50mb' }));
+app.use('/uploads', express.static(UPLOADS_DIR));
 
 // Helper to extract client IP
 function getClientIp(req: Request): string {
@@ -36,17 +76,40 @@ function getEmbedYoutubeUrl(url: string): string {
   return url;
 }
 
-// Simple token storage for active sessions
+// Stateless HMAC-SHA256 admin tokens + active session sets so server restarts do not break admin uploads
 const activeAdminTokens = new Set<string>();
 const activeUserSessions = new Map<string, string>(); // token -> userId
+
+function signAdminToken(username: string, secret: string): string {
+  const payload = Buffer.from(JSON.stringify({ u: username, t: Date.now() })).toString('base64url');
+  const sig = crypto.createHmac('sha256', `arm_secret_${secret}`).update(payload).digest('base64url');
+  return `adm_hmac_${payload}.${sig}`;
+}
+
+function isValidAdminToken(token: string | undefined): boolean {
+  if (!token) return false;
+  const adminConfig = db.getAdminConfig();
+  if (activeAdminTokens.has(token) || token === adminConfig.passwordHash) return true;
+  if (token.startsWith('adm_hmac_')) {
+    const raw = token.slice('adm_hmac_'.length);
+    const parts = raw.split('.');
+    if (parts.length !== 2) return false;
+    const [payload, sig] = parts;
+    const expectedSig = crypto
+      .createHmac('sha256', `arm_secret_${adminConfig.passwordHash}`)
+      .update(payload)
+      .digest('base64url');
+    return sig === expectedSig;
+  }
+  return false;
+}
 
 // Security middleware for Admin
 function requireAdminAuth(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   const token = authHeader?.replace('Bearer ', '') || (req.query.auth as string);
-  const adminConfig = db.getAdminConfig();
 
-  if (token && (activeAdminTokens.has(token) || token === adminConfig.passwordHash)) {
+  if (isValidAdminToken(token)) {
     return next();
   }
   return res.status(401).json({ error: 'غير مصرح: مطلوب صلاحية الأدمن' });
@@ -326,7 +389,7 @@ app.post('/api/admin/login', (req: Request, res: Response) => {
   const adminConfig = db.getAdminConfig();
 
   if (username === adminConfig.username && password === adminConfig.passwordHash) {
-    const adminToken = 'adm_sess_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+    const adminToken = signAdminToken(adminConfig.username, adminConfig.passwordHash);
     activeAdminTokens.add(adminToken);
 
     db.addAuditLog({
@@ -365,7 +428,7 @@ app.get('/api/admin/verify', (req: Request, res: Response) => {
   const token = authHeader?.replace('Bearer ', '');
   const adminConfig = db.getAdminConfig();
 
-  if (token && (activeAdminTokens.has(token) || token === adminConfig.passwordHash)) {
+  if (isValidAdminToken(token)) {
     return res.json({ verified: true, username: adminConfig.username });
   }
   return res.status(401).json({ verified: false });
@@ -552,6 +615,26 @@ app.post('/api/admin/restore', requireAdminAuth, (req: Request, res: Response) =
 // --------------------------------------------------------------------------
 // 3. CONTENT CRUD ENDPOINTS (الكتب، الملخصات، المقاطع، المقالات)
 // --------------------------------------------------------------------------
+
+// Real Multipart PDF Upload endpoint (supports up to 50MB PDFs cleanly with progress tracking)
+app.post('/api/admin/upload-pdf', requireAdminAuth, (req: Request, res: Response) => {
+  uploadPdf.single('file')(req, res, (err: any) => {
+    if (err) {
+      return res.status(400).json({ error: err.message || 'فشل رفع ملف PDF' });
+    }
+    if (!req.file) {
+      return res.status(400).json({ error: 'لم يتم اختيار ملف PDF للرفع' });
+    }
+    const url = `/uploads/${req.file.filename}`;
+    res.status(201).json({
+      success: true,
+      url,
+      filename: req.file.filename,
+      size: req.file.size,
+      message: 'تم رفع ملف الكتاب بنجاح',
+    });
+  });
+});
 
 // BOOKS (PDFs)
 app.get('/api/books', (req: Request, res: Response) => {

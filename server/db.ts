@@ -109,57 +109,7 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
     passwordHash: '1w2q3r4eA',
     updatedAt: new Date().toISOString(),
   },
-  users: [
-    {
-      id: 'usr_student_demo',
-      name: 'محمود عبد الرحمن',
-      email: 'student@example.com',
-      password: 'user123',
-      role: 'user',
-      academicStage: 'الصف الثالث الثانوي (علمي علوم)',
-      avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
-      status: 'active',
-      createdAt: '2026-09-01T10:00:00.000Z',
-      lastLogin: new Date().toISOString(),
-      bookmarks: [
-        {
-          id: '1',
-          type: 'book',
-          title: 'كتاب الفيزياء للثانوية العامة 2026 - الكهربية والمغناطيسية والحديثة',
-          path: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
-          addedAt: '2026-09-10T12:00:00.000Z',
-        },
-        {
-          id: '1',
-          type: 'summary',
-          title: 'خريطة ذهنية: الوحدات السبع في النحو لشهادة الثانوية العامة المصرية',
-          path: 'https://images.unsplash.com/photo-1456513080510-7bf3a84b82f8?w=800&auto=format&fit=crop&q=80',
-          addedAt: '2026-09-12T15:30:00.000Z',
-        }
-      ],
-    },
-    {
-      id: 'usr_sara_demo',
-      name: 'مريم طارق الشريف',
-      email: 'sara@example.com',
-      password: 'user123',
-      role: 'moderator',
-      academicStage: 'الصف الثالث الثانوي (علمي رياضة)',
-      avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
-      status: 'active',
-      createdAt: '2026-09-05T14:20:00.000Z',
-      lastLogin: new Date().toISOString(),
-      bookmarks: [
-        {
-          id: '5',
-          type: 'book',
-          title: 'كتاب الرياضيات البحتة (التفاضل والتكامل والجبر والفراغية) - ثانوية عامة',
-          path: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
-          addedAt: '2026-09-08T09:15:00.000Z',
-        }
-      ],
-    }
-  ],
+  users: [],
   pdfs: [
     {
       id: 1,
@@ -170,8 +120,8 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       is_student: 1,
       grade: 'الصف الثالث الثانوي (علمي)',
       description: 'المنهج الكامل للفيزياء: التيار الكهربي، كيرشوف، التأثير المغناطيسي، الحث الكهرومغناطيسي، الدوائر المهتزة، والفيزياء الحديثة وازدواجية الموجة والجسيم مع أسئلة امتحانات سابقة.',
-      downloads: 4890,
-      views: 12450,
+      downloads: 0,
+      views: 0,
       created_at: '2026-09-01T12:00:00.000Z',
     },
     {
@@ -183,8 +133,8 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       is_student: 1,
       grade: 'الصف الثالث الثانوي (علمي)',
       description: 'شرح مفصل ومخططات للأبواب الخمسة: العناصر الانتقالية والحديد، التحليل الكيميائي، الاتزان الأيوني والكيميائي، الكيمياء الكهربية والخلايا الجلفانية، والكيمياء العضوية وتفاعلاتها.',
-      downloads: 5120,
-      views: 13900,
+      downloads: 0,
+      views: 0,
       created_at: '2026-09-02T14:15:00.000Z',
     },
     {
@@ -196,8 +146,8 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       is_student: 1,
       grade: 'الصف الثالث الثانوي (علمي علوم)',
       description: 'المرجع الرسمي الشامل في الأحياء: فسيولوجيا الدعامة والحركة، التنسيق الهرموني، التكاثر في الكائنات الحية والإنسان، جهاز المناعة، والبيولوجيا الجزيئية والهندسة الوراثية.',
-      downloads: 4340,
-      views: 11200,
+      downloads: 0,
+      views: 0,
       created_at: '2026-09-03T10:00:00.000Z',
     },
     {
@@ -209,8 +159,8 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       is_student: 1,
       grade: 'الصف الثالث الثانوي (عام وأدبي وعلمي)',
       description: 'تلخيص وحدات النحو السبع: المشتقات، إعراب الفعل وبناءه، نواسخ الجملة الاسمية، المفاعيل والمنصوبات، أحكام التوابع، وأساليب الاختصاص والتحذير والإغراء مع نصوص متحررة.',
-      downloads: 6200,
-      views: 16800,
+      downloads: 0,
+      views: 0,
       created_at: '2026-09-04T11:20:00.000Z',
     },
     {
@@ -222,8 +172,8 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       is_student: 1,
       grade: 'الصف الثالث الثانوي (علمي رياضة)',
       description: 'شرح متكامل لنظريات النهايات والاشتقاق وتطبيقات القيم العظمى والصغرى، التكامل المحدد، التباديل والتوافيق، نظرية ذات الحدين، والمتجهات ومعادلة المستوى في الفراغ ثلاثي الأبعاد.',
-      downloads: 3820,
-      views: 9400,
+      downloads: 0,
+      views: 0,
       created_at: '2026-09-05T09:30:00.000Z',
     },
     {
@@ -235,8 +185,8 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       is_student: 1,
       grade: 'الصف الثالث الثانوي (علمي رياضة)',
       description: 'الاحتكاك، العزوم، القوى المتوازية المستوية، الاتزان العام، مركز الثقل، قوانين نيوتن الثلاثة، الشغل والقدرة والطاقة، وتطبيقات الدفع والتصادم.',
-      downloads: 3190,
-      views: 8200,
+      downloads: 0,
+      views: 0,
       created_at: '2026-09-06T15:00:00.000Z',
     },
     {
@@ -248,8 +198,8 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       is_student: 1,
       grade: 'الصف الثالث الثانوي (علمي علوم)',
       description: 'التراكيب الجيولوجية الأولية والثانوية، علم المعادن وتكوين البلورات، أنواع الصخور، الحركات الأرضية والانجراف القاري، والنظام البيئي واستنزاف الموارد الطبيعية وحلولها.',
-      downloads: 3750,
-      views: 9900,
+      downloads: 0,
+      views: 0,
       created_at: '2026-09-07T12:00:00.000Z',
     },
     {
@@ -261,8 +211,8 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       is_student: 1,
       grade: 'الصف الثالث الثانوي (الشعبة الأدبية)',
       description: 'من الحملة الفرنسية على مصر والشام وبناء الدولة الحديثة في عهد محمد علي، إلى الثورة العرابية، ثورة 1919، ثورة 23 يوليو 1952، والحروب العربية الإسرائيلية حتى نصر أكتوبر.',
-      downloads: 2980,
-      views: 7600,
+      downloads: 0,
+      views: 0,
       created_at: '2026-09-08T13:40:00.000Z',
     },
     {
@@ -274,8 +224,8 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       is_student: 1,
       grade: 'الصف الثالث الثانوي (الشعبة الأدبية)',
       description: 'الدولة تعريفها وأنواعها، المقومات الطبيعية والبشرية لقوة الدولة، الحدود السياسية وتطورها، التكتلات الاقتصادية والأحلاف العسكرية، والنظام العالمي الجديد.',
-      downloads: 2840,
-      views: 7100,
+      downloads: 0,
+      views: 0,
       created_at: '2026-09-09T16:10:00.000Z',
     },
     {
@@ -287,8 +237,8 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       is_student: 1,
       grade: 'الصف الثالث الثانوي (عام)',
       description: 'تغطية كاملة لـ 12 وحدة بالمنهج، القواعد الإنجليزية المعقدة، الفروق اللغوية الدقيقة (Confusing Words)، استراتيجيات حل القطع المتحررة وفنون الترجمة المتقدمة.',
-      downloads: 4120,
-      views: 10800,
+      downloads: 0,
+      views: 0,
       created_at: '2026-09-10T14:00:00.000Z',
     },
     {
@@ -300,8 +250,8 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       is_student: 0,
       grade: 'للمبتدئين والطلاب المهتمين بالتقنية',
       description: 'كتاب مرجعي باللغة العربية يشرح أساسيات ومتقدمات بايثون وهياكل البيانات وبناء المشاريع الحقيقية والتفكير البرمجي السليم.',
-      downloads: 2840,
-      views: 7410,
+      downloads: 0,
+      views: 0,
       created_at: '2026-09-11T15:30:00.000Z',
     },
     {
@@ -313,8 +263,8 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       is_student: 0,
       grade: 'ثقافي وعلمي متقدم',
       description: 'دليل مبسط وعملي للشباب والطلاب حول خوارزميات الذكاء الاصطناعي وكيف تغير التكنولوجيا مجالات الطب والهندسة والتعليم.',
-      downloads: 3120,
-      views: 8900,
+      downloads: 0,
+      views: 0,
       created_at: '2026-09-12T11:45:00.000Z',
     }
   ],
@@ -324,7 +274,7 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       title: 'خريطة ذهنية: الوحدات السبع في النحو لشهادة الثانوية العامة المصرية',
       imagepath: 'https://images.unsplash.com/photo-1456513080510-7bf3a84b82f8?w=800&auto=format&fit=crop&q=80',
       category: 'لغة عربية (ثانوية عامة)',
-      views: 8920,
+      views: 0,
       created_at: '2026-09-02T10:00:00.000Z',
     },
     {
@@ -332,7 +282,7 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       title: 'شجرة تفاعلات الكيمياء العضوية وتسمية IUPAC كاملة في صفحة واحدة',
       imagepath: 'https://images.unsplash.com/photo-1603126857599-f6e157fa2fe6?w=800&auto=format&fit=crop&q=80',
       category: 'كيمياء (ثانوية عامة)',
-      views: 7840,
+      views: 0,
       created_at: '2026-09-04T12:00:00.000Z',
     },
     {
@@ -340,7 +290,7 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       title: 'ملخص بصري: قوانين الكهربية وكيرشوف والحث والدينامو (فيزياء 3 ثانوي)',
       imagepath: 'https://images.unsplash.com/photo-1507668077129-56e32842fceb?w=800&auto=format&fit=crop&q=80',
       category: 'فيزياء (ثانوية عامة)',
-      views: 9150,
+      views: 0,
       created_at: '2026-09-08T15:20:00.000Z',
     },
     {
@@ -348,7 +298,7 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       title: 'مخطط تدفقي: خطوات تخليق البروتين وآلية المناعة بالأجسام المضادة (أحياء)',
       imagepath: 'https://images.unsplash.com/photo-1532094349884-543bc11b234d?w=800&auto=format&fit=crop&q=80',
       category: 'أحياء (ثانوية عامة)',
-      views: 6420,
+      views: 0,
       created_at: '2026-09-10T09:40:00.000Z',
     },
     {
@@ -356,7 +306,7 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       title: 'خريطة ذهنية: قوانين الهندسة الفراغية ومعادلات الخط المستقيم والمستوى',
       imagepath: 'https://images.unsplash.com/photo-1635070041078-e363dbe005cb?w=800&auto=format&fit=crop&q=80',
       category: 'رياضيات (علمي رياضة)',
-      views: 5310,
+      views: 0,
       created_at: '2026-09-12T11:00:00.000Z',
     },
     {
@@ -364,7 +314,7 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       title: 'انفوجرافيك: التراكيب الجيولوجية الأولية والثانوية ودورة الصخور الكاملة',
       imagepath: 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=800&auto=format&fit=crop&q=80',
       category: 'جيولوجيا (علمي علوم)',
-      views: 4980,
+      views: 0,
       created_at: '2026-09-14T14:30:00.000Z',
     },
     {
@@ -372,7 +322,7 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       title: 'خريطة مفاهيم: المدارس الشعرية في الأدب العربي وتطور القصيدة الحديثة',
       imagepath: 'https://images.unsplash.com/photo-1457369804613-52c61a468e7d?w=800&auto=format&fit=crop&q=80',
       category: 'أدب ولغة عربية',
-      views: 5890,
+      views: 0,
       created_at: '2026-09-16T16:00:00.000Z',
     }
   ],
@@ -384,7 +334,7 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       category: 'كتب الطلاب',
       channel: 'منصة المتفوقين في الفيزياء',
       duration: '58:00',
-      views: 28400,
+      views: 0,
       created_at: '2026-09-01T10:00:00.000Z',
     },
     {
@@ -394,7 +344,7 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       category: 'كتب الطلاب',
       channel: 'أكاديمية الكيمياء للثانوية',
       duration: '45:20',
-      views: 22100,
+      views: 0,
       created_at: '2026-09-04T14:30:00.000Z',
     },
     {
@@ -404,7 +354,7 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       category: 'كتب الطلاب',
       channel: 'فرسان اللغة العربية',
       duration: '1:12:00',
-      views: 31500,
+      views: 0,
       created_at: '2026-09-07T16:00:00.000Z',
     },
     {
@@ -414,7 +364,7 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       category: 'كتب الطلاب',
       channel: 'البيولوجيا ببساطة',
       duration: '38:15',
-      views: 18900,
+      views: 0,
       created_at: '2026-09-10T11:20:00.000Z',
     },
     {
@@ -424,7 +374,7 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       category: 'كتب الطلاب',
       channel: 'أستاذ الرياضيات المتقدمة',
       duration: '52:40',
-      views: 16700,
+      views: 0,
       created_at: '2026-09-12T15:10:00.000Z',
     },
     {
@@ -434,7 +384,7 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       category: 'كتب الطلاب',
       channel: 'منصة التاريخ والجغرافيا',
       duration: '41:00',
-      views: 14200,
+      views: 0,
       created_at: '2026-09-15T13:00:00.000Z',
     }
   ],
@@ -463,7 +413,7 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       imagepath: 'https://images.unsplash.com/photo-1434030216411-0b793f4b4173?w=800&auto=format&fit=crop&q=80',
       author: 'المصمم Ahmed Raafat & فريق المناهج',
       readTime: '4 دقائق',
-      views: 8940,
+      views: 0,
       created_at: '2026-09-02T11:00:00.000Z',
     },
     {
@@ -486,7 +436,7 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       imagepath: 'https://images.unsplash.com/photo-1636466497217-26a8cbeaf0aa?w=800&auto=format&fit=crop&q=80',
       author: 'ARM',
       readTime: '5 دقائق',
-      views: 11200,
+      views: 0,
       created_at: '2026-09-09T17:20:00.000Z',
     }
   ],
@@ -886,8 +836,8 @@ class DatabaseManager {
     const item = targetList.find(i => i.id === id);
     if (!item) return null;
 
-    const currentCount = item.ratingCount || 1;
-    const currentRating = item.rating || 5;
+    const currentCount = item.ratingCount || 0;
+    const currentRating = item.rating || 0;
     const newCount = currentCount + 1;
     const newRating = Math.round((((currentRating * currentCount) + star) / newCount) * 10) / 10;
 

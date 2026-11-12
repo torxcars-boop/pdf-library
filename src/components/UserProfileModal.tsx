@@ -202,9 +202,9 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 dark:bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
       <div 
-        className="relative w-full max-w-2xl bg-zinc-900 border border-amber-500/30 rounded-3xl p-6 sm:p-8 shadow-2xl text-right max-h-[90vh] flex flex-col"
+        className="relative w-full max-w-2xl bg-white dark:bg-zinc-900 border border-amber-500/30 rounded-3xl p-6 sm:p-8 shadow-2xl text-right max-h-[90vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Hidden File Input for Device Image Upload */}
@@ -219,15 +219,15 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
         {/* Close Button */}
         <button
           onClick={onClose}
-          className="absolute top-5 left-5 p-2 rounded-xl bg-zinc-800 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-700 transition"
+          className="absolute top-5 left-5 p-2 rounded-xl bg-slate-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-slate-200 dark:hover:bg-zinc-700 transition"
         >
           <X className="w-4 h-4" />
         </button>
 
         {/* User Card Header */}
-        <div className="flex items-center gap-4 border-b border-zinc-800 pb-6 mb-4">
+        <div className="flex items-center gap-4 border-b border-slate-200 dark:border-zinc-800 pb-6 mb-4">
           <div className="relative group">
-            <div className="w-16 h-16 rounded-2xl overflow-hidden border-2 border-amber-500/40 shadow-lg flex-shrink-0 bg-zinc-800">
+            <div className="w-16 h-16 rounded-2xl overflow-hidden border-2 border-amber-500/40 shadow-lg flex-shrink-0 bg-slate-100 dark:bg-zinc-800">
               <img 
                 src={avatar || user.avatar} 
                 alt={user.name} 
@@ -248,14 +248,14 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
 
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-xl font-bold text-amber-200">{name || user.name}</h2>
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30">
+              <h2 className="text-xl font-bold text-amber-800 dark:text-amber-200">{name || user.name}</h2>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 font-bold border border-amber-500/30">
                 {user.role === 'moderator' || user.role === 'admin' ? 'مشرف المنصة' : 'طالب مسجل'}
               </span>
             </div>
-            <p className="text-xs text-zinc-400 mt-0.5">{user.email}</p>
-            <div className="flex items-center gap-3 mt-2 text-[11px] text-zinc-400">
-              <span className="bg-zinc-800 px-2.5 py-0.5 rounded-lg border border-zinc-700">
+            <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5">{user.email}</p>
+            <div className="flex items-center gap-3 mt-2 text-[11px] text-zinc-600 dark:text-zinc-400 flex-wrap">
+              <span className="bg-slate-100 dark:bg-zinc-800 px-2.5 py-0.5 rounded-lg border border-slate-200 dark:border-zinc-700">
                 🎓 {stage || user.academicStage || 'الصف الثالث الثانوي'}
               </span>
               <span className="flex items-center gap-1">
@@ -267,13 +267,13 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
         </div>
 
         {/* Tabs: Bookmarks vs Settings */}
-        <div className="flex gap-2 border-b border-zinc-800 pb-3 mb-4">
+        <div className="flex gap-2 border-b border-slate-200 dark:border-zinc-800 pb-3 mb-4">
           <button
             onClick={() => setActiveTab('bookmarks')}
             className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 ${
               activeTab === 'bookmarks' 
                 ? 'bg-amber-500 text-zinc-950 shadow-md' 
-                : 'text-zinc-400 hover:text-zinc-200 bg-zinc-950/60'
+                : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 bg-slate-100 dark:bg-zinc-950/60'
             }`}
           >
             <Bookmark className="w-3.5 h-3.5" />
@@ -284,7 +284,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
             className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 ${
               activeTab === 'settings' 
                 ? 'bg-amber-500 text-zinc-950 shadow-md' 
-                : 'text-zinc-400 hover:text-zinc-200 bg-zinc-950/60'
+                : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 bg-slate-100 dark:bg-zinc-950/60'
             }`}
           >
             <Edit2 className="w-3.5 h-3.5" />
@@ -309,8 +309,8 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                   onClick={() => setFilterType(f.id)}
                   className={`px-3 py-1 rounded-lg text-[11px] font-semibold border transition ${
                     filterType === f.id
-                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                      : 'bg-zinc-950 text-zinc-400 border-zinc-800 hover:border-zinc-700'
+                      ? 'bg-amber-500/15 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 border-amber-500/40'
+                      : 'bg-slate-50 dark:bg-zinc-950 text-zinc-600 dark:text-zinc-400 border-slate-200 dark:border-zinc-800 hover:border-slate-300 dark:hover:border-zinc-700'
                   }`}
                 >
                   {f.label}
@@ -320,26 +320,26 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
 
             {filteredBookmarks.length === 0 ? (
               <div className="text-center py-12 text-zinc-500">
-                <Bookmark className="w-10 h-10 mx-auto text-zinc-600 mb-2 stroke-[1.5]" />
-                <p className="text-sm">لا توجد عناصر محفوظة في هذه القائمة حالياً.</p>
-                <p className="text-xs text-zinc-600 mt-1">انقر على أيقونة النجمة ⭐ على أي كتاب أو مقال لإضافته إلى مفضلتك.</p>
+                <Bookmark className="w-10 h-10 mx-auto text-zinc-400 dark:text-zinc-600 mb-2 stroke-[1.5]" />
+                <p className="text-sm text-zinc-700 dark:text-zinc-400">لا توجد عناصر محفوظة في هذه القائمة حالياً.</p>
+                <p className="text-xs text-zinc-500 dark:text-zinc-600 mt-1">انقر على أيقونة النجمة ⭐ على أي كتاب أو مقال لإضافته إلى مفضلتك.</p>
               </div>
             ) : (
               <div className="space-y-2.5">
                 {filteredBookmarks.map((item, idx) => (
                   <div
                     key={idx}
-                    className="flex items-center justify-between p-3 rounded-2xl bg-zinc-950/70 border border-zinc-800 hover:border-amber-500/30 transition group"
+                    className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-zinc-950/70 border border-slate-200 dark:border-zinc-800 hover:border-amber-500/30 transition group"
                   >
                     <div className="flex items-center gap-3 overflow-hidden">
-                      <div className="p-2.5 rounded-xl bg-zinc-900 border border-zinc-800 flex-shrink-0">
+                      <div className="p-2.5 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 flex-shrink-0">
                         {getIconForType(item.type)}
                       </div>
                       <div className="overflow-hidden">
-                        <span className="text-[10px] text-amber-400 font-semibold block">
+                        <span className="text-[10px] text-amber-700 dark:text-amber-400 font-semibold block">
                           {getLabelForType(item.type)}
                         </span>
-                        <h4 className="text-xs font-bold text-zinc-200 truncate group-hover:text-amber-300 transition">
+                        <h4 className="text-xs font-bold text-zinc-900 dark:text-zinc-200 truncate group-hover:text-amber-700 dark:group-hover:text-amber-300 transition">
                           {item.title}
                         </h4>
                       </div>
@@ -348,14 +348,14 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                     <div className="flex items-center gap-2 flex-shrink-0 mr-2">
                       <button
                         onClick={() => onOpenItem(item)}
-                        className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-amber-500 hover:text-zinc-950 text-amber-400 text-xs font-bold border border-zinc-700 transition flex items-center gap-1"
+                        className="px-3 py-1.5 rounded-xl bg-white dark:bg-zinc-800 hover:bg-amber-500 hover:text-zinc-950 text-amber-700 dark:text-amber-400 text-xs font-bold border border-slate-200 dark:border-zinc-700 transition flex items-center gap-1"
                       >
                         <span>فتح</span>
                         <ExternalLink className="w-3 h-3" />
                       </button>
                       <button
                         onClick={() => onRemoveBookmark(item)}
-                        className="p-1.5 rounded-xl bg-zinc-900 hover:bg-rose-500/20 text-zinc-500 hover:text-rose-400 border border-zinc-800 transition"
+                        className="p-1.5 rounded-xl bg-white dark:bg-zinc-900 hover:bg-rose-500/20 text-zinc-500 hover:text-rose-600 dark:hover:text-rose-400 border border-slate-200 dark:border-zinc-800 transition"
                         title="إزالة من المفضلة"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -370,26 +370,26 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
           /* SETTINGS TAB */
           <form onSubmit={handleSaveProfile} className="space-y-4 flex-1 overflow-y-auto pr-1">
             {message && (
-              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-semibold flex items-center gap-2 animate-in fade-in">
-                <Sparkles className="w-4 h-4 text-amber-400 flex-shrink-0" />
+              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-800 dark:text-amber-300 text-xs font-semibold flex items-center gap-2 animate-in fade-in">
+                <Sparkles className="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0" />
                 <span>{message}</span>
               </div>
             )}
 
             {uploadError && (
-              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs">
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-700 dark:text-rose-300 text-xs">
                 {uploadError}
               </div>
             )}
 
             {/* Profile Avatar Selection & Device Upload */}
-            <div className="p-4 rounded-2xl bg-zinc-950/80 border border-zinc-800">
-              <label className="block text-xs font-bold text-zinc-200 mb-2">
+            <div className="p-4 rounded-2xl bg-slate-50 dark:bg-zinc-950/80 border border-slate-200 dark:border-zinc-800">
+              <label className="block text-xs font-bold text-zinc-800 dark:text-zinc-200 mb-2">
                 صورة الملف الشخصي للطالب:
               </label>
 
               <div className="flex flex-col sm:flex-row items-center gap-4">
-                <div className="w-20 h-20 rounded-2xl overflow-hidden border-2 border-amber-500/50 shadow-md flex-shrink-0 bg-zinc-900">
+                <div className="w-20 h-20 rounded-2xl overflow-hidden border-2 border-amber-500/50 shadow-md flex-shrink-0 bg-white dark:bg-zinc-900">
                   <img src={avatar} alt="المعاينة" className="w-full h-full object-cover" />
                 </div>
 
@@ -397,20 +397,20 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="px-4 py-2.5 rounded-xl bg-amber-500/20 hover:bg-amber-500 hover:text-zinc-950 text-amber-300 border border-amber-500/40 text-xs font-bold transition flex items-center justify-center gap-2 w-full sm:w-auto shadow-sm"
+                    className="px-4 py-2.5 rounded-xl bg-amber-500/15 dark:bg-amber-500/20 hover:bg-amber-500 hover:text-zinc-950 text-amber-800 dark:text-amber-300 border border-amber-500/40 text-xs font-bold transition flex items-center justify-center gap-2 w-full sm:w-auto shadow-sm"
                   >
                     <Upload className="w-4 h-4" />
                     <span>تحميل صورة من ملفات جهازك (كمبيوتر / هاتف)</span>
                   </button>
-                  <p className="text-[11px] text-zinc-400">
+                  <p className="text-[11px] text-zinc-600 dark:text-zinc-400">
                     يمكنك اختيار أي صورة شخصية خاصة بك من هاتفك أو جهازك، ويتم ضغطها وتثبيتها فوراً.
                   </p>
                 </div>
               </div>
 
               {/* Quick Preset Avatars */}
-              <div className="mt-4 pt-3 border-t border-zinc-800">
-                <span className="text-[11px] text-zinc-400 font-semibold block mb-2">أو اختر من الشخصيات التعليمية الجاهزة:</span>
+              <div className="mt-4 pt-3 border-t border-slate-200 dark:border-zinc-800">
+                <span className="text-[11px] text-zinc-600 dark:text-zinc-400 font-semibold block mb-2">أو اختر من الشخصيات التعليمية الجاهزة:</span>
                 <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
                   {PRESET_AVATARS.map((p, idx) => (
                     <button
@@ -419,12 +419,12 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                       onClick={() => setAvatar(p.url)}
                       className={`p-1 rounded-xl border flex flex-col items-center gap-1 transition ${
                         avatar === p.url 
-                          ? 'border-amber-400 bg-amber-500/20' 
-                          : 'border-zinc-800 hover:border-zinc-700 bg-zinc-900/60'
+                          ? 'border-amber-500 dark:border-amber-400 bg-amber-500/15 dark:bg-amber-500/20' 
+                          : 'border-slate-200 dark:border-zinc-800 hover:border-slate-300 dark:hover:border-zinc-700 bg-white dark:bg-zinc-900/60'
                       }`}
                     >
                       <img src={p.url} alt={p.label} className="w-10 h-10 rounded-lg object-cover" />
-                      <span className="text-[10px] text-zinc-300 truncate w-full text-center">{p.label}</span>
+                      <span className="text-[10px] text-zinc-700 dark:text-zinc-300 truncate w-full text-center">{p.label}</span>
                     </button>
                   ))}
                 </div>
@@ -432,35 +432,35 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-zinc-300 mb-1">الاسم الكامل للطالب</label>
+              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">الاسم الكامل للطالب</label>
               <input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 required
-                className="w-full py-2.5 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                className="w-full py-2.5 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-zinc-300 mb-1">المرحلة الدراسية والشعبة</label>
+              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">المرحلة الدراسية والشعبة</label>
               <input
                 type="text"
                 value={stage}
                 onChange={(e) => setStage(e.target.value)}
                 placeholder="مثال: الصف الثالث الثانوي (علمي علوم / علمي رياضة / أدبي)"
-                className="w-full py-2.5 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                className="w-full py-2.5 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-zinc-300 mb-1">تغيير كلمة المرور (اختياري)</label>
+              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">تغيير كلمة المرور (اختياري)</label>
               <input
                 type="password"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 placeholder="اتركها فارغة إذا لم ترغب في التغيير"
-                className="w-full py-2.5 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                className="w-full py-2.5 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
               />
             </div>
 

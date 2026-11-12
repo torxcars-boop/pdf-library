@@ -189,9 +189,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 dark:bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
       <div 
-        className="relative w-full max-w-lg bg-zinc-900 border border-amber-500/30 rounded-3xl p-6 sm:p-8 shadow-2xl text-right overflow-hidden"
+        className="relative w-full max-w-lg bg-white dark:bg-zinc-900 border border-amber-500/30 rounded-3xl p-6 sm:p-8 shadow-2xl text-right overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Glow decoration */}
@@ -201,7 +201,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
         {/* Close Button */}
         <button
           onClick={onClose}
-          className="absolute top-5 left-5 p-2 rounded-xl bg-zinc-800 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-700 transition"
+          className="absolute top-5 left-5 p-2 rounded-xl bg-slate-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-slate-200 dark:hover:bg-zinc-700 transition"
         >
           <X className="w-4 h-4" />
         </button>
@@ -211,10 +211,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
           <div className="w-12 h-12 mx-auto rounded-2xl bg-gradient-to-tr from-amber-600 to-amber-300 flex items-center justify-center text-zinc-950 shadow-lg mb-3">
             {mode === 'login' ? <LogIn className="w-6 h-6 stroke-[2.2]" /> : <UserPlus className="w-6 h-6 stroke-[2.2]" />}
           </div>
-          <h2 className="text-xl font-bold text-amber-200">
+          <h2 className="text-xl font-bold text-amber-800 dark:text-amber-200">
             {mode === 'login' ? 'تسجيل دخول المستفيد' : 'إنشاء حساب جديد في المنصة'}
           </h2>
-          <p className="text-xs text-zinc-400 mt-1">
+          <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
             {mode === 'login' 
               ? 'سجّل دخولك للوصول إلى مفضلتك، تحميل الكتب، وتتبع قراءاتك'
               : 'انضم لآلاف الطلاب والباحثين واستمتع بمميزات المكتبة الرقمية'}
@@ -222,14 +222,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
         </div>
 
         {/* Tabs switcher */}
-        <div className="flex bg-zinc-950 p-1 rounded-2xl border border-zinc-800 mb-6">
+        <div className="flex bg-slate-100 dark:bg-zinc-950 p-1 rounded-2xl border border-slate-200 dark:border-zinc-800 mb-6">
           <button
             type="button"
             onClick={() => { setMode('login'); setError(null); }}
             className={`flex-1 py-2 text-xs font-bold rounded-xl transition ${
               mode === 'login' 
                 ? 'bg-amber-500 text-zinc-950 shadow-md' 
-                : 'text-zinc-400 hover:text-zinc-200'
+                : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
             }`}
           >
             تسجيل الدخول
@@ -240,7 +240,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
             className={`flex-1 py-2 text-xs font-bold rounded-xl transition ${
               mode === 'register' 
                 ? 'bg-amber-500 text-zinc-950 shadow-md' 
-                : 'text-zinc-400 hover:text-zinc-200'
+                : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
             }`}
           >
             حساب جديد
@@ -249,14 +249,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
 
         {/* Feedback alerts */}
         {error && (
-          <div className="mb-4 p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
+          <div className="mb-4 p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-700 dark:text-rose-300 text-xs flex items-center gap-2">
             <AlertCircle className="w-4 h-4 flex-shrink-0" />
             <span>{error}</span>
           </div>
         )}
 
         {successMsg && (
-          <div className="mb-4 p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2">
+          <div className="mb-4 p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-xs flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
             <span>{successMsg}</span>
           </div>
@@ -266,7 +266,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
         {mode === 'login' ? (
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
-              <label className="block text-xs font-semibold text-zinc-300 mb-1.5">البريد الإلكتروني</label>
+              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5">البريد الإلكتروني</label>
               <div className="relative">
                 <input
                   type="email"
@@ -274,14 +274,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
                   value={loginEmail}
                   onChange={(e) => setLoginEmail(e.target.value)}
                   placeholder="name@example.com"
-                  className="w-full py-2.5 pr-10 pl-4 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500 transition"
+                  className="w-full py-2.5 pr-10 pl-4 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500 transition"
                 />
-                <Mail className="w-4 h-4 text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
+                <Mail className="w-4 h-4 text-zinc-400 dark:text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-zinc-300 mb-1.5">كلمة المرور</label>
+              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5">كلمة المرور</label>
               <div className="relative">
                 <input
                   type={showLoginPass ? 'text' : 'password'}
@@ -289,13 +289,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
                   value={loginPassword}
                   onChange={(e) => setLoginPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full py-2.5 pr-10 pl-10 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500 transition"
+                  className="w-full py-2.5 pr-10 pl-10 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500 transition"
                 />
-                <Lock className="w-4 h-4 text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
+                <Lock className="w-4 h-4 text-zinc-400 dark:text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
                 <button
                   type="button"
                   onClick={() => setShowLoginPass(!showLoginPass)}
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
                 >
                   {showLoginPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
@@ -315,7 +315,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
           /* REGISTER FORM */
           <form onSubmit={handleRegister} className="space-y-3.5">
             <div>
-              <label className="block text-xs font-semibold text-zinc-300 mb-1">الاسم الكامل</label>
+              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">الاسم الكامل</label>
               <div className="relative">
                 <input
                   type="text"
@@ -323,14 +323,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
                   value={regName}
                   onChange={(e) => setRegName(e.target.value)}
                   placeholder="محمد أحمد"
-                  className="w-full py-2.5 pr-10 pl-4 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500 transition"
+                  className="w-full py-2.5 pr-10 pl-4 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500 transition"
                 />
-                <UserIcon className="w-4 h-4 text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
+                <UserIcon className="w-4 h-4 text-zinc-400 dark:text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-zinc-300 mb-1">البريد الإلكتروني</label>
+              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">البريد الإلكتروني</label>
               <div className="relative">
                 <input
                   type="email"
@@ -338,19 +338,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
                   value={regEmail}
                   onChange={(e) => setRegEmail(e.target.value)}
                   placeholder="student@example.com"
-                  className="w-full py-2.5 pr-10 pl-4 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500 transition"
+                  className="w-full py-2.5 pr-10 pl-4 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500 transition"
                 />
-                <Mail className="w-4 h-4 text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
+                <Mail className="w-4 h-4 text-zinc-400 dark:text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-zinc-300 mb-1">المرحلة الدراسية / الاهتمام</label>
+              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">المرحلة الدراسية / الاهتمام</label>
               <div className="relative">
                 <select
                   value={regStage}
                   onChange={(e) => setRegStage(e.target.value)}
-                  className="w-full py-2.5 pr-10 pl-4 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500 transition"
+                  className="w-full py-2.5 pr-10 pl-4 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500 transition"
                 >
                   <option value="الثانوية العامة">الثانوية العامة</option>
                   <option value="المرحلة الجامعية">المرحلة الجامعية</option>
@@ -359,12 +359,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
                   <option value="باحث ومطور">باحث ومطور</option>
                   <option value="قارئ عام">قارئ عام</option>
                 </select>
-                <GraduationCap className="w-4 h-4 text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
+                <GraduationCap className="w-4 h-4 text-zinc-400 dark:text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-zinc-300 mb-1">كلمة المرور (6 خانات على الأقل)</label>
+              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">كلمة المرور (6 خانات على الأقل)</label>
               <div className="relative">
                 <input
                   type={showRegPass ? 'text' : 'password'}
@@ -372,13 +372,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
                   value={regPassword}
                   onChange={(e) => setRegPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full py-2.5 pr-10 pl-10 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500 transition"
+                  className="w-full py-2.5 pr-10 pl-10 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500 transition"
                 />
-                <Lock className="w-4 h-4 text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
+                <Lock className="w-4 h-4 text-zinc-400 dark:text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
                 <button
                   type="button"
                   onClick={() => setShowRegPass(!showRegPass)}
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
                 >
                   {showRegPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
@@ -387,7 +387,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
 
             {/* Avatar picker */}
             <div>
-              <label className="block text-[11px] font-semibold text-zinc-400 mb-1.5">اختر صورة الحساب:</label>
+              <label className="block text-[11px] font-semibold text-zinc-600 dark:text-zinc-400 mb-1.5">اختر صورة الحساب:</label>
               <div className="flex gap-2">
                 {sampleAvatars.map((av, idx) => (
                   <button
@@ -395,7 +395,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
                     type="button"
                     onClick={() => setRegAvatar(av)}
                     className={`w-9 h-9 rounded-xl overflow-hidden border-2 transition ${
-                      regAvatar === av ? 'border-amber-400 scale-105' : 'border-zinc-800 opacity-60'
+                      regAvatar === av ? 'border-amber-500 dark:border-amber-400 scale-105' : 'border-slate-300 dark:border-zinc-800 opacity-60'
                     }`}
                   >
                     <img src={av} alt="avatar option" className="w-full h-full object-cover" />

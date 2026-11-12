@@ -44,6 +44,8 @@ export const ReviewsSection: React.FC<ReviewsSectionProps> = ({
   const [filter, setFilter] = useState<'all' | 'approved'>('all');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [successToast, setSuccessToast] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const isAdmin = user?.role === 'moderator' || user?.role === 'admin' || !!localStorage.getItem('arm_admin_token');
 
@@ -66,13 +68,14 @@ export const ReviewsSection: React.FC<ReviewsSectionProps> = ({
 
   const handleSubmitReview = (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
     if (!user) {
       onOpenAuth();
       return;
     }
 
     if (!reviewComment.trim()) {
-      alert('يرجى كتابة نص المراجعة أو الملاحظة للمادة.');
+      setFormError('يرجى كتابة نص المراجعة أو الملاحظة للمادة.');
       return;
     }
 
@@ -101,11 +104,10 @@ export const ReviewsSection: React.FC<ReviewsSectionProps> = ({
     refreshReviews();
   };
 
-  const handleDelete = (reviewId: string) => {
-    if (window.confirm('هل أنت متأكد من حذف هذه المراجعة؟')) {
-      deleteReview(reviewId);
-      refreshReviews();
-    }
+  const handleConfirmDelete = (reviewId: string) => {
+    deleteReview(reviewId);
+    setConfirmDeleteId(null);
+    refreshReviews();
   };
 
   const stats = getItemRatingStats(itemId, itemType);
@@ -114,35 +116,35 @@ export const ReviewsSection: React.FC<ReviewsSectionProps> = ({
     : reviews;
 
   return (
-    <div className="mt-8 pt-6 border-t border-zinc-800">
+    <div className="mt-8 pt-6 border-t border-zinc-200 dark:border-zinc-800">
       {/* Toast */}
       {successToast && (
-        <div className="mb-4 p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-bold flex items-center gap-2 animate-in fade-in">
-          <Sparkles className="w-4 h-4 text-amber-400" />
+        <div className="mb-4 p-3 rounded-2xl bg-amber-500/15 dark:bg-amber-500/10 border border-amber-500/30 text-amber-800 dark:text-amber-300 text-xs font-bold flex items-center gap-2 animate-in fade-in">
+          <Sparkles className="w-4 h-4 text-amber-500 dark:text-amber-400" />
           <span>{successToast}</span>
         </div>
       )}
 
       {/* Header & Overall Rating Summary */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6 p-4 rounded-3xl bg-zinc-950/80 border border-zinc-800">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6 p-4 rounded-3xl bg-zinc-50 dark:bg-zinc-950/80 border border-zinc-200 dark:border-zinc-800">
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <div className="p-1.5 rounded-xl bg-amber-500/20 text-amber-400">
+            <div className="p-1.5 rounded-xl bg-amber-500/15 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400">
               <Star className="w-4 h-4 fill-current" />
             </div>
-            <h3 className="text-sm font-bold text-zinc-100">{title}</h3>
+            <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">{title}</h3>
           </div>
-          <p className="text-[11px] text-zinc-400">
+          <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
             تجارب وتقييمات حقيقية من طلاب ومعلمي الثانوية العامة
           </p>
         </div>
 
         {/* Big Rating Badge */}
-        <div className="flex items-center gap-3 bg-zinc-900 px-4 py-2.5 rounded-2xl border border-amber-500/30">
+        <div className="flex items-center gap-3 bg-white dark:bg-zinc-900 px-4 py-2.5 rounded-2xl border border-amber-500/30 shadow-sm dark:shadow-none">
           {stats.totalReviews > 0 ? (
             <>
               <div className="text-center">
-                <span className="text-2xl font-black text-amber-300 font-mono">{stats.averageRating}</span>
+                <span className="text-2xl font-black text-amber-600 dark:text-amber-300 font-mono">{stats.averageRating}</span>
                 <span className="text-[10px] text-zinc-500 block">من 5.0</span>
               </div>
               <div className="space-y-1">
@@ -153,35 +155,35 @@ export const ReviewsSection: React.FC<ReviewsSectionProps> = ({
                       className={`w-3.5 h-3.5 ${
                         star <= Math.round(stats.averageRating)
                           ? 'fill-amber-400 text-amber-400'
-                          : 'text-zinc-700'
+                          : 'text-zinc-300 dark:text-zinc-700'
                       }`}
                     />
                   ))}
                 </div>
-                <span className="text-[10px] text-zinc-400 block font-mono">
+                <span className="text-[10px] text-zinc-500 dark:text-zinc-400 block font-mono">
                   ({stats.totalReviews} مراجعة مسجلة)
                 </span>
               </div>
             </>
           ) : (
             <div className="text-right">
-              <span className="text-xs font-bold text-amber-400 block">لم يتم التقييم بعد</span>
-              <span className="text-[10px] text-zinc-400">كن أول طالب يشارك رأيه وتقييمه ⭐</span>
+              <span className="text-xs font-bold text-amber-600 dark:text-amber-400 block">لم يتم التقييم بعد</span>
+              <span className="text-[10px] text-zinc-500 dark:text-zinc-400">كن أول طالب يشارك رأيه وتقييمه ⭐</span>
             </div>
           )}
         </div>
       </div>
 
       {/* Add Review Form */}
-      <form onSubmit={handleSubmitReview} className="mb-6 p-4 rounded-2xl bg-zinc-950/60 border border-zinc-800/80">
+      <form onSubmit={handleSubmitReview} className="mb-6 p-4 rounded-2xl bg-zinc-50 dark:bg-zinc-950/60 border border-zinc-200 dark:border-zinc-800/80">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
-          <span className="text-xs font-bold text-zinc-200">
+          <span className="text-xs font-bold text-zinc-800 dark:text-zinc-200">
             {user ? `أضف تقييمك ورأيك يا ${user.name}:` : 'سجّل تقييمك ومراجعتك للمادة:'}
           </span>
 
           {/* Interactive Star Picker */}
           <div className="flex items-center gap-1">
-            <span className="text-xs text-amber-400 font-bold ml-2 font-mono">
+            <span className="text-xs text-amber-600 dark:text-amber-400 font-bold ml-2 font-mono">
               ({hoverRating || userRating} / 5)
             </span>
             {[1, 2, 3, 4, 5].map((star) => (
@@ -198,7 +200,7 @@ export const ReviewsSection: React.FC<ReviewsSectionProps> = ({
                   className={`w-5 h-5 ${
                     star <= (hoverRating || userRating)
                       ? 'fill-amber-400 text-amber-400'
-                      : 'text-zinc-600'
+                      : 'text-zinc-300 dark:text-zinc-600'
                   }`}
                 />
               </button>
@@ -209,17 +211,26 @@ export const ReviewsSection: React.FC<ReviewsSectionProps> = ({
         <div className="relative">
           <textarea
             value={reviewComment}
-            onChange={(e) => setReviewComment(e.target.value)}
+            onChange={(e) => {
+              setReviewComment(e.target.value);
+              if (formError) setFormError(null);
+            }}
             placeholder={
               user
                 ? 'اكتب مراجعة نصية قصيرة (مثال: الشرح ممتاز والمسائل شاملة لجميع نواتج التعلم الوزارية...)'
                 : 'سجّل الدخول لتتمكن من كتابة مراجعة وتقييم بالنجوم...'
             }
             rows={2}
-            className="w-full bg-zinc-900/90 border border-zinc-800 rounded-xl p-3 text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-amber-500 transition resize-none"
+            className="w-full bg-white dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 rounded-xl p-3 text-xs text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:border-amber-500 transition resize-none"
           />
 
-          <div className="flex items-center justify-between mt-2 pt-2 border-t border-zinc-800/60">
+          {formError && (
+            <p className="mt-2 text-xs text-rose-600 dark:text-rose-400 font-semibold">
+              {formError}
+            </p>
+          )}
+
+          <div className="flex items-center justify-between mt-2 pt-2 border-t border-zinc-200/80 dark:border-zinc-800/60">
             <span className="text-[10px] text-zinc-500">
               مراجعتك تساعد زملاءك في اختيار أفضل المناهج والشروحات.
             </span>
@@ -237,7 +248,7 @@ export const ReviewsSection: React.FC<ReviewsSectionProps> = ({
               <button
                 type="button"
                 onClick={onOpenAuth}
-                className="px-3 py-1.5 bg-zinc-800 hover:bg-amber-500 hover:text-zinc-950 text-amber-300 font-bold text-xs rounded-xl border border-zinc-700 transition flex items-center gap-1"
+                className="px-3 py-1.5 bg-zinc-200 dark:bg-zinc-800 hover:bg-amber-500 hover:text-zinc-950 text-amber-700 dark:text-amber-300 font-bold text-xs rounded-xl border border-zinc-300 dark:border-zinc-700 transition flex items-center gap-1"
               >
                 <Lock className="w-3.5 h-3.5" />
                 <span>دخول لكتابة مراجعة</span>
@@ -251,24 +262,26 @@ export const ReviewsSection: React.FC<ReviewsSectionProps> = ({
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-1.5 text-xs">
           <button
+            type="button"
             onClick={() => setFilter('all')}
             className={`px-3 py-1 rounded-xl font-bold transition border ${
               filter === 'all'
-                ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                : 'bg-zinc-950 text-zinc-400 border-zinc-800 hover:text-zinc-200'
+                ? 'bg-amber-500/15 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 border-amber-500/40'
+                : 'bg-zinc-100 dark:bg-zinc-950 text-zinc-600 dark:text-zinc-400 border-zinc-200 dark:border-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-200'
             }`}
           >
             كل المراجعات ({reviews.length})
           </button>
           <button
+            type="button"
             onClick={() => setFilter('approved')}
             className={`px-3 py-1 rounded-xl font-bold transition border flex items-center gap-1 ${
               filter === 'approved'
-                ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                : 'bg-zinc-950 text-zinc-400 border-zinc-800 hover:text-zinc-200'
+                ? 'bg-amber-500/15 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 border-amber-500/40'
+                : 'bg-zinc-100 dark:bg-zinc-950 text-zinc-600 dark:text-zinc-400 border-zinc-200 dark:border-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-200'
             }`}
           >
-            <ShieldCheck className="w-3 h-3 text-amber-400" />
+            <ShieldCheck className="w-3 h-3 text-amber-500 dark:text-amber-400" />
             <span>المعتمدة من الإدارة ({reviews.filter(r => r.isApproved).length})</span>
           </button>
         </div>
@@ -277,7 +290,7 @@ export const ReviewsSection: React.FC<ReviewsSectionProps> = ({
       {/* Reviews List */}
       <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
         {filteredReviews.length === 0 ? (
-          <div className="text-center py-8 bg-zinc-950/40 border border-dashed border-zinc-800 rounded-2xl text-zinc-500 text-xs">
+          <div className="text-center py-8 bg-zinc-50 dark:bg-zinc-950/40 border border-dashed border-zinc-300 dark:border-zinc-800 rounded-2xl text-zinc-500 text-xs">
             لا توجد مراجعات مسجلة في هذا القسم بعد.
           </div>
         ) : (
@@ -289,13 +302,13 @@ export const ReviewsSection: React.FC<ReviewsSectionProps> = ({
                 key={rev.id}
                 className={`p-3.5 rounded-2xl border transition ${
                   rev.isApproved
-                    ? 'bg-zinc-950/80 border-amber-500/30'
-                    : 'bg-zinc-950/50 border-zinc-800'
+                    ? 'bg-amber-50/50 dark:bg-zinc-950/80 border-amber-500/30'
+                    : 'bg-zinc-50 dark:bg-zinc-950/50 border-zinc-200 dark:border-zinc-800'
                 }`}
               >
                 <div className="flex items-start justify-between gap-3 mb-2">
                   <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-xl overflow-hidden border border-amber-500/30 flex-shrink-0 bg-zinc-800">
+                    <div className="w-8 h-8 rounded-xl overflow-hidden border border-amber-500/30 flex-shrink-0 bg-zinc-200 dark:bg-zinc-800">
                       <img
                         src={rev.userAvatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100'}
                         alt={rev.userName}
@@ -304,10 +317,10 @@ export const ReviewsSection: React.FC<ReviewsSectionProps> = ({
                     </div>
                     <div>
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-xs font-bold text-zinc-100">{rev.userName}</span>
-                        <span className="text-[10px] text-zinc-400">🎓 {rev.academicStage || 'طالب'}</span>
+                        <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">{rev.userName}</span>
+                        <span className="text-[10px] text-zinc-500 dark:text-zinc-400">🎓 {rev.academicStage || 'طالب'}</span>
                         {rev.isApproved && (
-                          <span className="text-[10px] px-2 py-0.2 rounded-full bg-amber-500/10 text-amber-300 font-bold border border-amber-500/30 flex items-center gap-1">
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 dark:bg-amber-500/10 text-amber-700 dark:text-amber-300 font-bold border border-amber-500/30 flex items-center gap-1">
                             <ShieldCheck className="w-2.5 h-2.5" />
                             مراجعة معتمدة ⭐
                           </span>
@@ -318,7 +331,7 @@ export const ReviewsSection: React.FC<ReviewsSectionProps> = ({
                           <Star
                             key={s}
                             className={`w-3 h-3 ${
-                              s <= rev.rating ? 'fill-amber-400 text-amber-400' : 'text-zinc-700'
+                              s <= rev.rating ? 'fill-amber-400 text-amber-400' : 'text-zinc-300 dark:text-zinc-700'
                             }`}
                           />
                         ))}
@@ -330,11 +343,12 @@ export const ReviewsSection: React.FC<ReviewsSectionProps> = ({
                   <div className="flex items-center gap-1">
                     {isAdmin && (
                       <button
+                        type="button"
                         onClick={() => handleToggleApprove(rev.id)}
                         className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition ${
                           rev.isApproved
                             ? 'bg-amber-500 text-zinc-950 border-amber-400'
-                            : 'bg-zinc-900 text-amber-400 border-zinc-800 hover:bg-amber-500/20'
+                            : 'bg-zinc-100 dark:bg-zinc-900 text-amber-700 dark:text-amber-400 border-zinc-200 dark:border-zinc-800 hover:bg-amber-500/20'
                         }`}
                         title={rev.isApproved ? 'إلغاء الاعتماد' : 'اعتماد المراجعة'}
                       >
@@ -343,18 +357,38 @@ export const ReviewsSection: React.FC<ReviewsSectionProps> = ({
                     )}
 
                     {canDelete && (
-                      <button
-                        onClick={() => handleDelete(rev.id)}
-                        className="p-1 rounded-lg text-zinc-500 hover:text-rose-400 hover:bg-rose-500/10 transition"
-                        title="حذف المراجعة"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      confirmDeleteId === rev.id ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => handleConfirmDelete(rev.id)}
+                            className="px-2 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-bold transition"
+                          >
+                            تأكيد الحذف
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteId(null)}
+                            className="px-2 py-1 rounded-lg bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-[10px] font-bold transition"
+                          >
+                            إلغاء
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteId(rev.id)}
+                          className="p-1 rounded-lg text-zinc-500 hover:text-rose-500 dark:hover:text-rose-400 hover:bg-rose-500/10 transition"
+                          title="حذف المراجعة"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )
                     )}
                   </div>
                 </div>
 
-                <p className="text-xs text-zinc-300 leading-relaxed pr-10 whitespace-pre-wrap">
+                <p className="text-xs text-zinc-700 dark:text-zinc-300 leading-relaxed pr-10 whitespace-pre-wrap">
                   {rev.comment}
                 </p>
               </div>

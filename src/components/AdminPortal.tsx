@@ -85,6 +85,9 @@ import {
   getTotalRealViews 
 } from '../utils/contentStore';
 import { ItemReview } from '../types';
+import { savePdfToIdb, resolveBookPdfUrl } from '../utils/pdfStorage';
+import { getStoredTheme, toggleThemeMode, THEME_CHANGED_EVENT, ThemeMode } from '../utils/themeStore';
+import { Sun, Moon } from 'lucide-react';
 
 interface AdminPortalProps {
   isOpen: boolean;
@@ -125,12 +128,21 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   const [studentExams, setStudentExams] = useState<Exam[]>(getAllStudentExams);
   const [loadingData, setLoadingData] = useState(false);
 
-  // Form States - Book (with PDF file upload & Cover upload preview)
+  // Theme state for AdminPortal
+  const [theme, setTheme] = useState<ThemeMode>(getStoredTheme);
+  useEffect(() => {
+    const syncTheme = () => setTheme(getStoredTheme());
+    window.addEventListener(THEME_CHANGED_EVENT, syncTheme);
+    return () => window.removeEventListener(THEME_CHANGED_EVENT, syncTheme);
+  }, []);
+
+  // Form States - Book (with real PDF upload progress, IndexedDB fallback & Cover compression)
   const [showBookModal, setShowBookModal] = useState(false);
   const [editingBookId, setEditingBookId] = useState<number | null>(null);
   const [bookTitle, setBookTitle] = useState('');
   const [bookCategory, setBookCategory] = useState('كتب الطلاب');
   const [bookFilePath, setBookFilePath] = useState('');
+  const [selectedPdfFile, setSelectedPdfFile] = useState<File | null>(null);
   const [bookPdfFileName, setBookPdfFileName] = useState('');
   const [bookPdfSize, setBookPdfSize] = useState('');
   const [bookCoverPath, setBookCoverPath] = useState('');
@@ -138,6 +150,14 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   const [bookIsStudent, setBookIsStudent] = useState(1);
   const [bookGrade, setBookGrade] = useState('الثانوية العامة');
   const [bookDescription, setBookDescription] = useState('');
+  const [isPublishingBook, setIsPublishingBook] = useState(false);
+  const [bookPublishProgress, setBookPublishProgress] = useState(0);
+  const [bookPublishStage, setBookPublishStage] = useState('');
+  const [bookPublishError, setBookPublishError] = useState<string | null>(null);
+  const [adminToastMessage, setAdminToastMessage] = useState<{ title: string; subtitle?: string; isError?: boolean } | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{ title: string; message: string; onConfirm: () => Promise<void> | void } | null>(null);
+  const [previewPdfBook, setPreviewPdfBook] = useState<{ title: string; url: string; isObjectUrl: boolean } | null>(null);
+  const [examFormError, setExamFormError] = useState<string | null>(null);
 
   // Form States - Student Exam (Target audience controls per package or per student)
   const [showExamModal, setShowExamModal] = useState(false);
@@ -406,101 +426,247 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     }
   };
 
+  // Upload PDF via XMLHttpRequest to get real byte-level progress, with IndexedDB fallback
+  const uploadPdfWithProgress = async (
+    file: File,
+    token: string,
+    onProgress: (pct: number) => void
+  ): Promise<string> => {
+    try {
+      const serverUrl = await new Promise<string>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        const formData = new FormData();
+        formData.append('file', file);
+
+        xhr.upload.onprogress = (ev) => {
+          if (ev.lengthComputable && ev.total > 0) {
+            const pct = Math.min(75, Math.max(12, Math.round((ev.loaded / ev.total) * 65) + 10));
+            onProgress(pct);
+          }
+        };
+
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+              const data = JSON.parse(xhr.responseText);
+              if (data.url) {
+                resolve(data.url);
+                return;
+              }
+            } catch {
+              // fallback below
+            }
+          }
+          reject(new Error(`Server upload failed (${xhr.status})`));
+        };
+
+        xhr.onerror = () => reject(new Error('Network error during upload'));
+        xhr.open('POST', '/api/admin/upload-pdf');
+        if (token) {
+          xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        }
+        xhr.send(formData);
+      });
+      return serverUrl;
+    } catch {
+      // Fallback to IndexedDB (supports large files reliably even on serverless deployments)
+      onProgress(55);
+      const idbKey = await savePdfToIdb(`book_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, file);
+      onProgress(75);
+      return idbKey;
+    }
+  };
+
   // BOOK ACTIONS
   const handleSaveBook = async (e: React.FormEvent) => {
     e.preventDefault();
+    setBookPublishError(null);
+
+    if (!bookTitle.trim()) {
+      setBookPublishError('يرجى كتابة عنوان الكتاب أولاً.');
+      return;
+    }
+
+    if (!selectedPdfFile && !bookFilePath.trim()) {
+      setBookPublishError('يرجى اختيار ملف PDF من جهازك أو إدخال رابط مباشر للكتاب.');
+      return;
+    }
+
+    setIsPublishingBook(true);
+    setBookPublishProgress(8);
+    setBookPublishStage('جاري تجهيز ملف الكتاب وبيانات النشر...');
+
     try {
+      let finalFilePath = bookFilePath.trim();
+
+      if (selectedPdfFile) {
+        setBookPublishStage(`جاري رفع ملف "${selectedPdfFile.name}" (${bookPdfSize})...`);
+        setBookPublishProgress(14);
+        finalFilePath = await uploadPdfWithProgress(selectedPdfFile, adminToken, (pct) => {
+          setBookPublishProgress(pct);
+        });
+      } else {
+        setBookPublishProgress(65);
+      }
+
+      setBookPublishStage('جاري حفظ الكتاب ونشره للطلاب فوراً...');
+      setBookPublishProgress(82);
+
       const url = editingBookId ? `/api/books/${editingBookId}` : '/api/books';
       const method = editingBookId ? 'PUT' : 'POST';
 
       const payload = {
-        title: bookTitle,
+        title: bookTitle.trim(),
         category: bookCategory,
-        filepath: bookFilePath,
+        filepath: finalFilePath,
         coverpath: bookCoverPath || 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=600&auto=format&fit=crop&q=80',
         is_student: bookIsStudent,
         grade: bookGrade,
         description: bookDescription,
       };
 
-      // Always save locally in contentStore immediately for rock-solid sync
+      let savedBookFromServer: Book | null = null;
+      try {
+        const res = await fetch(url, {
+          method,
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${adminToken}`,
+          },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.book) {
+            savedBookFromServer = data.book;
+          }
+        }
+      } catch {
+        // Offline / serverless fallback handled cleanly below
+      }
+
+      setBookPublishProgress(94);
+
       if (editingBookId) {
-        saveEditedItem('book', editingBookId, payload);
+        const updatedBook: Book = savedBookFromServer || {
+          id: editingBookId,
+          ...payload,
+          downloads: books.find(b => b.id === editingBookId)?.downloads || 0,
+          views: books.find(b => b.id === editingBookId)?.views || 0,
+          created_at: books.find(b => b.id === editingBookId)?.created_at || new Date().toISOString(),
+        };
+        saveEditedItem('book', editingBookId, updatedBook);
+        setBooks(prev => prev.map(b => (b.id === editingBookId ? updatedBook : b)));
       } else {
-        const newBook: Book = {
+        const createdBook: Book = savedBookFromServer || {
           id: Date.now(),
           ...payload,
           downloads: 0,
           views: 0,
-          created_at: new Date().toISOString()
+          created_at: new Date().toISOString(),
         };
-        saveCustomItem('book', newBook);
+        // Save to local store cleanly (guaranteed non-duplicate id when synced with server!)
+        saveCustomItem('book', createdBook);
+        setBooks(prev => [createdBook, ...prev.filter(b => b.id !== createdBook.id)]);
       }
+
       dispatchContentChanged();
+      setBookPublishProgress(100);
+      setBookPublishStage('تم نشر الكتاب وإتاحته للطلاب بنجاح!');
 
-      await fetch(url, {
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${adminToken}`,
-        },
-        body: JSON.stringify(payload),
-      }).catch(() => {});
+      const publishedTitle = bookTitle.trim();
+      const isEditMode = Boolean(editingBookId);
 
-      setShowBookModal(false);
-      resetBookForm();
-      fetchAdminData();
-      onDataChanged();
+      // Brief delay so admin clearly sees 100% completion bar inside modal before closing
+      setTimeout(() => {
+        setShowBookModal(false);
+        resetBookForm();
+        setIsPublishingBook(false);
+        setBookPublishProgress(0);
+        setBookPublishStage('');
+        setAdminToastMessage({
+          title: isEditMode
+            ? `تم تحديث ونشر الكتاب "${publishedTitle}" بنجاح`
+            : `تم نشر الكتاب "${publishedTitle}" وإتاحته لجميع الطلاب بنجاح`,
+          subtitle: 'أصبح الكتاب ظاهراً الآن في المكتبة ومتاحاً للقراءة والتحميل الفوري.'
+        });
+        fetchAdminData();
+        onDataChanged();
+      }, 650);
     } catch (err: any) {
-      alert(err.message);
+      setIsPublishingBook(false);
+      setBookPublishProgress(0);
+      setBookPublishStage('');
+      setBookPublishError(err?.message || 'حدث خطأ أثناء رفع ونشر الكتاب، يرجى المحاولة مرة أخرى.');
     }
   };
 
   const handlePdfFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setBookPublishError(null);
+    setSelectedPdfFile(file);
     setBookPdfFileName(file.name);
-    const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
-    setBookPdfSize(`${sizeMb} ميجابايت`);
-    if (!bookTitle) {
+    const sizeMb = file.size < 1024 * 1024
+      ? `${Math.max(1, Math.round(file.size / 1024))} كيلوبايت`
+      : `${(file.size / (1024 * 1024)).toFixed(1)} ميجابايت`;
+    setBookPdfSize(sizeMb);
+    if (!bookTitle.trim()) {
       setBookTitle(file.name.replace(/\.[^/.]+$/, ''));
     }
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      if (event.target?.result) {
-        setBookFilePath(event.target.result as string);
-      }
-    };
-    reader.readAsDataURL(file);
+    if (!bookFilePath.trim()) {
+      setBookFilePath(`ملف محلي جاهز للرفع: ${file.name}`);
+    }
   };
 
-  const handleCoverFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleCoverFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      if (event.target?.result) {
-        const url = event.target.result as string;
-        setBookCoverPath(url);
-        setBookCoverPreview(url);
-      }
-    };
-    reader.readAsDataURL(file);
+    try {
+      const compressed = await compressLocalImage(file, 600);
+      setBookCoverPath(compressed);
+      setBookCoverPreview(compressed);
+    } catch {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result) {
+          const url = event.target.result as string;
+          setBookCoverPath(url);
+          setBookCoverPreview(url);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
-  const handleDeleteBook = async (id: number) => {
-    if (!window.confirm('هل أنت متأكد من حذف هذا الكتاب نهائياً من المكتبة؟')) return;
-    try {
-      markItemAsDeleted('book', id);
-      setBooks(prev => prev.filter(b => b.id !== id));
-      await fetch(`/api/books/${id}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${adminToken}` },
-      }).catch(() => {});
-      fetchAdminData();
-      onDataChanged();
-    } catch (err) {
-      // handled
+  const handleDeleteBook = (id: number) => {
+    setConfirmDialog({
+      title: 'حذف الكتاب نهائياً',
+      message: 'هل أنت متأكد من حذف هذا الكتاب نهائياً من المكتبة؟',
+      onConfirm: async () => {
+        try {
+          markItemAsDeleted('book', id);
+          setBooks(prev => prev.filter(b => b.id !== id));
+          await fetch(`/api/books/${id}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${adminToken}` },
+          }).catch(() => {});
+          fetchAdminData();
+          onDataChanged();
+          setAdminToastMessage({ title: 'تم حذف الكتاب من المكتبة بنجاح' });
+        } catch {
+          setAdminToastMessage({ title: 'تعذر حذف الكتاب، يرجى المحاولة مرة أخرى', isError: true });
+        }
+      },
+    });
+  };
+
+  const handlePreviewBookFile = async (filepath: string, title = 'معاينة ملف الكتاب') => {
+    const { url, isObjectUrl } = await resolveBookPdfUrl(filepath);
+    if (url) {
+      setPreviewPdfBook({ title, url, isObjectUrl });
+    } else {
+      setAdminToastMessage({ title: 'ملف PDF غير متاح للمعاينة حالياً', isError: true });
     }
   };
 
@@ -509,6 +675,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     setBookTitle(b.title);
     setBookCategory(b.category);
     setBookFilePath(b.filepath);
+    setSelectedPdfFile(null);
     setBookPdfFileName('');
     setBookPdfSize('');
     setBookCoverPath(b.coverpath);
@@ -516,6 +683,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     setBookIsStudent(b.is_student);
     setBookGrade(b.grade || '');
     setBookDescription(b.description || '');
+    setBookPublishError(null);
+    setBookPublishProgress(0);
+    setBookPublishStage('');
     setShowBookModal(true);
   };
 
@@ -524,6 +694,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     setBookTitle('');
     setBookCategory('كتب الطلاب');
     setBookFilePath('');
+    setSelectedPdfFile(null);
     setBookPdfFileName('');
     setBookPdfSize('');
     setBookCoverPath('');
@@ -531,34 +702,45 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     setBookIsStudent(1);
     setBookGrade('الثانوية العامة');
     setBookDescription('');
+    setBookPublishError(null);
+    setBookPublishProgress(0);
+    setBookPublishStage('');
+    setIsPublishingBook(false);
   };
 
   // STUDENT EXAMS ACTIONS
   const handleDeleteExam = (id: string) => {
-    if (!window.confirm('هل أنت متأكد من حذف هذا الامتحان بالكامل من المنصة؟')) return;
-    const updated = deleteStudentExam(id);
-    setStudentExams(updated);
-    onDataChanged();
+    setConfirmDialog({
+      title: 'حذف الامتحان',
+      message: 'هل أنت متأكد من حذف هذا الامتحان بالكامل من المنصة؟',
+      onConfirm: () => {
+        const updated = deleteStudentExam(id);
+        setStudentExams(updated);
+        onDataChanged();
+        setAdminToastMessage({ title: 'تم حذف الامتحان بنجاح' });
+      },
+    });
   };
 
   const handleSaveExam = (e: React.FormEvent) => {
     e.preventDefault();
+    setExamFormError(null);
     if (!examTitle.trim()) {
-      alert('يرجى إدخال عنوان الامتحان');
+      setExamFormError('يرجى إدخال عنوان الامتحان.');
       return;
     }
     if (examQuestions.length === 0) {
-      alert('يرجى إضافة سؤال واحد على الأقل للامتحان');
+      setExamFormError('يرجى إضافة سؤال واحد على الأقل للامتحان.');
       return;
     }
     for (let i = 0; i < examQuestions.length; i++) {
       const q = examQuestions[i];
       if (!q.question.trim()) {
-        alert(`يرجى كتابة نص السؤال رقم ${i + 1}`);
+        setExamFormError(`يرجى كتابة نص السؤال رقم ${i + 1}.`);
         return;
       }
       if (q.options.some(opt => !opt.trim())) {
-        alert(`يرجى ملء جميع الخيارات الأربعة للسؤال رقم ${i + 1}`);
+        setExamFormError(`يرجى ملء جميع الخيارات الأربعة للسؤال رقم ${i + 1}.`);
         return;
       }
     }
@@ -591,10 +773,14 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     setShowExamModal(false);
     resetExamForm();
     onDataChanged();
-    alert('تمت إضافة الامتحان بنجاح وتوجيهه للفئة المختارة! 🎉');
+    setAdminToastMessage({
+      title: `تمت إضافة ونشر الامتحان "${newExam.title}" بنجاح! 🎉`,
+      subtitle: 'أصبح الامتحان متاحاً للطلاب في بنك الامتحانات فوراً.'
+    });
   };
 
   const resetExamForm = () => {
+    setExamFormError(null);
     setExamTitle('');
     setExamSubject('كيمياء');
     setExamGrade('الصف الثالث الثانوي');
@@ -620,6 +806,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   };
 
   const handleAddQuestionToExam = () => {
+    setExamFormError(null);
     setExamQuestions(prev => [
       ...prev,
       {
@@ -635,9 +822,10 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
   const handleRemoveQuestionFromExam = (index: number) => {
     if (examQuestions.length <= 1) {
-      alert('يجب أن يحتوي الامتحان على سؤال واحد على الأقل');
+      setExamFormError('يجب أن يحتوي الامتحان على سؤال واحد على الأقل.');
       return;
     }
+    setExamFormError(null);
     setExamQuestions(prev => prev.filter((_, idx) => idx !== index));
   };
 
@@ -752,10 +940,31 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         category: summaryCategory,
       };
 
+      const url = editingSummaryId ? `/api/summaries/${editingSummaryId}` : '/api/summaries';
+      const method = editingSummaryId ? 'PUT' : 'POST';
+
+      let savedSumFromServer: Summary | null = null;
+      try {
+        const res = await fetch(url, {
+          method,
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${adminToken}`,
+          },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.summary) savedSumFromServer = data.summary;
+        }
+      } catch {
+        // offline fallback below
+      }
+
       if (editingSummaryId) {
-        saveEditedItem('summary', editingSummaryId, payload);
+        saveEditedItem('summary', editingSummaryId, savedSumFromServer || payload);
       } else {
-        const newSum: Summary = {
+        const newSum: Summary = savedSumFromServer || {
           id: Date.now(),
           ...payload,
           views: 0,
@@ -765,18 +974,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       }
       dispatchContentChanged();
 
-      const url = editingSummaryId ? `/api/summaries/${editingSummaryId}` : '/api/summaries';
-      const method = editingSummaryId ? 'PUT' : 'POST';
-
-      await fetch(url, {
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${adminToken}`,
-        },
-        body: JSON.stringify(payload),
-      }).catch(() => {});
-
+      setAdminToastMessage({
+        title: editingSummaryId ? `تم تحديث الملخص "${summaryTitle}" بنجاح` : `تم نشر الملخص "${summaryTitle}" وإتاحته للطلاب فوراً`,
+      });
       setShowSummaryModal(false);
       setEditingSummaryId(null);
       setSummaryTitle('');
@@ -785,26 +985,32 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       fetchAdminData();
       onDataChanged();
     } catch (err: any) {
-      alert(err.message);
+      setAdminToastMessage({ title: err?.message || 'حدث خطأ أثناء حفظ الملخص', isError: true });
     }
   };
 
-  const handleDeleteSummary = async (id: number) => {
-    if (!window.confirm('هل أنت متأكد من حذف صورة الملخص نهائياً؟')) return;
-    try {
-      markItemAsDeleted('summary', id);
-      setSummaries(prev => prev.filter(s => s.id !== id));
-      dispatchContentChanged();
+  const handleDeleteSummary = (id: number) => {
+    setConfirmDialog({
+      title: 'حذف الملخص نهائياً',
+      message: 'هل أنت متأكد من حذف صورة الملخص نهائياً؟',
+      onConfirm: async () => {
+        try {
+          markItemAsDeleted('summary', id);
+          setSummaries(prev => prev.filter(s => s.id !== id));
+          dispatchContentChanged();
 
-      await fetch(`/api/summaries/${id}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${adminToken}` },
-      }).catch(() => {});
-      fetchAdminData();
-      onDataChanged();
-    } catch (e) {
-      // handled
-    }
+          await fetch(`/api/summaries/${id}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${adminToken}` },
+          }).catch(() => {});
+          fetchAdminData();
+          onDataChanged();
+          setAdminToastMessage({ title: 'تم حذف الملخص بنجاح' });
+        } catch {
+          // handled
+        }
+      },
+    });
   };
 
   // VIDEO ACTIONS
@@ -831,10 +1037,31 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         duration: videoDuration,
       };
 
+      const url = editingVideoId ? `/api/videos/${editingVideoId}` : '/api/videos';
+      const method = editingVideoId ? 'PUT' : 'POST';
+
+      let savedVidFromServer: Video | null = null;
+      try {
+        const res = await fetch(url, {
+          method,
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${adminToken}`,
+          },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.video) savedVidFromServer = data.video;
+        }
+      } catch {
+        // offline fallback
+      }
+
       if (editingVideoId) {
-        saveEditedItem('video', editingVideoId, payload);
+        saveEditedItem('video', editingVideoId, savedVidFromServer || payload);
       } else {
-        const newVid: Video = {
+        const newVid: Video = savedVidFromServer || {
           id: Date.now(),
           ...payload,
           views: 0,
@@ -844,18 +1071,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       }
       dispatchContentChanged();
 
-      const url = editingVideoId ? `/api/videos/${editingVideoId}` : '/api/videos';
-      const method = editingVideoId ? 'PUT' : 'POST';
-
-      await fetch(url, {
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${adminToken}`,
-        },
-        body: JSON.stringify(payload),
-      }).catch(() => {});
-
+      setAdminToastMessage({
+        title: editingVideoId ? `تم تحديث الفيديو "${videoTitle}" بنجاح` : `تم نشر الفيديو "${videoTitle}" وإتاحته للطلاب فوراً`,
+      });
       setShowVideoModal(false);
       setEditingVideoId(null);
       setVideoTitle('');
@@ -863,26 +1081,32 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       fetchAdminData();
       onDataChanged();
     } catch (err: any) {
-      alert(err.message);
+      setAdminToastMessage({ title: err?.message || 'حدث خطأ أثناء حفظ الفيديو', isError: true });
     }
   };
 
-  const handleDeleteVideo = async (id: number) => {
-    if (!window.confirm('هل أنت متأكد من حذف مقطع الفيديو نهائياً؟')) return;
-    try {
-      markItemAsDeleted('video', id);
-      setVideos(prev => prev.filter(v => v.id !== id));
-      dispatchContentChanged();
+  const handleDeleteVideo = (id: number) => {
+    setConfirmDialog({
+      title: 'حذف مقطع الفيديو نهائياً',
+      message: 'هل أنت متأكد من حذف مقطع الفيديو نهائياً؟',
+      onConfirm: async () => {
+        try {
+          markItemAsDeleted('video', id);
+          setVideos(prev => prev.filter(v => v.id !== id));
+          dispatchContentChanged();
 
-      await fetch(`/api/videos/${id}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${adminToken}` },
-      }).catch(() => {});
-      fetchAdminData();
-      onDataChanged();
-    } catch (e) {
-      // handled
-    }
+          await fetch(`/api/videos/${id}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${adminToken}` },
+          }).catch(() => {});
+          fetchAdminData();
+          onDataChanged();
+          setAdminToastMessage({ title: 'تم حذف الفيديو بنجاح' });
+        } catch {
+          // handled
+        }
+      },
+    });
   };
 
   // ARTICLE ACTIONS
@@ -897,10 +1121,31 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         readTime: articleReadTime,
       };
 
+      const url = editingArticleId ? `/api/articles/${editingArticleId}` : '/api/articles';
+      const method = editingArticleId ? 'PUT' : 'POST';
+
+      let savedArtFromServer: Article | null = null;
+      try {
+        const res = await fetch(url, {
+          method,
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${adminToken}`,
+          },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.article) savedArtFromServer = data.article;
+        }
+      } catch {
+        // offline fallback
+      }
+
       if (editingArticleId) {
-        saveEditedItem('article', editingArticleId, payload);
+        saveEditedItem('article', editingArticleId, savedArtFromServer || payload);
       } else {
-        const newArt: Article = {
+        const newArt: Article = savedArtFromServer || {
           id: Date.now(),
           ...payload,
           views: 0,
@@ -910,18 +1155,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       }
       dispatchContentChanged();
 
-      const url = editingArticleId ? `/api/articles/${editingArticleId}` : '/api/articles';
-      const method = editingArticleId ? 'PUT' : 'POST';
-
-      await fetch(url, {
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${adminToken}`,
-        },
-        body: JSON.stringify(payload),
-      }).catch(() => {});
-
+      setAdminToastMessage({
+        title: editingArticleId ? `تم تحديث المقال "${articleTitle}" بنجاح` : `تم نشر المقال "${articleTitle}" وإتاحته للطلاب فوراً`,
+      });
       setShowArticleModal(false);
       setEditingArticleId(null);
       setArticleTitle('');
@@ -931,26 +1167,32 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       fetchAdminData();
       onDataChanged();
     } catch (err: any) {
-      alert(err.message);
+      setAdminToastMessage({ title: err?.message || 'حدث خطأ أثناء حفظ المقال', isError: true });
     }
   };
 
-  const handleDeleteArticle = async (id: number) => {
-    if (!window.confirm('هل أنت متأكد من حذف هذا المقال نهائياً؟')) return;
-    try {
-      markItemAsDeleted('article', id);
-      setArticles(prev => prev.filter(a => a.id !== id));
-      dispatchContentChanged();
+  const handleDeleteArticle = (id: number) => {
+    setConfirmDialog({
+      title: 'حذف المقال نهائياً',
+      message: 'هل أنت متأكد من حذف هذا المقال نهائياً؟',
+      onConfirm: async () => {
+        try {
+          markItemAsDeleted('article', id);
+          setArticles(prev => prev.filter(a => a.id !== id));
+          dispatchContentChanged();
 
-      await fetch(`/api/articles/${id}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${adminToken}` },
-      }).catch(() => {});
-      fetchAdminData();
-      onDataChanged();
-    } catch (e) {
-      // handled
-    }
+          await fetch(`/api/articles/${id}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${adminToken}` },
+          }).catch(() => {});
+          fetchAdminData();
+          onDataChanged();
+          setAdminToastMessage({ title: 'تم حذف المقال بنجاح' });
+        } catch {
+          // handled
+        }
+      },
+    });
   };
 
   // SECURITY: CHANGE PASSWORD
@@ -1007,33 +1249,45 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     }
   };
 
-  const handleDeleteUser = async (id: string) => {
-    if (!window.confirm('هل أنت متأكد من حذف هذا المستخدم وسجلاته؟')) return;
-    try {
-      markItemAsDeleted('user', id);
-      deleteStudentLocally(id);
-      setUsers(prev => prev.filter(u => u.id !== id));
-      await fetch(`/api/admin/users/${id}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${adminToken}` },
-      }).catch(() => {});
-      fetchAdminData();
-    } catch (e) {
-      // already applied locally
-    }
+  const handleDeleteUser = (id: string) => {
+    setConfirmDialog({
+      title: 'حذف حساب المستخدم',
+      message: 'هل أنت متأكد من حذف هذا المستخدم وسجلاته؟',
+      onConfirm: async () => {
+        try {
+          markItemAsDeleted('user', id);
+          deleteStudentLocally(id);
+          setUsers(prev => prev.filter(u => u.id !== id));
+          await fetch(`/api/admin/users/${id}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${adminToken}` },
+          }).catch(() => {});
+          fetchAdminData();
+          setAdminToastMessage({ title: 'تم حذف المستخدم بنجاح' });
+        } catch {
+          // already applied locally
+        }
+      },
+    });
   };
 
-  const handleClearLogs = async () => {
-    if (!window.confirm('هل تريد تصفير سجلات الأمان وبدء دورة أمنية جديدة؟')) return;
-    try {
-      await fetch('/api/admin/security/clear-logs', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${adminToken}` },
-      });
-      fetchAdminData();
-    } catch (e) {
-      alert('فشل تصفير السجلات');
-    }
+  const handleClearLogs = () => {
+    setConfirmDialog({
+      title: 'تصفير سجلات الأمان',
+      message: 'هل تريد تصفير سجلات الأمان وبدء دورة أمنية جديدة؟',
+      onConfirm: async () => {
+        try {
+          await fetch('/api/admin/security/clear-logs', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${adminToken}` },
+          });
+          fetchAdminData();
+          setAdminToastMessage({ title: 'تم تصفير سجلات الأمان بنجاح' });
+        } catch {
+          setAdminToastMessage({ title: 'فشل تصفير السجلات', isError: true });
+        }
+      },
+    });
   };
 
   if (!isOpen) return null;
@@ -1045,13 +1299,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-xl animate-in fade-in duration-200">
         <div 
-          className="relative w-full max-w-md bg-zinc-950 border border-amber-500/40 rounded-3xl p-8 shadow-2xl text-right overflow-hidden"
+          className="relative w-full max-w-md bg-white dark:bg-zinc-950 border border-amber-500/40 rounded-3xl p-8 shadow-2xl text-right overflow-hidden"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Close */}
           <button
             onClick={onClose}
-            className="absolute top-5 left-5 p-2 rounded-xl bg-zinc-900 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition"
+            className="absolute top-5 left-5 p-2 rounded-xl bg-zinc-100 dark:bg-zinc-900 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-200 dark:hover:bg-zinc-800 transition"
           >
             <X className="w-4 h-4" />
           </button>
@@ -1060,14 +1314,14 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
             <div className="w-16 h-16 mx-auto rounded-3xl bg-gradient-to-tr from-amber-600 via-amber-500 to-amber-300 flex items-center justify-center text-zinc-950 shadow-xl mb-3">
               <ShieldCheck className="w-8 h-8 stroke-[2.3]" />
             </div>
-            <h2 className="text-xl font-bold text-amber-100">بوابة تحكم المدير والأمان</h2>
-            <p className="text-xs text-zinc-400 mt-1">
+            <h2 className="text-xl font-bold text-amber-800 dark:text-amber-100">بوابة تحكم المدير والأمان</h2>
+            <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
               الرجاء إدخال بيانات الاعتماد الإدارية المصرح بها للوصول إلى لوحة الأمان والتحكم.
             </p>
           </div>
 
           {loginError && (
-            <div className="mb-4 p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
+            <div className="mb-4 p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-700 dark:text-rose-300 text-xs flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 flex-shrink-0" />
               <span>{loginError}</span>
             </div>
@@ -1075,7 +1329,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
           <form onSubmit={handleAdminLogin} className="space-y-4">
             <div>
-              <label className="block text-xs font-semibold text-zinc-300 mb-1.5">اسم مستخدم الأدمن</label>
+              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5">اسم مستخدم الأدمن</label>
               <div className="relative">
                 <input
                   type="text"
@@ -1083,14 +1337,14 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                   value={adminUsernameInput}
                   onChange={(e) => setAdminUsernameInput(e.target.value)}
                   placeholder="ARM"
-                  className="w-full py-2.5 pr-10 pl-4 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                  className="w-full py-2.5 pr-10 pl-4 bg-slate-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                 />
                 <KeyRound className="w-4 h-4 text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-zinc-300 mb-1.5">كلمة مرور الأدمن</label>
+              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5">كلمة مرور الأدمن</label>
               <div className="relative">
                 <input
                   type="password"
@@ -1098,7 +1352,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                   value={adminPassInput}
                   onChange={(e) => setAdminPassInput(e.target.value)}
                   placeholder="•••••••••"
-                  className="w-full py-2.5 pr-10 pl-4 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                  className="w-full py-2.5 pr-10 pl-4 bg-slate-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                 />
                 <Lock className="w-4 h-4 text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
               </div>
@@ -1121,47 +1375,57 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   // FULL-FEATURED ADMIN & SECURITY MANAGEMENT INTERFACE
   // -------------------------------------------------------------------------
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-50 flex flex-col bg-slate-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 overflow-hidden animate-in fade-in duration-200">
       
       {/* Top Admin Security Bar */}
-      <header className="bg-zinc-900/90 border-b border-amber-500/30 px-6 py-3.5 flex flex-wrap items-center justify-between gap-4">
+      <header className="bg-white/95 dark:bg-zinc-900/90 border-b border-amber-500/30 px-6 py-3.5 flex flex-wrap items-center justify-between gap-4 shadow-sm dark:shadow-none">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-2xl bg-amber-500 text-zinc-950 flex items-center justify-center font-bold shadow-lg">
             <ShieldCheck className="w-5 h-5 stroke-[2.3]" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-base font-bold text-amber-200">مركز إدارة المنصة والأمان</h2>
-              <span className="text-[10px] bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              <h2 className="text-base font-bold text-amber-800 dark:text-amber-200">مركز إدارة المنصة والأمان</h2>
+              <span className="text-[10px] bg-emerald-500/15 border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 animate-pulse"></span>
                 الأمان نشط ومحمي
               </span>
             </div>
-            <p className="text-[11px] text-zinc-400">
-              جلسة المدير: <span className="text-amber-400 font-bold">{adminUser}</span> | محرك البيانات: {stats?.analytics.database || 'Local High-Speed Engine'}
+            <p className="text-[11px] text-zinc-600 dark:text-zinc-400">
+              جلسة المدير: <span className="text-amber-700 dark:text-amber-400 font-bold">{adminUser}</span> | محرك البيانات: {stats?.analytics.database || 'Local High-Speed Engine'}
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5 flex-wrap">
+          {/* Theme Switcher Button */}
+          <button
+            onClick={() => setTheme(toggleThemeMode())}
+            className="p-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-amber-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 border border-zinc-200 dark:border-zinc-700 transition flex items-center gap-1.5 text-xs font-bold"
+            title={theme === 'dark' ? 'التبديل للوضع النهاري' : 'التبديل للوضع الداكن'}
+          >
+            {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-amber-700" />}
+            <span className="hidden md:inline">{theme === 'dark' ? 'نهاري' : 'داكن'}</span>
+          </button>
+
           {/* Real-time Subscriber Notifications Bell */}
           <button
             onClick={() => setActiveAdminTab('subscriptions')}
             className={`relative px-3 py-1.5 rounded-xl transition flex items-center gap-2 border text-xs font-bold ${
               paymentRequests.filter(p => p.status === 'pending').length > 0
-                ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 hover:bg-amber-500/30 animate-pulse'
-                : 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:text-amber-400 hover:bg-zinc-700'
+                ? 'bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/50 hover:bg-amber-500/25 animate-pulse'
+                : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:text-amber-600 dark:hover:text-amber-400'
             }`}
             title="إشعارات الاشتراكات والمدفوعات الواردة"
           >
-            <Bell className="w-4 h-4 text-amber-400" />
+            <Bell className="w-4 h-4 text-amber-600 dark:text-amber-400" />
             <span className="hidden sm:inline">إشعارات المشتركين</span>
             {paymentRequests.filter(p => p.status === 'pending').length > 0 ? (
               <span className="px-2 py-0.5 rounded-full bg-rose-500 text-white text-[10px] font-black animate-bounce">
                 {paymentRequests.filter(p => p.status === 'pending').length} طلب جديد
               </span>
             ) : (
-              <span className="text-[10px] text-zinc-400">
+              <span className="text-[10px] text-zinc-500 dark:text-zinc-400">
                 ({paymentRequests.length})
               </span>
             )}
@@ -1169,17 +1433,17 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
           <button
             onClick={() => fetchAdminData()}
-            className="p-2 rounded-xl bg-zinc-800 text-zinc-300 hover:text-amber-400 hover:bg-zinc-700 transition"
+            className="p-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-zinc-200 dark:hover:bg-zinc-700 border border-zinc-200 dark:border-zinc-700 transition"
             title="تحديث البيانات"
           >
-            <RefreshCw className={`w-4 h-4 ${loadingData ? 'animate-spin text-amber-400' : ''}`} />
+            <RefreshCw className={`w-4 h-4 ${loadingData ? 'animate-spin text-amber-500' : ''}`} />
           </button>
 
           <a
             href="/api/admin/backup"
             target="_blank"
             rel="noopener noreferrer"
-            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-800 text-amber-300 hover:bg-zinc-700 text-xs font-semibold border border-zinc-700 transition"
+            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-amber-800 dark:text-amber-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-xs font-semibold border border-zinc-200 dark:border-zinc-700 transition"
           >
             <Download className="w-3.5 h-3.5" />
             <span>نسخة احتياطية JSON</span>
@@ -1187,7 +1451,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
           <button
             onClick={onClose}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-800 text-zinc-300 hover:text-white text-xs font-semibold border border-zinc-700 transition"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:text-zinc-950 dark:hover:text-white text-xs font-semibold border border-zinc-200 dark:border-zinc-700 transition"
           >
             <ArrowRight className="w-3.5 h-3.5" />
             <span>عرض المنصة الرئيسية</span>
@@ -1195,7 +1459,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
           <button
             onClick={handleAdminLogout}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 text-xs font-bold border border-rose-500/30 transition"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-700 dark:text-rose-300 text-xs font-bold border border-rose-500/30 transition"
           >
             <LogOut className="w-3.5 h-3.5" />
             <span>خروج المدير</span>
@@ -1204,7 +1468,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       </header>
 
       {/* Admin Navigation Tabs */}
-      <nav className="bg-zinc-900/60 border-b border-zinc-800 px-6 flex flex-wrap gap-2 py-2 overflow-x-auto">
+      <nav className="bg-white/80 dark:bg-zinc-900/60 border-b border-zinc-200 dark:border-zinc-800 px-6 flex flex-wrap gap-2 py-2 overflow-x-auto">
         {[
           { id: 'dashboard', label: '📊 لوحة المؤشرات والإحصائيات', icon: BarChart3 },
           { id: 'subscriptions', label: `⚡ باقات واشتراكات الطلاب ${paymentRequests.filter(p => p.status === 'pending').length ? `(${paymentRequests.filter(p => p.status === 'pending').length} معلق)` : ''}`, icon: Zap },
@@ -1223,7 +1487,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
             className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 whitespace-nowrap ${
               activeAdminTab === tab.id
                 ? 'bg-amber-500 text-zinc-950 shadow-md shadow-amber-500/20 font-extrabold'
-                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
+                : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800/60'
             }`}
           >
             <span>{tab.label}</span>
@@ -1234,6 +1498,36 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       {/* Main Content Area */}
       <main className="flex-1 overflow-y-auto p-6 max-w-7xl mx-auto w-full space-y-6">
 
+        {/* Global Admin Confirmation Toast Banner */}
+        {adminToastMessage && (
+          <div className={`p-4 rounded-2xl flex items-center justify-between gap-4 shadow-lg animate-in fade-in slide-in-from-top-2 border ${
+            adminToastMessage.isError
+              ? 'bg-rose-500/15 border-rose-500/40 text-rose-800 dark:text-rose-200'
+              : 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
+          }`}>
+            <div className="flex items-center gap-3">
+              <div className={`w-9 h-9 rounded-xl text-zinc-950 flex items-center justify-center flex-shrink-0 shadow ${
+                adminToastMessage.isError ? 'bg-rose-500 text-white' : 'bg-emerald-500'
+              }`}>
+                {adminToastMessage.isError ? <AlertTriangle className="w-5 h-5" /> : <CheckCircle2 className="w-5 h-5" />}
+              </div>
+              <div>
+                <p className="text-xs sm:text-sm font-extrabold">{adminToastMessage.title}</p>
+                {adminToastMessage.subtitle && (
+                  <p className="text-[11px] opacity-85 mt-0.5">{adminToastMessage.subtitle}</p>
+                )}
+              </div>
+            </div>
+            <button
+              onClick={() => setAdminToastMessage(null)}
+              className={`p-1.5 rounded-lg transition ${adminToastMessage.isError ? 'hover:bg-rose-500/20' : 'hover:bg-emerald-500/20'}`}
+              title="إغلاق الإشعار"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* ------------------------------------------------------------------- */}
         {/* 1. DASHBOARD OVERVIEW */}
         {/* ------------------------------------------------------------------- */}
@@ -1241,19 +1535,19 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           <div className="space-y-6 animate-in fade-in">
 
             {/* REAL-TIME SUBSCRIBER NOTIFICATIONS FEED (Requested explicitly by Admin) */}
-            <div className="bg-gradient-to-r from-zinc-900 via-amber-950/40 to-zinc-900 border-2 border-amber-500/40 rounded-3xl p-6 shadow-2xl relative overflow-hidden">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-zinc-800 pb-4">
+            <div className="bg-gradient-to-r from-amber-50 via-white to-amber-50/70 dark:from-zinc-900 dark:via-amber-950/40 dark:to-zinc-900 border-2 border-amber-500/40 rounded-3xl p-6 shadow-md dark:shadow-2xl relative overflow-hidden">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-zinc-200 dark:border-zinc-800 pb-4">
                 <div className="flex items-center gap-3">
                   <span className={`w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg ${
                     paymentRequests.filter(p => p.status === 'pending').length > 0
                       ? 'bg-amber-500 text-zinc-950 animate-bounce'
-                      : 'bg-zinc-800 text-amber-400'
+                      : 'bg-amber-100 dark:bg-zinc-800 text-amber-600 dark:text-amber-400'
                   }`}>
                     <Bell className="w-6 h-6 stroke-[2.5]" />
                   </span>
                   <div>
                     <div className="flex items-center gap-2">
-                      <h3 className="text-base font-black text-amber-200">
+                      <h3 className="text-base font-black text-amber-800 dark:text-amber-200">
                         إشعارات المشتركين الجدد وطلبات تفعيل الباقات
                       </h3>
                       {paymentRequests.filter(p => p.status === 'pending').length > 0 ? (
@@ -1261,12 +1555,12 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                           {paymentRequests.filter(p => p.status === 'pending').length} تحويلات بانتظار التأكيد ⏳
                         </span>
                       ) : (
-                        <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[11px] font-bold">
+                        <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40 text-[11px] font-bold">
                           جميع الطلبات مفعلة ومحدثة ✅
                         </span>
                       )}
                     </div>
-                    <p className="text-xs text-zinc-400 mt-1">
+                    <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
                       إشعارات فورية بكل طالب يقوم بالتحويل على فودافون كاش (+201092467818)، اتصالات كاش (+201107093454)، أو انستاباي.
                     </p>
                   </div>
@@ -1286,8 +1580,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
               {/* Notification Items List */}
               <div className="mt-4 space-y-3">
                 {paymentRequests.length === 0 ? (
-                  <div className="p-6 text-center bg-zinc-950/50 rounded-2xl border border-zinc-800/80">
-                    <p className="text-xs text-zinc-400">
+                  <div className="p-6 text-center bg-white/80 dark:bg-zinc-950/50 rounded-2xl border border-zinc-200 dark:border-zinc-800/80">
+                    <p className="text-xs text-zinc-600 dark:text-zinc-400">
                       لا توجد طلبات اشتراك أو إيصالات تحويل مسجلة بعد. عند قيام أي طالب بالتحويل وإرفاق الإيصال، سيظهر إشعاره فوراً هنا وفي شريط الأدمن بالأعلى.
                     </p>
                   </div>
@@ -1297,47 +1591,46 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                       key={req.id}
                       className={`p-4 rounded-2xl border transition flex flex-col md:flex-row items-start md:items-center justify-between gap-4 ${
                         req.status === 'pending'
-                          ? 'bg-amber-950/30 border-amber-500/60 shadow-lg'
-                          : 'bg-zinc-950/60 border-zinc-800/80'
+                          ? 'bg-amber-50 dark:bg-amber-950/30 border-amber-500/60 shadow-sm dark:shadow-lg'
+                          : 'bg-white dark:bg-zinc-950/60 border-zinc-200 dark:border-zinc-800/80'
                       }`}
                     >
                       <div className="flex items-center gap-3.5">
-                        <span className="w-10 h-10 rounded-xl bg-zinc-900 border border-zinc-700 flex items-center justify-center text-base flex-shrink-0">
+                        <span className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 flex items-center justify-center text-base flex-shrink-0">
                           {req.paymentMethod === 'vodafone' ? '📱' : req.paymentMethod === 'etisalat' ? '💚' : '⚡'}
                         </span>
                         <div>
                           <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-bold text-sm text-zinc-100">{req.userName}</span>
+                            <span className="font-bold text-sm text-zinc-900 dark:text-zinc-100">{req.userName}</span>
                             <span className="text-xs text-zinc-500 font-mono">({req.userEmail})</span>
-                            <span className="px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[11px] font-bold">
+                            <span className="px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/30 text-[11px] font-bold">
                               {req.planName} - {req.amountEGP} ج.م
                             </span>
                             <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
                               req.status === 'approved' 
-                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' 
+                                ? 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40' 
                                 : req.status === 'rejected'
-                                ? 'bg-rose-500/20 text-rose-300'
+                                ? 'bg-rose-500/20 text-rose-700 dark:text-rose-300'
                                 : 'bg-amber-500 text-zinc-950 font-bold'
                             }`}>
                               {req.status === 'approved' ? 'مفعل بنجاح ✅' : req.status === 'rejected' ? 'مرفوض ✕' : 'طلب جديد معلق ⏳'}
                             </span>
                           </div>
 
-                          <div className="flex items-center gap-4 text-[11px] text-zinc-400 mt-1 flex-wrap font-mono">
-                            <span>وسيلة الدفع: <strong className="text-zinc-200">{req.paymentMethod === 'vodafone' ? 'فودافون كاش' : req.paymentMethod === 'etisalat' ? 'اتصالات كاش' : 'انستاباي'}</strong></span>
-                            <span>رقم المحوّل: <strong className="text-amber-400">{req.senderPhone || 'غير مدخل'}</strong></span>
-                            <span>كود العملية: <strong className="text-zinc-300">{req.transactionRef || '-'}</strong></span>
+                          <div className="flex items-center gap-4 text-[11px] text-zinc-600 dark:text-zinc-400 mt-1 flex-wrap font-mono">
+                            <span>وسيلة الدفع: <strong className="text-zinc-900 dark:text-zinc-200">{req.paymentMethod === 'vodafone' ? 'فودافون كاش' : req.paymentMethod === 'etisalat' ? 'اتصالات كاش' : 'انستاباي'}</strong></span>
+                            <span>رقم المحوّل: <strong className="text-amber-700 dark:text-amber-400">{req.senderPhone || 'غير مدخل'}</strong></span>
+                            <span>كود العملية: <strong className="text-zinc-800 dark:text-zinc-300">{req.transactionRef || '-'}</strong></span>
                             <span>التوقيت: {new Date(req.submittedAt).toLocaleTimeString('ar-EG')} - {new Date(req.submittedAt).toLocaleDateString('ar-EG')}</span>
                           </div>
                         </div>
                       </div>
 
-                      {/* Instant Action Buttons */}
                       <div className="flex items-center gap-2 flex-shrink-0 w-full md:w-auto justify-end">
                         {req.receiptImage && (
                           <button
                             onClick={() => setSelectedReceiptPreview(req.receiptImage as string)}
-                            className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-amber-300 border border-zinc-700 text-xs font-bold transition flex items-center gap-1"
+                            className="px-3 py-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-amber-700 dark:text-amber-300 border border-zinc-200 dark:border-zinc-700 text-xs font-bold transition flex items-center gap-1"
                           >
                             <Eye className="w-3.5 h-3.5" />
                             <span>معاينة الإيصال</span>
@@ -1350,7 +1643,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                           )}`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="px-3 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 text-xs font-bold transition flex items-center gap-1"
+                          className="px-3 py-1.5 rounded-xl bg-emerald-600/15 dark:bg-emerald-600/20 hover:bg-emerald-600/25 dark:hover:bg-emerald-600/30 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40 text-xs font-bold transition flex items-center gap-1"
                           title="تواصل مع الطالب عبر واتساب"
                         >
                           <MessageCircle className="w-3.5 h-3.5" />
@@ -1363,7 +1656,10 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                               updatePaymentRequestStatus(req.id, 'approved');
                               setPaymentRequests(getPaymentRequests());
                               setStudentSubscriptionsMap(getAllSavedSubscriptions());
-                              alert(`تم تفعيل باقة (${req.planName}) للطالب ${req.userName} فوراً وبنجاح! ✅`);
+                              setAdminToastMessage({
+                                title: `تم تفعيل باقة (${req.planName}) للطالب ${req.userName} فوراً! ✅`,
+                                subtitle: 'تم تحديث حالة الاشتراك وفتح كافة المميزات للطالب'
+                              });
                             }}
                             className="px-3 py-1.5 rounded-xl bg-emerald-500 text-zinc-950 font-black text-xs hover:brightness-110 transition flex items-center gap-1 shadow"
                           >
@@ -1380,79 +1676,79 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
             {/* Real Stat Cards (100% Genuine Data) */}
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-              <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 relative overflow-hidden">
-                <span className="text-2xl font-black text-amber-400 font-mono">{books.length}</span>
-                <p className="text-xs text-zinc-400 mt-1 font-semibold">إجمالي الكتب والمناهج</p>
-                <div className="text-[11px] text-amber-500 mt-2 font-bold">
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-5 relative overflow-hidden shadow-sm dark:shadow-none">
+                <span className="text-2xl font-black text-amber-600 dark:text-amber-400 font-mono">{books.length}</span>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 font-semibold">إجمالي الكتب والمناهج</p>
+                <div className="text-[11px] text-amber-700 dark:text-amber-500 mt-2 font-bold">
                   {books.filter(b => b.is_student === 1).length} مناهج دراسية معتمدة
                 </div>
               </div>
 
-              <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 relative overflow-hidden">
-                <span className="text-2xl font-black text-emerald-400 font-mono">{users.length}</span>
-                <p className="text-xs text-zinc-400 mt-1 font-semibold">الطلاب والمستخدمون</p>
-                <div className="text-[11px] text-emerald-500 mt-2 font-bold">
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-5 relative overflow-hidden shadow-sm dark:shadow-none">
+                <span className="text-2xl font-black text-emerald-600 dark:text-emerald-400 font-mono">{users.length}</span>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 font-semibold">الطلاب والمستخدمون</p>
+                <div className="text-[11px] text-emerald-700 dark:text-emerald-500 mt-2 font-bold">
                   {users.filter(u => u.status === 'active').length} حسابات نشطة حالياً
                 </div>
               </div>
 
-              <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 relative overflow-hidden">
-                <span className="text-2xl font-black text-amber-300 font-mono">
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-5 relative overflow-hidden shadow-sm dark:shadow-none">
+                <span className="text-2xl font-black text-amber-700 dark:text-amber-300 font-mono">
                   {getTotalRealDownloads(books)}
                 </span>
-                <p className="text-xs text-zinc-400 mt-1 font-semibold">إجمالي التنزيلات الحقيقية</p>
-                <div className="text-[11px] text-amber-500 mt-2 font-bold">تحميلات PDF فعلية من الطلاب</div>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 font-semibold">إجمالي التنزيلات الحقيقية</p>
+                <div className="text-[11px] text-amber-700 dark:text-amber-500 mt-2 font-bold">تحميلات PDF فعلية من الطلاب</div>
               </div>
 
-              <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 relative overflow-hidden">
-                <span className="text-2xl font-black text-cyan-400 font-mono">
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-5 relative overflow-hidden shadow-sm dark:shadow-none">
+                <span className="text-2xl font-black text-cyan-600 dark:text-cyan-400 font-mono">
                   {getTotalRealViews(books, summaries, videos, articles)}
                 </span>
-                <p className="text-xs text-zinc-400 mt-1 font-semibold">إجمالي المشاهدات الحقيقية</p>
-                <div className="text-[11px] text-cyan-500 mt-2 font-bold">مشاهدات حقيقية لكافة المواد</div>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 font-semibold">إجمالي المشاهدات الحقيقية</p>
+                <div className="text-[11px] text-cyan-700 dark:text-cyan-500 mt-2 font-bold">مشاهدات حقيقية لكافة المواد</div>
               </div>
 
-              <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 relative overflow-hidden">
-                <span className="text-2xl font-black text-purple-400 font-mono">{studentExams.length}</span>
-                <p className="text-xs text-zinc-400 mt-1 font-semibold">الامتحانات والنماذج</p>
-                <div className="text-[11px] text-purple-400 mt-2 font-bold">بنك أسئلة متاح للطلاب</div>
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-5 relative overflow-hidden shadow-sm dark:shadow-none">
+                <span className="text-2xl font-black text-purple-600 dark:text-purple-400 font-mono">{studentExams.length}</span>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 font-semibold">الامتحانات والنماذج</p>
+                <div className="text-[11px] text-purple-700 dark:text-purple-400 mt-2 font-bold">بنك أسئلة متاح للطلاب</div>
               </div>
 
-              <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 relative overflow-hidden">
-                <span className="text-2xl font-black text-blue-400 font-mono">{allReviews.length}</span>
-                <p className="text-xs text-zinc-400 mt-1 font-semibold">تقييمات ومراجعات الطلاب</p>
-                <div className="text-[11px] text-blue-400 mt-2 font-bold">
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-5 relative overflow-hidden shadow-sm dark:shadow-none">
+                <span className="text-2xl font-black text-blue-600 dark:text-blue-400 font-mono">{allReviews.length}</span>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 font-semibold">تقييمات ومراجعات الطلاب</p>
+                <div className="text-[11px] text-blue-700 dark:text-blue-400 mt-2 font-bold">
                   {allReviews.filter(r => r.isApproved).length} مراجعات معتمدة
                 </div>
               </div>
 
-              <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 relative overflow-hidden">
-                <span className="text-2xl font-black text-emerald-400 font-mono">
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-5 relative overflow-hidden shadow-sm dark:shadow-none">
+                <span className="text-2xl font-black text-emerald-600 dark:text-emerald-400 font-mono">
                   {paymentRequests.filter(r => r.status === 'approved').reduce((acc, r) => acc + (r.amountEGP || 50), 0)} ج.م
                 </span>
-                <p className="text-xs text-zinc-400 mt-1 font-semibold">إيرادات الاشتراكات المؤكدة</p>
-                <div className="text-[11px] text-emerald-500 mt-2 font-bold">
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 font-semibold">إيرادات الاشتراكات المؤكدة</p>
+                <div className="text-[11px] text-emerald-700 dark:text-emerald-500 mt-2 font-bold">
                   {paymentRequests.filter(r => r.status === 'approved').length} اشتراكات مفعلة
                 </div>
               </div>
 
-              <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 relative overflow-hidden">
-                <span className="text-2xl font-black text-zinc-300 font-mono">
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-5 relative overflow-hidden shadow-sm dark:shadow-none">
+                <span className="text-2xl font-black text-zinc-800 dark:text-zinc-300 font-mono">
                   {logs.length}
                 </span>
-                <p className="text-xs text-zinc-400 mt-1 font-semibold">سجلات العمليات الإدارية</p>
-                <div className="text-[11px] text-zinc-400 mt-2 font-bold">أحداث أمنية موثقة</div>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 font-semibold">سجلات العمليات الإدارية</p>
+                <div className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-2 font-bold">أحداث أمنية موثقة</div>
               </div>
             </div>
 
             {/* Quick Actions & Security Banner */}
-            <div className="bg-gradient-to-r from-amber-950/40 via-zinc-900 to-zinc-900 border border-amber-500/30 rounded-3xl p-6 flex flex-col md:flex-row items-center justify-between gap-6">
+            <div className="bg-gradient-to-r from-amber-50 via-white to-slate-50 dark:from-amber-950/40 dark:via-zinc-900 dark:to-zinc-900 border border-amber-500/30 rounded-3xl p-6 flex flex-col md:flex-row items-center justify-between gap-6 shadow-sm dark:shadow-none">
               <div>
-                <h3 className="text-lg font-bold text-amber-200 flex items-center gap-2">
-                  <Sparkles className="w-5 h-5 text-amber-400" />
+                <h3 className="text-lg font-bold text-amber-800 dark:text-amber-200 flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-amber-600 dark:text-amber-400" />
                   <span>التحكم السريع في المنصة</span>
                 </h3>
-                <p className="text-xs text-zinc-400 mt-1">
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
                   يمكنك إضافة أي كتاب جديد، مقال تفصيلي، ملخص مصور، أو فحص سجل الأمان بضغطة زر واحدة.
                 </p>
               </div>
@@ -1467,14 +1763,14 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                 </button>
                 <button
                   onClick={() => setShowArticleModal(true)}
-                  className="px-4 py-2.5 bg-zinc-800 text-amber-300 font-bold text-xs rounded-xl border border-zinc-700 hover:bg-zinc-700 transition flex items-center gap-1.5"
+                  className="px-4 py-2.5 bg-white dark:bg-zinc-800 text-amber-700 dark:text-amber-300 font-bold text-xs rounded-xl border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-700 transition flex items-center gap-1.5"
                 >
                   <Plus className="w-4 h-4" />
                   <span>نشر مقال</span>
                 </button>
                 <button
                   onClick={() => setShowSummaryModal(true)}
-                  className="px-4 py-2.5 bg-zinc-800 text-amber-300 font-bold text-xs rounded-xl border border-zinc-700 hover:bg-zinc-700 transition flex items-center gap-1.5"
+                  className="px-4 py-2.5 bg-white dark:bg-zinc-800 text-amber-700 dark:text-amber-300 font-bold text-xs rounded-xl border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-700 transition flex items-center gap-1.5"
                 >
                   <Plus className="w-4 h-4" />
                   <span>إضافة خريطة ذهنية</span>
@@ -1483,15 +1779,15 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
             </div>
 
             {/* Recent Audit Activity Snapshot */}
-            <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm dark:shadow-none">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-bold text-amber-300 flex items-center gap-2">
-                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                <h3 className="text-sm font-bold text-amber-700 dark:text-amber-300 flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                   <span>أحدث العمليات الأمنية والإدارية الموثقة</span>
                 </h3>
                 <button
                   onClick={() => setActiveAdminTab('security')}
-                  className="text-xs text-amber-400 hover:underline"
+                  className="text-xs text-amber-700 dark:text-amber-400 hover:underline font-semibold"
                 >
                   عرض كافة السجلات ({logs.length}) ←
                 </button>
@@ -1499,13 +1795,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
               <div className="space-y-2">
                 {logs.slice(0, 5).map((log) => (
-                  <div key={log.id} className="flex items-center justify-between p-3 rounded-2xl bg-zinc-950/60 border border-zinc-800/80 text-xs">
+                  <div key={log.id} className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-zinc-950/60 border border-zinc-200 dark:border-zinc-800/80 text-xs">
                     <div className="flex items-center gap-3">
                       <span className={`w-2 h-2 rounded-full ${
-                        log.status === 'success' ? 'bg-emerald-400' : log.status === 'warning' ? 'bg-amber-400' : 'bg-rose-400'
+                        log.status === 'success' ? 'bg-emerald-500' : log.status === 'warning' ? 'bg-amber-500' : 'bg-rose-500'
                       }`} />
-                      <span className="font-bold text-zinc-200">{log.user}:</span>
-                      <span className="text-zinc-400">{log.details}</span>
+                      <span className="font-bold text-zinc-900 dark:text-zinc-200">{log.user}:</span>
+                      <span className="text-zinc-600 dark:text-zinc-400">{log.details}</span>
                     </div>
                     <span className="text-[10px] text-zinc-500">
                       {new Date(log.timestamp).toLocaleTimeString('ar-EG')} - {new Date(log.timestamp).toLocaleDateString('ar-EG')}
@@ -1524,18 +1820,18 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           <div className="space-y-8 animate-in fade-in">
             
             {/* 1. Toggle & Control Packages Availability */}
-            <div className="p-6 rounded-3xl bg-zinc-900 border border-zinc-800 space-y-4">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-zinc-800 pb-4">
+            <div className="p-6 rounded-3xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 space-y-4 shadow-sm dark:shadow-none">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-zinc-200 dark:border-zinc-800 pb-4">
                 <div>
-                  <h3 className="text-base font-bold text-amber-200 flex items-center gap-2">
-                    <Zap className="w-5 h-5 text-amber-400" />
-                    <span>التحكم في تفعيل وإيقاف باقات الاشتراك الشهرية</span>
+                  <h3 className="text-base font-bold text-amber-800 dark:text-amber-200 flex items-center gap-2">
+                    <Zap className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                    <span>التحكم في تفعيل وإيقاف باقة الاشتراك الشهرية (50 ج.م)</span>
                   </h3>
-                  <p className="text-xs text-zinc-400 mt-1">
-                    يمكنك تفعيل أو إيقاف استقبال الاشتراكات في أي باقة فوراً بضغطة زر.
+                  <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
+                    يمكنك تفعيل أو إيقاف استقبال الاشتراكات الاختيارية فوراً بضغطة زر.
                   </p>
                 </div>
-                <span className="text-xs font-bold px-3 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30">
+                <span className="text-xs font-bold px-3 py-1 rounded-full bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/30">
                   باقة الـ 50 ج.م الاختيارية
                 </span>
               </div>
@@ -1548,22 +1844,22 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                       key={plan.id}
                       className={`p-5 rounded-2xl border transition ${
                         isActive 
-                          ? 'bg-zinc-950/80 border-amber-500/30 shadow-md' 
-                          : 'bg-zinc-950/40 border-zinc-800 opacity-60'
+                          ? 'bg-slate-50 dark:bg-zinc-950/80 border-amber-500/30 shadow-sm dark:shadow-md' 
+                          : 'bg-slate-100/70 dark:bg-zinc-950/40 border-zinc-200 dark:border-zinc-800 opacity-60'
                       }`}
                     >
                       <div className="flex items-center justify-between mb-3">
-                        <span className="text-xs font-black text-zinc-200">{plan.name}</span>
-                        <span className="text-xs font-bold text-amber-400 font-mono">{plan.priceEGP} ج.م / شهر</span>
+                        <span className="text-xs font-black text-zinc-900 dark:text-zinc-200">{plan.name}</span>
+                        <span className="text-xs font-bold text-amber-700 dark:text-amber-400 font-mono">{plan.priceEGP} ج.م / شهر</span>
                       </div>
 
-                      <p className="text-[11px] text-zinc-400 mb-4 min-h-[30px]">{plan.tagline}</p>
+                      <p className="text-[11px] text-zinc-600 dark:text-zinc-400 mb-4 min-h-[30px]">{plan.tagline}</p>
 
-                      <div className="flex items-center justify-between pt-3 border-t border-zinc-800/80">
+                      <div className="flex items-center justify-between pt-3 border-t border-zinc-200 dark:border-zinc-800/80">
                         <span className={`text-xs font-bold flex items-center gap-1.5 ${
-                          isActive ? 'text-emerald-400' : 'text-zinc-500'
+                          isActive ? 'text-emerald-600 dark:text-emerald-400' : 'text-zinc-500'
                         }`}>
-                          <span className={`w-2 h-2 rounded-full ${isActive ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
+                          <span className={`w-2 h-2 rounded-full ${isActive ? 'bg-emerald-500' : 'bg-zinc-400 dark:bg-zinc-600'}`} />
                           <span>{isActive ? 'مفعلة وتستقبل اشتراكات' : 'موقوفة مؤقتاً'}</span>
                         </span>
 
@@ -1575,8 +1871,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                           }}
                           className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
                             isActive
-                              ? 'bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40'
-                              : 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40'
+                              ? 'bg-rose-500/15 dark:bg-rose-500/20 hover:bg-rose-500/25 dark:hover:bg-rose-500/30 text-rose-700 dark:text-rose-300 border border-rose-500/40'
+                              : 'bg-emerald-500/15 dark:bg-emerald-500/20 hover:bg-emerald-500/25 dark:hover:bg-emerald-500/30 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40'
                           }`}
                         >
                           {isActive ? 'إيقاف الباقة ⛔' : 'تفعيل الباقة ✅'}
@@ -1589,32 +1885,32 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
             </div>
 
             {/* 2. Payment Proof Verification & Approvals */}
-            <div className="p-6 rounded-3xl bg-zinc-900 border border-zinc-800 space-y-4">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-zinc-800 pb-4">
+            <div className="p-6 rounded-3xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 space-y-4 shadow-sm dark:shadow-none">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-zinc-200 dark:border-zinc-800 pb-4">
                 <div>
-                  <h3 className="text-base font-bold text-amber-200 flex items-center gap-2">
-                    <CreditCard className="w-5 h-5 text-amber-400" />
+                  <h3 className="text-base font-bold text-amber-800 dark:text-amber-200 flex items-center gap-2">
+                    <CreditCard className="w-5 h-5 text-amber-600 dark:text-amber-400" />
                     <span>طلبات التحويل وإثباتات الدفع وإيصالات الطلاب</span>
                   </h3>
-                  <p className="text-xs text-zinc-400 mt-1">
+                  <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
                     راجع التحويلات الواردة على فودافون كاش (+201092467818)، اتصالات كاش (+201107093454)، وانستاباي (mostafarafat2007@instapay) وتأكيد التفعيل.
                   </p>
                 </div>
-                <span className="text-xs font-bold px-3 py-1 rounded-full bg-zinc-800 text-zinc-300">
+                <span className="text-xs font-bold px-3 py-1 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300">
                   إجمالي الطلبات: {paymentRequests.length}
                 </span>
               </div>
 
               {paymentRequests.length === 0 ? (
-                <div className="text-center py-10 bg-zinc-950/40 border border-zinc-800/80 rounded-2xl p-4">
-                  <CreditCard className="w-10 h-10 text-zinc-600 mx-auto mb-2" />
-                  <p className="text-xs text-zinc-400">لا توجد طلبات تحويل جديدة مسجلة حالياً.</p>
+                <div className="text-center py-10 bg-slate-50 dark:bg-zinc-950/40 border border-zinc-200 dark:border-zinc-800/80 rounded-2xl p-4">
+                  <CreditCard className="w-10 h-10 text-zinc-400 dark:text-zinc-600 mx-auto mb-2" />
+                  <p className="text-xs text-zinc-600 dark:text-zinc-400">لا توجد طلبات تحويل جديدة مسجلة حالياً.</p>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-right text-xs">
                     <thead>
-                      <tr className="border-b border-zinc-800 text-zinc-400">
+                      <tr className="border-b border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400">
                         <th className="py-2.5 px-3">الطالب</th>
                         <th className="py-2.5 px-3">الباقة والمبلغ</th>
                         <th className="py-2.5 px-3">وسيلة الدفع</th>
@@ -1625,48 +1921,48 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                         <th className="py-2.5 px-3 text-center">الإجراءات</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-zinc-800/60">
+                    <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800/60">
                       {paymentRequests.map((req) => (
-                        <tr key={req.id} className="hover:bg-zinc-950/40 transition">
+                        <tr key={req.id} className="hover:bg-slate-50 dark:hover:bg-zinc-950/40 transition">
                           <td className="py-3 px-3">
-                            <span className="font-bold text-zinc-200 block">{req.userName}</span>
+                            <span className="font-bold text-zinc-900 dark:text-zinc-200 block">{req.userName}</span>
                             <span className="text-[11px] text-zinc-500 font-mono">{req.userEmail}</span>
                           </td>
                           <td className="py-3 px-3">
-                            <span className="font-bold text-amber-300 block">{req.planName}</span>
-                            <span className="text-[11px] text-zinc-400">{req.amountEGP} ج.م</span>
+                            <span className="font-bold text-amber-700 dark:text-amber-300 block">{req.planName}</span>
+                            <span className="text-[11px] text-zinc-600 dark:text-zinc-400">{req.amountEGP} ج.م</span>
                           </td>
                           <td className="py-3 px-3">
-                            <span className="px-2 py-0.5 rounded-lg bg-zinc-800 text-zinc-300 font-bold text-[11px]">
+                            <span className="px-2 py-0.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 font-bold text-[11px]">
                               {req.paymentMethod === 'vodafone' ? 'فودافون كاش' : req.paymentMethod === 'etisalat' ? 'اتصالات كاش' : 'انستاباي'}
                             </span>
                           </td>
-                          <td className="py-3 px-3 font-mono text-zinc-300">
+                          <td className="py-3 px-3 font-mono text-zinc-700 dark:text-zinc-300">
                             {req.senderPhone || '-'}
                           </td>
-                          <td className="py-3 px-3 font-mono text-zinc-400">
+                          <td className="py-3 px-3 font-mono text-zinc-600 dark:text-zinc-400">
                             {req.transactionRef || '-'}
                           </td>
                           <td className="py-3 px-3 text-center">
                             {req.receiptImage ? (
                               <button
                                 onClick={() => setSelectedReceiptPreview(req.receiptImage as string)}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[11px] font-bold transition"
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-[11px] font-bold transition"
                               >
                                 <Eye className="w-3.5 h-3.5" />
                                 <span>عرض الإيصال</span>
                               </button>
                             ) : (
-                              <span className="text-zinc-600 text-[11px]">لا يوجد صورة</span>
+                              <span className="text-zinc-500 text-[11px]">لا يوجد صورة</span>
                             )}
                           </td>
                           <td className="py-3 px-3">
                             <span className={`px-2.5 py-1 rounded-full text-[10px] font-black inline-flex items-center gap-1 ${
                               req.status === 'approved' 
-                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' 
+                                ? 'bg-emerald-500/15 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40' 
                                 : req.status === 'rejected'
-                                ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
-                                : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                                ? 'bg-rose-500/15 dark:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/40'
+                                : 'bg-amber-500/15 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/40'
                             }`}>
                               {req.status === 'approved' && 'تم القبول والتفعيل ✅'}
                               {req.status === 'rejected' && 'مرفوض ✕'}
@@ -1681,9 +1977,11 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                                     updatePaymentRequestStatus(req.id, 'approved');
                                     setPaymentRequests(getPaymentRequests());
                                     setStudentSubscriptionsMap(getAllSavedSubscriptions());
-                                    alert(`تم قبول التحويل وتفعيل الباقة للطالب ${req.userName} فوراً! ✅`);
+                                    setAdminToastMessage({
+                                      title: `تم قبول التحويل وتفعيل الباقة للطالب ${req.userName} فوراً! ✅`
+                                    });
                                   }}
-                                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-zinc-950 font-bold text-[11px] transition"
+                                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white dark:text-zinc-950 font-bold text-[11px] transition"
                                 >
                                   قبول وتفعيل
                                 </button>
@@ -1695,7 +1993,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                                     setPaymentRequests(getPaymentRequests());
                                     setStudentSubscriptionsMap(getAllSavedSubscriptions());
                                   }}
-                                  className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-rose-900/60 text-rose-300 font-bold text-[11px] border border-zinc-700 transition"
+                                  className="px-2.5 py-1 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 font-bold text-[11px] border border-zinc-200 dark:border-zinc-700 transition"
                                 >
                                   رفض
                                 </button>
@@ -1711,15 +2009,15 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
             </div>
 
             {/* 3. Individual Student Subscriptions & 10-Day Free Trial Management */}
-            <div className="p-6 rounded-3xl bg-zinc-900 border border-zinc-800 space-y-4">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-zinc-800 pb-4">
+            <div className="p-6 rounded-3xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 space-y-4 shadow-sm dark:shadow-none">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-zinc-200 dark:border-zinc-800 pb-4">
                 <div>
-                  <h3 className="text-base font-bold text-amber-200 flex items-center gap-2">
-                    <Users className="w-5 h-5 text-amber-400" />
-                    <span>حسابات واشتراكات الطلاب الفردية (فترة تجريبية 10 أيام وباقات شهرية)</span>
+                  <h3 className="text-base font-bold text-amber-800 dark:text-amber-200 flex items-center gap-2">
+                    <Users className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                    <span>حسابات واشتراكات الطلاب الفردية (فترة تجريبية 10 أيام وباقة 50 ج.م)</span>
                   </h3>
-                  <p className="text-xs text-zinc-400 mt-1">
-                    لكل طالب حسابه الخاص وفترته التجريبية المجانية (10 أيام). يمكنك تفعيل باقة شهرية أو تمديد التجربة أو إيقاف الحساب.
+                  <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
+                    لكل طالب حسابه الخاص وفترته التجريبية المجانية (10 أيام). يمكنك تفعيل باقة 50 ج.م أو تمديد التجربة أو تجديد الرصيد.
                   </p>
                 </div>
               </div>
@@ -1727,7 +2025,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
               <div className="overflow-x-auto">
                 <table className="w-full text-right text-xs">
                   <thead>
-                    <tr className="border-b border-zinc-800 text-zinc-400">
+                    <tr className="border-b border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400">
                       <th className="py-2.5 px-3">الطالب المسجل</th>
                       <th className="py-2.5 px-3">المرحلة</th>
                       <th className="py-2.5 px-3">الباقة الحالية</th>
@@ -1736,53 +2034,48 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                       <th className="py-2.5 px-3 text-center">التحكم الفوري بحساب الطالب</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-zinc-800/60">
+                  <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800/60">
                     {users.map((student) => {
                       const sub = calculateStudentSubscription(student.id, student.createdAt, studentSubscriptionsMap[student.id]);
                       const isTrial = sub.isTrial;
                       const daysLeft = sub.trialDaysLeft ?? 0;
 
                       return (
-                        <tr key={student.id} className="hover:bg-zinc-950/40 transition">
+                        <tr key={student.id} className="hover:bg-slate-50 dark:hover:bg-zinc-950/40 transition">
                           <td className="py-3 px-3">
-                            <span className="font-bold text-zinc-200 block">{student.name}</span>
+                            <span className="font-bold text-zinc-900 dark:text-zinc-200 block">{student.name}</span>
                             <span className="text-[11px] text-zinc-500 font-mono">{student.email}</span>
                           </td>
-                          <td className="py-3 px-3 text-zinc-400">
+                          <td className="py-3 px-3 text-zinc-600 dark:text-zinc-400">
                             {student.academicStage || 'الصف الثالث الثانوي'}
                           </td>
                           <td className="py-3 px-3">
                             <span className={`px-2.5 py-1 rounded-xl text-[11px] font-bold inline-block ${
-                              sub.planId === 'vip_200' 
-                                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' 
-                                : sub.planId === 'pro_100'
-                                ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
-                                : sub.planId === 'basic_50'
-                                ? 'bg-blue-500/20 text-blue-300 border border-blue-500/40'
-                                : 'bg-zinc-800 text-zinc-300'
+                              sub.planId === 'basic_50'
+                                ? 'bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/40'
+                                : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
                             }`}>
                               {sub.planName}
                             </span>
                           </td>
                           <td className="py-3 px-3">
                             {isTrial ? (
-                              <span className={`text-xs font-bold ${daysLeft > 0 ? 'text-amber-400' : 'text-rose-400'}`}>
+                              <span className={`text-xs font-bold ${daysLeft > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-rose-600 dark:text-rose-400'}`}>
                                 {daysLeft > 0 ? `تجريبي (متبقي ${daysLeft} أيام)` : 'انتهت الـ 10 أيام ⚠️'}
                               </span>
                             ) : (
-                              <span className="text-zinc-400 text-xs">
+                              <span className="text-zinc-600 dark:text-zinc-400 text-xs">
                                 ينتهي في: {new Date(sub.endDate).toLocaleDateString('ar-EG')}
                               </span>
                             )}
                           </td>
                           <td className="py-3 px-3">
-                            <span className="font-bold text-amber-400">
-                              {sub.maxExamsPerWeek === -1 ? 'غير محدود VIP 🌟' : `${sub.examsRemainingThisWeek} من ${sub.maxExamsPerWeek}`}
+                            <span className="font-bold text-amber-700 dark:text-amber-400">
+                              {sub.maxExamsPerWeek === -1 ? 'غير محدود 🌟' : `${sub.examsRemainingThisWeek} من ${sub.maxExamsPerWeek}`}
                             </span>
                           </td>
                           <td className="py-3 px-3 text-center">
                             <div className="flex items-center justify-center gap-1.5 flex-wrap">
-                              {/* Quick Activate 50 */}
                               <button
                                 onClick={() => {
                                   const now = new Date();
@@ -1800,17 +2093,17 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                                   };
                                   saveStudentSubscription(student.id, updatedSub);
                                   setStudentSubscriptionsMap(getAllSavedSubscriptions());
-                                  alert(`تم تفعيل باقة التفوق الشاملة (50 ج.م شهرياً) للطالب ${student.name}! ✨`);
+                                  setAdminToastMessage({
+                                    title: `تم تفعيل باقة التفوق الشاملة (50 ج.م شهرياً) للطالب ${student.name}! ✨`
+                                  });
                                 }}
-                                className="px-3 py-1.5 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 border border-emerald-500/40 text-xs font-bold transition flex items-center gap-1 shadow-sm"
+                                className="px-3 py-1.5 rounded-lg bg-emerald-600/15 dark:bg-emerald-600/30 hover:bg-emerald-600/25 dark:hover:bg-emerald-600/50 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40 text-xs font-bold transition flex items-center gap-1 shadow-sm"
                                 title="تفعيل باقة 50 ج.م شهرياً الشاملة"
                               >
                                 <Check className="w-3.5 h-3.5" />
                                 <span>تفعيل اشتراك 50ج</span>
                               </button>
 
-
-                              {/* Extend Trial +10 days */}
                               <button
                                 onClick={() => {
                                   const now = new Date();
@@ -1825,15 +2118,16 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                                   };
                                   saveStudentSubscription(student.id, updatedSub);
                                   setStudentSubscriptionsMap(getAllSavedSubscriptions());
-                                  alert(`تم تمديد الفترة التجريبية 10 أيام إضافية للطالب ${student.name}!`);
+                                  setAdminToastMessage({
+                                    title: `تم تمديد الفترة التجريبية 10 أيام إضافية للطالب ${student.name}! ✅`
+                                  });
                                 }}
-                                className="px-2 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 text-[10px] font-bold transition"
+                                className="px-2 py-1 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700 text-[10px] font-bold transition"
                                 title="تمديد الفترة التجريبية 10 أيام إضافية"
                               >
                                 +10 أيام تجربة
                               </button>
 
-                              {/* Reset Exam Quota */}
                               <button
                                 onClick={() => {
                                   const maxExams = sub.maxExamsPerWeek === -1 ? 9999 : sub.maxExamsPerWeek;
@@ -1843,9 +2137,11 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                                   };
                                   saveStudentSubscription(student.id, updatedSub);
                                   setStudentSubscriptionsMap(getAllSavedSubscriptions());
-                                  alert(`تم تجديد رصيد الامتحانات الأسبوعي للطالب ${student.name}!`);
+                                  setAdminToastMessage({
+                                    title: `تم تجديد رصيد الامتحانات الأسبوعي للطالب ${student.name}! ✅`
+                                  });
                                 }}
-                                className="px-2 py-1 rounded-lg bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 border border-emerald-500/30 text-[10px] font-bold transition"
+                                className="px-2 py-1 rounded-lg bg-emerald-600/15 dark:bg-emerald-600/20 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-600/25 dark:hover:bg-emerald-600/30 border border-emerald-500/30 text-[10px] font-bold transition"
                                 title="تجديد حصة الامتحانات لهذا الأسبوع"
                               >
                                 تجديد الرصيد ↺
@@ -1883,17 +2179,17 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                   placeholder="بحث في الكتب..."
                   value={tableSearch}
                   onChange={(e) => setTableSearch(e.target.value)}
-                  className="w-full py-2 pr-9 pl-3 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                  className="w-full py-2 pr-9 pl-3 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                 />
-                <Search className="w-3.5 h-3.5 text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
+                <Search className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
               </div>
             </div>
 
             {/* Books Table */}
-            <div className="bg-zinc-900 border border-zinc-800 rounded-3xl overflow-hidden shadow-xl">
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl overflow-hidden shadow-sm dark:shadow-xl">
               <div className="overflow-x-auto">
                 <table className="w-full text-right text-xs">
-                  <thead className="bg-zinc-950 text-zinc-400 border-b border-zinc-800">
+                  <thead className="bg-slate-100 dark:bg-zinc-950 text-zinc-600 dark:text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
                     <tr>
                       <th className="py-3 px-4">الغلاف</th>
                       <th className="py-3 px-4">العنوان</th>
@@ -1904,49 +2200,48 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                       <th className="py-3 px-4 text-center">إجراءات</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-zinc-800/60">
+                  <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800/60">
                     {books
                       .filter(b => !tableSearch || b.title.includes(tableSearch) || b.category.includes(tableSearch))
                       .map((book) => (
-                        <tr key={book.id} className="hover:bg-zinc-800/30 transition">
+                        <tr key={book.id} className="hover:bg-slate-50 dark:hover:bg-zinc-800/30 transition">
                           <td className="py-3 px-4">
-                            <img src={book.coverpath} alt="" className="w-10 h-14 object-cover rounded-lg border border-zinc-800" />
+                            <img src={book.coverpath} alt="" className="w-10 h-14 object-cover rounded-lg border border-zinc-200 dark:border-zinc-800" />
                           </td>
                           <td className="py-3 px-4">
-                            <span className="font-bold text-zinc-100 block">{book.title}</span>
+                            <span className="font-bold text-zinc-900 dark:text-zinc-100 block">{book.title}</span>
                             <span className="text-[10px] text-zinc-500 truncate max-w-xs block">{book.description}</span>
                           </td>
                           <td className="py-3 px-4">
                             <span className={`px-2 py-0.5 rounded-lg text-[10px] font-bold ${
-                              book.is_student ? 'bg-amber-500/20 text-amber-300' : 'bg-zinc-800 text-zinc-300'
+                              book.is_student ? 'bg-amber-500/20 text-amber-800 dark:text-amber-300' : 'bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
                             }`}>
                               {book.is_student ? '🎓 كتب الطلاب' : book.category}
                             </span>
                           </td>
-                          <td className="py-3 px-4 text-zinc-400">{book.grade || 'عام'}</td>
-                          <td className="py-3 px-4 font-bold text-amber-400">{book.downloads || 0}</td>
-                          <td className="py-3 px-4 text-zinc-400">{book.views || 0}</td>
+                          <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">{book.grade || 'عام'}</td>
+                          <td className="py-3 px-4 font-bold text-amber-700 dark:text-amber-400">{book.downloads || 0}</td>
+                          <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">{book.views || 0}</td>
                           <td className="py-3 px-4 text-center">
                             <div className="flex items-center justify-center gap-2">
-                              <a
-                                href={book.filepath}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-amber-300 transition"
+                              <button
+                                type="button"
+                                onClick={() => handlePreviewBookFile(book.filepath, book.title)}
+                                className="p-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 hover:text-amber-600 dark:hover:text-amber-300 transition"
                                 title="معاينة الملف"
                               >
                                 <ExternalLink className="w-3.5 h-3.5" />
-                              </a>
+                              </button>
                               <button
                                 onClick={() => openEditBook(book)}
-                                className="p-1.5 rounded-lg bg-zinc-800 hover:bg-amber-500 hover:text-zinc-950 text-amber-400 transition"
+                                className="p-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-amber-500 hover:text-zinc-950 text-amber-700 dark:text-amber-400 transition"
                                 title="تعديل الكتاب"
                               >
                                 <Edit3 className="w-3.5 h-3.5" />
                               </button>
                               <button
                                 onClick={() => handleDeleteBook(book.id)}
-                                className="p-1.5 rounded-lg bg-zinc-800 hover:bg-rose-500/20 text-rose-400 transition"
+                                className="p-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 transition"
                                 title="حذف الكتاب"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
@@ -1986,22 +2281,22 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {summaries.map((sum) => (
-                <div key={sum.id} className="bg-zinc-900 border border-zinc-800 rounded-3xl p-4 flex flex-col justify-between space-y-3">
-                  <div className="h-44 rounded-2xl overflow-hidden bg-black border border-zinc-800 relative group">
+                <div key={sum.id} className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-4 flex flex-col justify-between space-y-3 shadow-sm dark:shadow-none">
+                  <div className="h-44 rounded-2xl overflow-hidden bg-slate-100 dark:bg-black border border-zinc-200 dark:border-zinc-800 relative group">
                     <img src={sum.imagepath} alt={sum.title} className="w-full h-full object-cover group-hover:scale-105 transition" />
-                    <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg bg-black/60 text-amber-300 text-[10px] font-bold">
+                    <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg bg-black/70 text-amber-300 text-[10px] font-bold">
                       {sum.category}
                     </span>
                   </div>
                   <div>
-                    <h4 className="font-bold text-xs text-zinc-100 line-clamp-1">{sum.title}</h4>
+                    <h4 className="font-bold text-xs text-zinc-900 dark:text-zinc-100 line-clamp-1">{sum.title}</h4>
                   </div>
-                  <div className="flex items-center justify-between pt-2 border-t border-zinc-800">
+                  <div className="flex items-center justify-between pt-2 border-t border-zinc-200 dark:border-zinc-800">
                     <a
                       href={sum.imagepath}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-xs text-amber-400 font-bold hover:underline flex items-center gap-1"
+                      className="text-xs text-amber-700 dark:text-amber-400 font-bold hover:underline flex items-center gap-1"
                     >
                       <ExternalLink className="w-3 h-3" />
                       عرض بدقة كاملة
@@ -2009,7 +2304,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                     <div className="flex items-center gap-1.5">
                       <button
                         onClick={() => openEditSummary(sum)}
-                        className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-amber-500 hover:text-zinc-950 text-amber-300 text-xs font-bold transition flex items-center gap-1"
+                        className="px-2.5 py-1 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-amber-500 hover:text-zinc-950 text-amber-700 dark:text-amber-300 text-xs font-bold transition flex items-center gap-1"
                         title="تعديل الملخص"
                       >
                         <Edit3 className="w-3 h-3" />
@@ -2017,7 +2312,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                       </button>
                       <button
                         onClick={() => handleDeleteSummary(sum.id)}
-                        className="p-1.5 rounded-xl bg-zinc-800 hover:bg-rose-500/20 text-rose-400 transition"
+                        className="p-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 transition"
                         title="حذف الملخص"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -2047,8 +2342,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {videos.map((vid) => (
-                <div key={vid.id} className="bg-zinc-900 border border-zinc-800 rounded-3xl p-4 flex flex-col justify-between space-y-3">
-                  <div className="aspect-video w-full rounded-2xl overflow-hidden bg-black border border-zinc-800">
+                <div key={vid.id} className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-4 flex flex-col justify-between space-y-3 shadow-sm dark:shadow-none">
+                  <div className="aspect-video w-full rounded-2xl overflow-hidden bg-black border border-zinc-200 dark:border-zinc-800">
                     <iframe
                       src={vid.videourl.replace('watch?v=', 'embed/')}
                       className="w-full h-full"
@@ -2056,19 +2351,19 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                     />
                   </div>
                   <div>
-                    <h4 className="font-bold text-xs text-zinc-100 line-clamp-2">{vid.title}</h4>
-                    <div className="flex items-center justify-between text-[10px] text-zinc-400 mt-2">
+                    <h4 className="font-bold text-xs text-zinc-900 dark:text-zinc-100 line-clamp-2">{vid.title}</h4>
+                    <div className="flex items-center justify-between text-[10px] text-zinc-600 dark:text-zinc-400 mt-2">
                       <span>{vid.channel || 'المكتبة'}</span>
                       <span>⏱️ {vid.duration || '20 دقيقة'}</span>
                     </div>
                   </div>
-                  <div className="flex items-center justify-between pt-2 border-t border-zinc-800">
-                    <span className="text-[10px] bg-zinc-800 px-2 py-0.5 rounded text-amber-400 font-bold">
+                  <div className="flex items-center justify-between pt-2 border-t border-zinc-200 dark:border-zinc-800">
+                    <span className="text-[10px] bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 rounded text-amber-700 dark:text-amber-400 font-bold">
                       {vid.category}
                     </span>
                     <button
                       onClick={() => handleDeleteVideo(vid.id)}
-                      className="p-1.5 rounded-xl bg-zinc-800 hover:bg-rose-500/20 text-rose-400 transition"
+                      className="p-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 transition"
                       title="حذف الفيديو"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
@@ -2104,13 +2399,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
             <div className="space-y-3">
               {articles.map((art) => (
-                <div key={art.id} className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div key={art.id} className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm dark:shadow-none">
                   <div className="flex items-center gap-4 w-full sm:w-auto">
-                    <img src={art.imagepath} alt="" className="w-20 h-20 rounded-2xl object-cover border border-zinc-800 flex-shrink-0" />
+                    <img src={art.imagepath} alt="" className="w-20 h-20 rounded-2xl object-cover border border-zinc-200 dark:border-zinc-800 flex-shrink-0" />
                     <div>
-                      <h4 className="font-bold text-sm text-zinc-100">{art.title}</h4>
-                      <p className="text-xs text-zinc-400 mt-1 line-clamp-2 max-w-xl">{art.content.replace(/[\#\*\>]/g, '')}</p>
-                      <div className="flex items-center gap-3 text-[11px] text-amber-500 mt-2 font-semibold">
+                      <h4 className="font-bold text-sm text-zinc-900 dark:text-zinc-100">{art.title}</h4>
+                      <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 line-clamp-2 max-w-xl">{art.content.replace(/[\#\*\>]/g, '')}</p>
+                      <div className="flex items-center gap-3 text-[11px] text-amber-700 dark:text-amber-500 mt-2 font-semibold">
                         <span>الكاتب: {art.author}</span>
                         <span>•</span>
                         <span>وقت القراءة: {art.readTime}</span>
@@ -2132,13 +2427,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                         setArticleReadTime(art.readTime);
                         setShowArticleModal(true);
                       }}
-                      className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-amber-500 hover:text-zinc-950 text-amber-300 text-xs font-bold border border-zinc-700 transition"
+                      className="px-3 py-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-amber-500 hover:text-zinc-950 text-amber-700 dark:text-amber-300 text-xs font-bold border border-zinc-200 dark:border-zinc-700 transition"
                     >
                       تعديل
                     </button>
                     <button
                       onClick={() => handleDeleteArticle(art.id)}
-                      className="p-1.5 rounded-xl bg-zinc-800 hover:bg-rose-500/20 text-rose-400 border border-zinc-700 transition"
+                      className="p-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-zinc-200 dark:border-zinc-700 transition"
                       title="حذف المقال"
                     >
                       <Trash2 className="w-4 h-4" />
@@ -2155,20 +2450,20 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         {/* ------------------------------------------------------------------- */}
         {activeAdminTab === 'users' && (
           <div className="space-y-4 animate-in fade-in">
-            <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 flex items-center justify-between">
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-5 flex items-center justify-between shadow-sm dark:shadow-none">
               <div>
-                <h3 className="text-sm font-bold text-amber-200">إدارة حسابات المستفيدين والطلاب المسجلين</h3>
-                <p className="text-xs text-zinc-400 mt-0.5">يمكنك تجميد الحسابات المشبوهة، تغيير الصلاحيات، أو إزالة المستخدمين.</p>
+                <h3 className="text-sm font-bold text-amber-800 dark:text-amber-200">إدارة حسابات المستفيدين والطلاب المسجلين</h3>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5">يمكنك تجميد الحسابات المشبوهة، تغيير الصلاحيات، أو إزالة المستخدمين.</p>
               </div>
-              <span className="text-xs font-bold px-3 py-1 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/30">
+              <span className="text-xs font-bold px-3 py-1 rounded-xl bg-amber-500/15 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30">
                 إجمالي المسجلين: {users.length}
               </span>
             </div>
 
-            <div className="bg-zinc-900 border border-zinc-800 rounded-3xl overflow-hidden shadow-xl">
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl overflow-hidden shadow-sm dark:shadow-xl">
               <div className="overflow-x-auto">
                 <table className="w-full text-right text-xs">
-                  <thead className="bg-zinc-950 text-zinc-400 border-b border-zinc-800">
+                  <thead className="bg-slate-100 dark:bg-zinc-950 text-zinc-600 dark:text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
                     <tr>
                       <th className="py-3 px-4">المستخدم</th>
                       <th className="py-3 px-4">البريد الإلكتروني</th>
@@ -2179,18 +2474,18 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                       <th className="py-3 px-4 text-center">إجراءات</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-zinc-800/60">
+                  <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800/60">
                     {users.map((u) => (
-                      <tr key={u.id} className="hover:bg-zinc-800/30 transition">
+                      <tr key={u.id} className="hover:bg-slate-50 dark:hover:bg-zinc-800/30 transition">
                         <td className="py-3 px-4 flex items-center gap-2">
-                          <img src={u.avatar} alt="" className="w-8 h-8 rounded-full object-cover border border-zinc-700" />
-                          <span className="font-bold text-zinc-200">{u.name}</span>
+                          <img src={u.avatar} alt="" className="w-8 h-8 rounded-full object-cover border border-zinc-200 dark:border-zinc-700" />
+                          <span className="font-bold text-zinc-900 dark:text-zinc-200">{u.name}</span>
                         </td>
-                        <td className="py-3 px-4 text-zinc-400">{u.email}</td>
-                        <td className="py-3 px-4 text-zinc-300">{u.academicStage || 'غير محدد'}</td>
+                        <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">{u.email}</td>
+                        <td className="py-3 px-4 text-zinc-700 dark:text-zinc-300">{u.academicStage || 'غير محدد'}</td>
                         <td className="py-3 px-4">
                           <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            u.role === 'moderator' ? 'bg-amber-500/20 text-amber-300' : 'bg-zinc-800 text-zinc-400'
+                            u.role === 'moderator' ? 'bg-amber-500/20 text-amber-800 dark:text-amber-300' : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400'
                           }`}>
                             {u.role === 'moderator' ? 'مشرف' : 'مستخدم'}
                           </span>
@@ -2198,8 +2493,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                         <td className="py-3 px-4">
                           <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                             u.status === 'active' 
-                              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' 
-                              : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                              ? 'bg-emerald-500/15 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30' 
+                              : 'bg-rose-500/15 dark:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/30'
                           }`}>
                             {u.status === 'active' ? 'نشط' : 'محظور / مجمّد'}
                           </span>
@@ -2211,15 +2506,15 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                               onClick={() => handleToggleUserStatus(u)}
                               className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition ${
                                 u.status === 'active'
-                                  ? 'bg-zinc-800 text-rose-400 border-zinc-700 hover:bg-rose-500/20'
-                                  : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30'
+                                  ? 'bg-zinc-100 dark:bg-zinc-800 text-rose-600 dark:text-rose-400 border-zinc-200 dark:border-zinc-700 hover:bg-rose-500/20'
+                                  : 'bg-emerald-500/15 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30'
                               }`}
                             >
                               {u.status === 'active' ? 'تجميد 🚫' : 'تنشيط ✅'}
                             </button>
                             <button
                               onClick={() => handleDeleteUser(u.id)}
-                              className="p-1.5 rounded-lg bg-zinc-800 hover:bg-rose-500/20 text-rose-400 transition"
+                              className="p-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 transition"
                               title="حذف نهائي"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
@@ -2241,22 +2536,22 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         {activeAdminTab === 'reviews' && (
           <div className="space-y-6 animate-in fade-in">
             {/* Header & Metrics */}
-            <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm dark:shadow-none">
               <div>
-                <h3 className="text-base font-black text-amber-200 flex items-center gap-2">
-                  <Star className="w-5 h-5 text-amber-400 fill-amber-400" />
+                <h3 className="text-base font-black text-amber-800 dark:text-amber-200 flex items-center gap-2">
+                  <Star className="w-5 h-5 text-amber-500 fill-amber-500" />
                   <span>إدارة مراجعات وتقييمات الطلاب للمواد والكتب</span>
                 </h3>
-                <p className="text-xs text-zinc-400 mt-1">
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
                   يمكنك مراجعة آراء الطلاب، منح شارة الاعتماد الذهبية "معتمد من الإدارة ⭐" للمراجعات المفيدة، وحذف أي مراجعة غير لائقة.
                 </p>
               </div>
 
               <div className="flex items-center gap-3 flex-wrap">
-                <span className="text-xs font-bold px-3 py-1.5 rounded-xl bg-amber-500/10 text-amber-300 border border-amber-500/30">
+                <span className="text-xs font-bold px-3 py-1.5 rounded-xl bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/30">
                   إجمالي المراجعات: {allReviews.length}
                 </span>
-                <span className="text-xs font-bold px-3 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-300 border border-emerald-500/30">
+                <span className="text-xs font-bold px-3 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
                   معتمد: {allReviews.filter(r => r.isApproved || r.approved).length}
                 </span>
               </div>
@@ -2264,7 +2559,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
             {/* Reviews List */}
             {allReviews.length === 0 ? (
-              <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-12 text-center text-zinc-400 text-xs">
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-12 text-center text-zinc-500 dark:text-zinc-400 text-xs">
                 لا توجد مراجعات مكتوبة بعد. عند كتابة أي طالب لمراجعة ستظهر هنا مباشرة للإدارة.
               </div>
             ) : (
@@ -2275,10 +2570,10 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                   return (
                     <div 
                       key={rev.id}
-                      className={`p-5 rounded-3xl border transition relative flex flex-col justify-between ${
+                      className={`p-5 rounded-3xl border transition relative flex flex-col justify-between shadow-sm dark:shadow-none ${
                         isApp
-                          ? 'bg-zinc-900/90 border-amber-500/40 shadow-lg shadow-amber-500/5'
-                          : 'bg-zinc-900/60 border-zinc-800'
+                          ? 'bg-white dark:bg-zinc-900/90 border-amber-500/40 shadow-amber-500/5'
+                          : 'bg-slate-50/70 dark:bg-zinc-900/60 border-zinc-200 dark:border-zinc-800'
                       }`}
                     >
                       <div>
@@ -2292,9 +2587,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                             />
                             <div>
                               <div className="flex items-center gap-2">
-                                <h4 className="font-bold text-xs text-zinc-100">{rev.userName}</h4>
+                                <h4 className="font-bold text-xs text-zinc-900 dark:text-zinc-100">{rev.userName}</h4>
                                 {stage && (
-                                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400 font-medium">
+                                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-400 font-medium">
                                     {stage}
                                   </span>
                                 )}
@@ -2304,35 +2599,35 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                           </div>
 
                           {/* Star Rating Display */}
-                          <div className="flex items-center gap-1 bg-zinc-950/80 px-2.5 py-1 rounded-xl border border-zinc-800">
-                            <div className="flex text-amber-400 text-xs">
+                          <div className="flex items-center gap-1 bg-slate-100 dark:bg-zinc-950/80 px-2.5 py-1 rounded-xl border border-zinc-200 dark:border-zinc-800">
+                            <div className="flex text-amber-500 text-xs">
                               {[1, 2, 3, 4, 5].map((s) => (
-                                <span key={s} className={s <= rev.rating ? 'text-amber-400' : 'text-zinc-700'}>★</span>
+                                <span key={s} className={s <= rev.rating ? 'text-amber-500' : 'text-zinc-300 dark:text-zinc-700'}>★</span>
                               ))}
                             </div>
-                            <span className="font-bold text-xs text-amber-300 font-mono mr-1">{rev.rating}</span>
+                            <span className="font-bold text-xs text-amber-700 dark:text-amber-300 font-mono mr-1">{rev.rating}</span>
                           </div>
                         </div>
 
                         {/* Material Reference Badge */}
-                        <div className="mb-3 flex items-center gap-1.5 text-[11px] text-amber-400/90 bg-amber-500/5 px-2.5 py-1 rounded-lg border border-amber-500/20 w-fit">
+                        <div className="mb-3 flex items-center gap-1.5 text-[11px] text-amber-700 dark:text-amber-400/90 bg-amber-500/10 dark:bg-amber-500/5 px-2.5 py-1 rounded-lg border border-amber-500/20 w-fit">
                           <span>المادة:</span>
                           <span className="font-bold">{rev.itemTitle || `مادة #${rev.itemId}`}</span>
                           <span className="text-zinc-500">({rev.itemType === 'book' ? 'كتاب/منهج' : rev.itemType === 'video' ? 'شرح فيديو' : rev.itemType === 'summary' ? 'ملخص/خريطة' : 'مقال'})</span>
                         </div>
 
                         {/* Review Comment Text */}
-                        <p className="text-xs text-zinc-200 leading-relaxed bg-zinc-950/50 p-3 rounded-2xl border border-zinc-800/60 mb-4 whitespace-pre-wrap">
+                        <p className="text-xs text-zinc-800 dark:text-zinc-200 leading-relaxed bg-slate-50 dark:bg-zinc-950/50 p-3 rounded-2xl border border-zinc-200 dark:border-zinc-800/60 mb-4 whitespace-pre-wrap">
                           {rev.comment}
                         </p>
                       </div>
 
                       {/* Footer Actions: Approve / Delete */}
-                      <div className="flex items-center justify-between pt-3 border-t border-zinc-800/80">
+                      <div className="flex items-center justify-between pt-3 border-t border-zinc-200 dark:border-zinc-800/80">
                         <div>
                           {isApp ? (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-400 bg-amber-500/10 px-2.5 py-1 rounded-full border border-amber-500/30">
-                              <Star className="w-3 h-3 fill-amber-400" />
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700 dark:text-amber-400 bg-amber-500/10 px-2.5 py-1 rounded-full border border-amber-500/30">
+                              <Star className="w-3 h-3 fill-amber-500" />
                               <span>معتمد من الإدارة ⭐</span>
                             </span>
                           ) : (
@@ -2348,7 +2643,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                             }}
                             className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
                               isApp
-                                ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700'
+                                ? 'bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700'
                                 : 'bg-amber-500 hover:bg-amber-400 text-zinc-950 font-black shadow-md shadow-amber-500/20'
                             }`}
                           >
@@ -2358,12 +2653,11 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
                           <button
                             onClick={() => {
-                              if (window.confirm('هل تريد حذف هذه المراجعة نهائياً؟')) {
-                                deleteReview(rev.id);
-                                setAllReviews(getAllReviews());
-                              }
+                              deleteReview(rev.id);
+                              setAllReviews(getAllReviews());
+                              setAdminToastMessage({ title: 'تم حذف المراجعة بنجاح' });
                             }}
-                            className="p-1.5 rounded-xl bg-zinc-800 hover:bg-rose-500/20 text-rose-400 border border-zinc-700 transition"
+                            className="p-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-zinc-200 dark:border-zinc-700 transition"
                             title="حذف المراجعة"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -2399,17 +2693,17 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                   placeholder="بحث في الامتحانات..."
                   value={tableSearch}
                   onChange={(e) => setTableSearch(e.target.value)}
-                  className="w-full py-2 pr-9 pl-3 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                  className="w-full py-2 pr-9 pl-3 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                 />
-                <Search className="w-3.5 h-3.5 text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
+                <Search className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
               </div>
             </div>
 
             {/* Exams Table */}
-            <div className="bg-zinc-900 border border-zinc-800 rounded-3xl overflow-hidden shadow-xl">
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl overflow-hidden shadow-sm dark:shadow-xl">
               <div className="overflow-x-auto">
                 <table className="w-full text-right text-xs">
-                  <thead className="bg-zinc-950 text-zinc-400 border-b border-zinc-800">
+                  <thead className="bg-slate-100 dark:bg-zinc-950 text-zinc-600 dark:text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
                     <tr>
                       <th className="py-3 px-4">عنوان الامتحان</th>
                       <th className="py-3 px-4">المادة</th>
@@ -2421,26 +2715,26 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                       <th className="py-3 px-4 text-center">إجراءات</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-zinc-800/60">
+                  <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800/60">
                     {studentExams
                       .filter(e => !tableSearch || e.title.includes(tableSearch) || e.subject.includes(tableSearch) || e.grade.includes(tableSearch))
                       .map((exam) => (
-                        <tr key={exam.id} className="hover:bg-zinc-800/30 transition">
-                          <td className="py-3 px-4 font-bold text-zinc-100">
+                        <tr key={exam.id} className="hover:bg-slate-50 dark:hover:bg-zinc-800/30 transition">
+                          <td className="py-3 px-4 font-bold text-zinc-900 dark:text-zinc-100">
                             <span>{exam.title}</span>
                             <span className="text-[10px] text-zinc-500 block truncate max-w-xs">{exam.description}</span>
                           </td>
                           <td className="py-3 px-4">
-                            <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-amber-500/20 text-amber-300">
+                            <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-amber-500/20 text-amber-800 dark:text-amber-300">
                               {exam.subject}
                             </span>
                           </td>
-                          <td className="py-3 px-4 text-zinc-300 font-semibold">{exam.grade}</td>
-                          <td className="py-3 px-4 text-zinc-400">{exam.durationMinutes} دقيقة</td>
-                          <td className="py-3 px-4 text-zinc-200 font-bold">{exam.questions.length} أسئلة</td>
-                          <td className="py-3 px-4 text-emerald-400 font-bold">{exam.totalMarks} (نجاح {exam.passMarks})</td>
+                          <td className="py-3 px-4 text-zinc-700 dark:text-zinc-300 font-semibold">{exam.grade}</td>
+                          <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">{exam.durationMinutes} دقيقة</td>
+                          <td className="py-3 px-4 text-zinc-800 dark:text-zinc-200 font-bold">{exam.questions.length} أسئلة</td>
+                          <td className="py-3 px-4 text-emerald-700 dark:text-emerald-400 font-bold">{exam.totalMarks} (نجاح {exam.passMarks})</td>
                           <td className="py-3 px-4">
-                            <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-zinc-800 text-zinc-300">
+                            <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300">
                               {exam.difficulty}
                             </span>
                           </td>
@@ -2448,7 +2742,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                             <div className="flex items-center justify-center gap-2">
                               <button
                                 onClick={() => handleDeleteExam(exam.id)}
-                                className="p-1.5 rounded-lg bg-zinc-800 hover:bg-rose-500/20 text-rose-400 transition"
+                                className="p-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 transition"
                                 title="حذف الامتحان بالكامل"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
@@ -2470,25 +2764,25 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         {activeAdminTab === 'security' && (
           <div className="space-y-6 animate-in fade-in">
             {/* Top Security Status Banner */}
-            <div className="bg-zinc-900 border border-amber-500/30 rounded-3xl p-6">
+            <div className="bg-white dark:bg-zinc-900 border border-amber-500/30 rounded-3xl p-6 shadow-sm dark:shadow-none">
               <div className="flex flex-col md:flex-row items-center justify-between gap-4">
                 <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 rounded-2xl bg-amber-500/20 border border-amber-500/40 text-amber-400 flex items-center justify-center">
+                  <div className="w-14 h-14 rounded-2xl bg-amber-500/15 dark:bg-amber-500/20 border border-amber-500/40 text-amber-600 dark:text-amber-400 flex items-center justify-center">
                     <ShieldCheck className="w-8 h-8" />
                   </div>
                   <div>
-                    <h3 className="text-base font-bold text-amber-200">حالة جدار الحماية ونظام الأمان المتقدم</h3>
-                    <p className="text-xs text-zinc-400 mt-1">
+                    <h3 className="text-base font-bold text-amber-800 dark:text-amber-200">حالة جدار الحماية ونظام الأمان المتقدم</h3>
+                    <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
                       النظام محمي بجلسات مشفرة، تقييد محاولات الدخول الخاطئة (Brute-force protection)، وتسجيل تدقيقي لكافة العمليات.
                     </p>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <span className="px-3 py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-bold">
+                  <span className="px-3 py-1.5 rounded-xl bg-emerald-500/15 dark:bg-emerald-500/20 border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 text-xs font-bold">
                     🛡️ الجدار الناري: مُفعل 100%
                   </span>
-                  <span className="px-3 py-1.5 rounded-xl bg-zinc-800 border border-zinc-700 text-zinc-300 text-xs font-bold">
+                  <span className="px-3 py-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 text-xs font-bold">
                     تشفير الجلسات: نشط
                   </span>
                 </div>
@@ -2498,20 +2792,20 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               
               {/* CHANGE ADMIN PASSWORD FORM */}
-              <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 space-y-4">
-                <h4 className="font-bold text-sm text-amber-300 flex items-center gap-2">
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 space-y-4 shadow-sm dark:shadow-none">
+                <h4 className="font-bold text-sm text-amber-700 dark:text-amber-300 flex items-center gap-2">
                   <KeyRound className="w-4 h-4" />
                   <span>تغيير كلمة مرور المدير (الأدمن)</span>
                 </h4>
-                <p className="text-xs text-zinc-400">
+                <p className="text-xs text-zinc-600 dark:text-zinc-400">
                   قم بتعيين كلمة مرور قوية تتضمن حروفاً وأرقاماً لمنع أي وصول غير مصرح به.
                 </p>
 
                 {pwdMsg && (
                   <div className={`p-3 rounded-2xl text-xs flex items-center gap-2 ${
                     pwdMsg.type === 'success' 
-                      ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-300' 
-                      : 'bg-rose-500/10 border border-rose-500/30 text-rose-300'
+                      ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300' 
+                      : 'bg-rose-500/10 border border-rose-500/30 text-rose-700 dark:text-rose-300'
                   }`}>
                     {pwdMsg.type === 'success' ? <CheckCircle className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
                     <span>{pwdMsg.text}</span>
@@ -2520,38 +2814,38 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
                 <form onSubmit={handleChangeAdminPassword} className="space-y-3.5">
                   <div>
-                    <label className="block text-xs font-semibold text-zinc-300 mb-1">كلمة المرور الحالية</label>
+                    <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">كلمة المرور الحالية</label>
                     <input
                       type="password"
                       required
                       value={currentPassword}
                       onChange={(e) => setCurrentPassword(e.target.value)}
                       placeholder="أدخل كلمة المرور الحالية"
-                      className="w-full py-2.5 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                      className="w-full py-2.5 px-3 bg-slate-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-zinc-300 mb-1">كلمة المرور الجديدة</label>
+                    <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">كلمة المرور الجديدة</label>
                     <input
                       type="password"
                       required
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
                       placeholder="كلمة مرور جديدة (6 خانات فأكثر)"
-                      className="w-full py-2.5 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                      className="w-full py-2.5 px-3 bg-slate-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-zinc-300 mb-1">تأكيد كلمة المرور الجديدة</label>
+                    <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">تأكيد كلمة المرور الجديدة</label>
                     <input
                       type="password"
                       required
                       value={confirmPassword}
                       onChange={(e) => setConfirmPassword(e.target.value)}
                       placeholder="أعد إدخال كلمة المرور للتأكيد"
-                      className="w-full py-2.5 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                      className="w-full py-2.5 px-3 bg-slate-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                     />
                   </div>
 
@@ -2566,40 +2860,40 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
               </div>
 
               {/* SYSTEM HEALTH & BACKUP */}
-              <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 space-y-4 flex flex-col justify-between">
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 space-y-4 flex flex-col justify-between shadow-sm dark:shadow-none">
                 <div>
-                  <h4 className="font-bold text-sm text-amber-300 flex items-center gap-2">
+                  <h4 className="font-bold text-sm text-amber-700 dark:text-amber-300 flex items-center gap-2">
                     <Database className="w-4 h-4" />
                     <span>سلامة البيانات والنسخ الاحتياطي</span>
                   </h4>
-                  <p className="text-xs text-zinc-400 mt-1">
+                  <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
                     احرص على أخذ نسخة احتياطية بشكل دوري لحماية بيانات الطلاب والكتب.
                   </p>
 
                   <div className="mt-4 space-y-2.5">
-                    <div className="flex justify-between items-center p-3 rounded-xl bg-zinc-950 border border-zinc-800 text-xs">
-                      <span className="text-zinc-400">قاعدة البيانات:</span>
-                      <span className="font-bold text-amber-400">{stats?.analytics.database || 'Local Store'}</span>
+                    <div className="flex justify-between items-center p-3 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 text-xs">
+                      <span className="text-zinc-600 dark:text-zinc-400">قاعدة البيانات:</span>
+                      <span className="font-bold text-amber-700 dark:text-amber-400">{stats?.analytics.database || 'Local Store'}</span>
                     </div>
-                    <div className="flex justify-between items-center p-3 rounded-xl bg-zinc-950 border border-zinc-800 text-xs">
-                      <span className="text-zinc-400">مجموع السجلات:</span>
-                      <span className="font-bold text-zinc-200">
+                    <div className="flex justify-between items-center p-3 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 text-xs">
+                      <span className="text-zinc-600 dark:text-zinc-400">مجموع السجلات:</span>
+                      <span className="font-bold text-zinc-900 dark:text-zinc-200">
                         {books.length + summaries.length + videos.length + articles.length + users.length} سجل
                       </span>
                     </div>
-                    <div className="flex justify-between items-center p-3 rounded-xl bg-zinc-950 border border-zinc-800 text-xs">
-                      <span className="text-zinc-400">حالة السيرفر:</span>
-                      <span className="font-bold text-emerald-400">يعمل بكفاءة 100%</span>
+                    <div className="flex justify-between items-center p-3 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 text-xs">
+                      <span className="text-zinc-600 dark:text-zinc-400">حالة السيرفر:</span>
+                      <span className="font-bold text-emerald-600 dark:text-emerald-400">يعمل بكفاءة 100%</span>
                     </div>
                   </div>
                 </div>
 
-                <div className="pt-4 border-t border-zinc-800 flex flex-col gap-2">
+                <div className="pt-4 border-t border-zinc-200 dark:border-zinc-800 flex flex-col gap-2">
                   <a
                     href="/api/admin/backup"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="w-full text-center py-2.5 bg-zinc-800 hover:bg-zinc-700 text-amber-300 text-xs font-bold rounded-xl border border-zinc-700 transition flex items-center justify-center gap-2"
+                    className="w-full text-center py-2.5 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-amber-700 dark:text-amber-300 text-xs font-bold rounded-xl border border-zinc-200 dark:border-zinc-700 transition flex items-center justify-center gap-2"
                   >
                     <Download className="w-4 h-4" />
                     <span>تنزيل نسخة احتياطية من قاعدة البيانات (.json)</span>
@@ -2610,29 +2904,29 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
             </div>
 
             {/* AUDIT LOGS TABLE */}
-            <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 space-y-4">
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 space-y-4 shadow-sm dark:shadow-none">
               <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
                 <div>
-                  <h4 className="font-bold text-sm text-amber-200 flex items-center gap-2">
-                    <ShieldAlert className="w-4 h-4 text-amber-400" />
+                  <h4 className="font-bold text-sm text-amber-800 dark:text-amber-200 flex items-center gap-2">
+                    <ShieldAlert className="w-4 h-4 text-amber-600 dark:text-amber-400" />
                     <span>سجل الرقابة الأمنية والعمليات الموثقة (Audit Security Logs)</span>
                   </h4>
-                  <p className="text-xs text-zinc-400 mt-0.5">
+                  <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5">
                     كل تسجيل دخول، تعديل، حذف، أو محاولة مشبوهة يتم تسجيلها تلقائياً مع عنوان IP والتوقيت.
                   </p>
                 </div>
 
                 <button
                   onClick={handleClearLogs}
-                  className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-rose-500/20 text-zinc-400 hover:text-rose-300 text-xs font-semibold border border-zinc-700 transition"
+                  className="px-3 py-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-rose-500/20 text-zinc-600 dark:text-zinc-400 hover:text-rose-600 dark:hover:text-rose-300 text-xs font-semibold border border-zinc-200 dark:border-zinc-700 transition"
                 >
                   تصفير السجلات 🔄
                 </button>
               </div>
 
-              <div className="overflow-x-auto border border-zinc-800 rounded-2xl">
+              <div className="overflow-x-auto border border-zinc-200 dark:border-zinc-800 rounded-2xl">
                 <table className="w-full text-right text-xs">
-                  <thead className="bg-zinc-950 text-zinc-400 border-b border-zinc-800">
+                  <thead className="bg-slate-100 dark:bg-zinc-950 text-zinc-600 dark:text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
                     <tr>
                       <th className="py-2.5 px-3">الحالة</th>
                       <th className="py-2.5 px-3">المستخدم / الفاعل</th>
@@ -2641,24 +2935,24 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                       <th className="py-2.5 px-3">التوقيت والتاريخ</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-zinc-800/60">
+                  <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800/60">
                     {logs.map((log) => (
-                      <tr key={log.id} className="hover:bg-zinc-800/30 transition">
+                      <tr key={log.id} className="hover:bg-slate-50 dark:hover:bg-zinc-800/30 transition">
                         <td className="py-2.5 px-3">
                           <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                             log.status === 'success' 
-                              ? 'bg-emerald-500/20 text-emerald-300' 
+                              ? 'bg-emerald-500/15 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300' 
                               : log.status === 'warning' 
-                              ? 'bg-amber-500/20 text-amber-300' 
-                              : 'bg-rose-500/20 text-rose-300'
+                              ? 'bg-amber-500/15 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300' 
+                              : 'bg-rose-500/15 dark:bg-rose-500/20 text-rose-700 dark:text-rose-300'
                           }`}>
                             {log.status === 'success' ? 'نجاح ✅' : log.status === 'warning' ? 'تنبيه ⚠️' : 'خطر 🛑'}
                           </span>
                         </td>
-                        <td className="py-2.5 px-3 font-bold text-zinc-200">{log.user}</td>
-                        <td className="py-2.5 px-3 text-zinc-300">{log.details}</td>
+                        <td className="py-2.5 px-3 font-bold text-zinc-900 dark:text-zinc-200">{log.user}</td>
+                        <td className="py-2.5 px-3 text-zinc-700 dark:text-zinc-300">{log.details}</td>
                         <td className="py-2.5 px-3 text-zinc-500 font-mono text-[11px]">{log.ip}</td>
-                        <td className="py-2.5 px-3 text-zinc-400 text-[11px]">
+                        <td className="py-2.5 px-3 text-zinc-600 dark:text-zinc-400 text-[11px]">
                           {new Date(log.timestamp).toLocaleString('ar-EG')}
                         </td>
                       </tr>
@@ -2678,38 +2972,42 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       {/* ------------------------------------------------------------------- */}
       {showBookModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-          <div className="relative w-full max-w-xl bg-zinc-900 border border-amber-500/40 rounded-3xl p-6 text-right max-h-[90vh] overflow-y-auto">
+          <div className="relative w-full max-w-xl bg-white dark:bg-zinc-900 border border-amber-500/40 rounded-3xl p-6 text-right max-h-[90vh] overflow-y-auto shadow-2xl">
             <button
+              type="button"
+              disabled={isPublishingBook}
               onClick={() => setShowBookModal(false)}
-              className="absolute top-5 left-5 p-2 rounded-xl bg-zinc-800 text-zinc-400 hover:text-zinc-100"
+              className="absolute top-5 left-5 p-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 disabled:opacity-40"
             >
               <X className="w-4 h-4" />
             </button>
 
-            <h3 className="text-lg font-bold text-amber-200 mb-4">
+            <h3 className="text-lg font-bold text-amber-800 dark:text-amber-200 mb-4">
               {editingBookId ? 'تعديل بيانات الكتاب' : 'إضافة كتاب أو منهج دراسي جديد'}
             </h3>
 
             <form onSubmit={handleSaveBook} className="space-y-3.5">
               <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1">عنوان الكتاب</label>
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">عنوان الكتاب</label>
                 <input
                   type="text"
                   required
+                  disabled={isPublishingBook}
                   value={bookTitle}
                   onChange={(e) => setBookTitle(e.target.value)}
                   placeholder="مثال: كتاب الفيزياء الحديثة 2026"
-                  className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                  className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1">التصنيف</label>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">التصنيف</label>
                   <select
+                    disabled={isPublishingBook}
                     value={bookCategory}
                     onChange={(e) => setBookCategory(e.target.value)}
-                    className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                    className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                   >
                     <option value="كتب الطلاب">كتب الطلاب</option>
                     <option value="برمجة">برمجة</option>
@@ -2721,35 +3019,37 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1">المرحلة / الصف</label>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">المرحلة / الصف</label>
                   <input
                     type="text"
+                    disabled={isPublishingBook}
                     value={bookGrade}
                     onChange={(e) => setBookGrade(e.target.value)}
                     placeholder="مثال: الصف الثالث الثانوي"
-                    className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                    className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                   />
                 </div>
               </div>
 
               {/* PDF File Picker (Local upload from device or URL) */}
-              <div className="space-y-1.5 p-3 rounded-2xl bg-zinc-950/80 border border-zinc-800">
-                <label className="block text-xs font-bold text-amber-300">
+              <div className="space-y-1.5 p-3 rounded-2xl bg-slate-50 dark:bg-zinc-950/80 border border-zinc-200 dark:border-zinc-800">
+                <label className="block text-xs font-bold text-amber-700 dark:text-amber-300">
                   ملف الكتاب PDF (اختر ملفاً من جهازك أو أدخل الرابط) 📄
                 </label>
                 
                 <div className="flex flex-col sm:flex-row items-center gap-2">
                   <label
                     htmlFor="adminLocalPdfInput"
-                    className="w-full sm:flex-1 py-3 px-4 bg-zinc-900 border-2 border-dashed border-amber-500/40 hover:border-amber-500 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition text-xs font-bold text-amber-300 group"
+                    className="w-full sm:flex-1 py-3 px-4 bg-white dark:bg-zinc-900 border-2 border-dashed border-amber-500/40 hover:border-amber-500 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition text-xs font-bold text-amber-700 dark:text-amber-300 group"
                   >
-                    <FileUp className="w-4 h-4 text-amber-400 group-hover:scale-110 transition" />
+                    <FileUp className="w-4 h-4 text-amber-600 dark:text-amber-400 group-hover:scale-110 transition" />
                     <span>{bookPdfFileName ? `تم اختيار: ${bookPdfFileName} (${bookPdfSize})` : 'اختر ملف PDF من جهازك'}</span>
                   </label>
                   <input
                     id="adminLocalPdfInput"
                     type="file"
                     accept="application/pdf"
+                    disabled={isPublishingBook}
                     onChange={handlePdfFileChange}
                     className="hidden"
                   />
@@ -2758,14 +3058,18 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                 <div className="relative">
                   <input
                     type="text"
-                    required
+                    disabled={isPublishingBook}
                     value={bookFilePath}
-                    onChange={(e) => setBookFilePath(e.target.value)}
+                    onChange={(e) => {
+                      setSelectedPdfFile(null);
+                      setBookPdfFileName('');
+                      setBookFilePath(e.target.value);
+                    }}
                     placeholder="أو أدخل رابط PDF مباشر (URL)"
-                    className="w-full py-2 px-3 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                    className="w-full py-2 px-3 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                   />
-                  {bookFilePath && (
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[10px] text-emerald-400 font-bold">
+                  {(selectedPdfFile || bookFilePath) && (
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">
                       جاهز ✓
                     </span>
                   )}
@@ -2773,23 +3077,24 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
               </div>
 
               {/* Cover Image Picker (Local upload from device or URL) */}
-              <div className="space-y-1.5 p-3 rounded-2xl bg-zinc-950/80 border border-zinc-800">
-                <label className="block text-xs font-bold text-amber-300">
+              <div className="space-y-1.5 p-3 rounded-2xl bg-slate-50 dark:bg-zinc-950/80 border border-zinc-200 dark:border-zinc-800">
+                <label className="block text-xs font-bold text-amber-700 dark:text-amber-300">
                   صورة غلاف الكتاب (اختر من جهازك أو ضع رابطاً) 🖼️
                 </label>
 
                 <div className="flex items-center gap-3">
                   <label
                     htmlFor="adminLocalCoverInput"
-                    className="flex-1 py-2.5 px-3 bg-zinc-900 border-2 border-dashed border-zinc-700 hover:border-amber-500 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition text-xs font-semibold text-zinc-300 group"
+                    className="flex-1 py-2.5 px-3 bg-white dark:bg-zinc-900 border-2 border-dashed border-zinc-300 dark:border-zinc-700 hover:border-amber-500 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition text-xs font-semibold text-zinc-700 dark:text-zinc-300 group"
                   >
-                    <Upload className="w-3.5 h-3.5 text-amber-400 group-hover:scale-110 transition" />
+                    <Upload className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 group-hover:scale-110 transition" />
                     <span>{bookCoverPreview ? 'تغيير صورة الغلاف من جهازك' : 'رفع صورة غلاف من جهازك'}</span>
                   </label>
                   <input
                     id="adminLocalCoverInput"
                     type="file"
                     accept="image/*"
+                    disabled={isPublishingBook}
                     onChange={handleCoverFileChange}
                     className="hidden"
                   />
@@ -2805,46 +3110,92 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
                 <input
                   type="text"
+                  disabled={isPublishingBook}
                   value={bookCoverPath}
                   onChange={(e) => {
                     setBookCoverPath(e.target.value);
                     setBookCoverPreview(e.target.value);
                   }}
                   placeholder="أو أدخل رابط صورة الغلاف (URL)"
-                  className="w-full py-2 px-3 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                  className="w-full py-2 px-3 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
 
-              <div className="flex items-center gap-2 p-3 rounded-xl bg-zinc-950 border border-zinc-800">
+              <div className="flex items-center gap-2 p-3 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800">
                 <input
                   type="checkbox"
                   id="studentBookCheck"
+                  disabled={isPublishingBook}
                   checked={bookIsStudent === 1}
                   onChange={(e) => setBookIsStudent(e.target.checked ? 1 : 0)}
                   className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500"
                 />
-                <label htmlFor="studentBookCheck" className="text-xs font-semibold text-zinc-200 cursor-pointer">
+                <label htmlFor="studentBookCheck" className="text-xs font-semibold text-zinc-800 dark:text-zinc-200 cursor-pointer">
                   تحديد هذا الكتاب كـ "منهج مدرسي للطلاب" 🎓
                 </label>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1">وصف مختصر للكتاب</label>
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">وصف مختصر للكتاب</label>
                 <textarea
                   rows={3}
+                  disabled={isPublishingBook}
                   value={bookDescription}
                   onChange={(e) => setBookDescription(e.target.value)}
                   placeholder="اكتب نبذة عن محتويات الكتاب وأهميته..."
-                  className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                  className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
+
+              {/* Error Alert */}
+              {bookPublishError && (
+                <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-700 dark:text-rose-300 text-xs font-bold flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                  <span>{bookPublishError}</span>
+                </div>
+              )}
+
+              {/* Upload & Publish Progress Bar */}
+              {(isPublishingBook || bookPublishProgress > 0) && (
+                <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 space-y-2 animate-in fade-in">
+                  <div className="flex items-center justify-between text-xs font-bold">
+                    <span className="text-amber-800 dark:text-amber-200 flex items-center gap-1.5">
+                      {bookPublishProgress === 100 ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                      ) : (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-500" />
+                      )}
+                      <span>{bookPublishStage || 'جاري النشر...'}</span>
+                    </span>
+                    <span className="font-mono text-amber-700 dark:text-amber-300">{bookPublishProgress}%</span>
+                  </div>
+                  <div className="w-full h-2.5 bg-zinc-200 dark:bg-zinc-800 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-300 ${
+                        bookPublishProgress === 100
+                          ? 'bg-gradient-to-r from-emerald-500 to-emerald-400'
+                          : 'bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400'
+                      }`}
+                      style={{ width: `${bookPublishProgress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
 
               <div className="flex items-center justify-end pt-2">
                 <button
                   type="submit"
-                  className="px-6 py-2.5 bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400 text-zinc-950 font-bold text-xs rounded-xl hover:brightness-110 transition shadow-lg shadow-amber-500/20 active:scale-95"
+                  disabled={isPublishingBook}
+                  className="px-6 py-2.5 bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400 text-zinc-950 font-bold text-xs rounded-xl hover:brightness-110 transition shadow-lg shadow-amber-500/20 active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
                 >
-                  حفظ الكتاب وإتاحته للطلاب 💾
+                  {isPublishingBook ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>جاري نشر الكتاب ({bookPublishProgress}%)...</span>
+                    </>
+                  ) : (
+                    <span>حفظ الكتاب وإتاحته للطلاب 💾</span>
+                  )}
                 </button>
               </div>
             </form>
@@ -2856,53 +3207,53 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       {/* MODAL: ADD SUMMARY */}
       {/* ------------------------------------------------------------------- */}
       {showSummaryModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-          <div className="relative w-full max-w-lg bg-zinc-900 border border-amber-500/40 rounded-3xl p-6 text-right">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 dark:bg-black/80 backdrop-blur-md">
+          <div className="relative w-full max-w-lg bg-white dark:bg-zinc-900 border border-amber-500/40 rounded-3xl p-6 text-right shadow-2xl">
             <button
               onClick={() => setShowSummaryModal(false)}
-              className="absolute top-5 left-5 p-2 rounded-xl bg-zinc-800 text-zinc-400 hover:text-zinc-100"
+              className="absolute top-5 left-5 p-2 rounded-xl bg-slate-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition"
             >
               <X className="w-4 h-4" />
             </button>
 
-            <h3 className="text-lg font-bold text-amber-200 mb-4">إضافة ملخص بصري / خريطة ذهنية</h3>
+            <h3 className="text-lg font-bold text-amber-700 dark:text-amber-200 mb-4">إضافة ملخص بصري / خريطة ذهنية</h3>
 
             <form onSubmit={handleSaveSummary} className="space-y-3.5">
               <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1">عنوان الملخص</label>
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">عنوان الملخص</label>
                 <input
                   type="text"
                   required
                   value={summaryTitle}
                   onChange={(e) => setSummaryTitle(e.target.value)}
                   placeholder="مثال: خريطة ذهنية لقواعد النحو والإعراب"
-                  className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                  className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1">التصنيف</label>
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">التصنيف</label>
                 <input
                   type="text"
                   value={summaryCategory}
                   onChange={(e) => setSummaryCategory(e.target.value)}
                   placeholder="مثال: لغة عربية، برمجة، فيزياء..."
-                  className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                  className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
 
               {/* Summary Image Picker: Device Upload or Direct URL */}
-              <div className="space-y-2 p-3 rounded-2xl bg-zinc-950/80 border border-zinc-800">
-                <label className="block text-xs font-bold text-amber-300">
+              <div className="space-y-2 p-3 rounded-2xl bg-slate-50 dark:bg-zinc-950/80 border border-slate-200 dark:border-zinc-800">
+                <label className="block text-xs font-bold text-amber-700 dark:text-amber-300">
                   صورة الملخص أو الخريطة الذهنية (رفع من جهازك أو وضع رابط) 🖼️
                 </label>
 
                 <div className="flex items-center gap-3">
                   <label
                     htmlFor="adminLocalSummaryInput"
-                    className="flex-1 py-2.5 px-3 bg-zinc-900 border-2 border-dashed border-zinc-700 hover:border-amber-500 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition text-xs font-semibold text-zinc-300 group"
+                    className="flex-1 py-2.5 px-3 bg-white dark:bg-zinc-900 border-2 border-dashed border-slate-300 dark:border-zinc-700 hover:border-amber-500 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition text-xs font-semibold text-zinc-700 dark:text-zinc-300 group"
                   >
-                    <Upload className="w-3.5 h-3.5 text-amber-400 group-hover:scale-110 transition" />
+                    <Upload className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 group-hover:scale-110 transition" />
                     <span>{summaryImageFilePreview ? 'تغيير صورة الملخص من جهازك' : 'رفع صورة ملخص من جهازك'}</span>
                   </label>
                   <input
@@ -2931,7 +3282,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                     setSummaryImageFilePreview(e.target.value);
                   }}
                   placeholder="أو ضع رابط صورة مباشر (URL)..."
-                  className="w-full py-2 px-3 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                  className="w-full py-2 px-3 bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
 
@@ -2950,68 +3301,68 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       {/* MODAL: ADD VIDEO */}
       {/* ------------------------------------------------------------------- */}
       {showVideoModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-          <div className="relative w-full max-w-lg bg-zinc-900 border border-amber-500/40 rounded-3xl p-6 text-right">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 dark:bg-black/80 backdrop-blur-md">
+          <div className="relative w-full max-w-lg bg-white dark:bg-zinc-900 border border-amber-500/40 rounded-3xl p-6 text-right shadow-2xl">
             <button
               onClick={() => setShowVideoModal(false)}
-              className="absolute top-5 left-5 p-2 rounded-xl bg-zinc-800 text-zinc-400 hover:text-zinc-100"
+              className="absolute top-5 left-5 p-2 rounded-xl bg-slate-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition"
             >
               <X className="w-4 h-4" />
             </button>
 
-            <h3 className="text-lg font-bold text-amber-200 mb-4">إضافة مقطع فيديو تعليمي</h3>
+            <h3 className="text-lg font-bold text-amber-700 dark:text-amber-200 mb-4">إضافة مقطع فيديو تعليمي</h3>
 
             <form onSubmit={handleSaveVideo} className="space-y-3.5">
               <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1">عنوان الفيديو</label>
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">عنوان الفيديو</label>
                 <input
                   type="text"
                   required
                   value={videoTitle}
                   onChange={(e) => setVideoTitle(e.target.value)}
                   placeholder="مثال: شرح درس التفاضل والتكامل كاملاً"
-                  className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                  className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1">رابط الفيديو (YouTube)</label>
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">رابط الفيديو (YouTube)</label>
                 <input
                   type="url"
                   required
                   value={videoUrl}
                   onChange={(e) => setVideoUrl(e.target.value)}
                   placeholder="https://www.youtube.com/watch?v=..."
-                  className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                  className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
 
               <div className="grid grid-cols-3 gap-2">
                 <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1">التصنيف</label>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">التصنيف</label>
                   <input
                     type="text"
                     value={videoCategory}
                     onChange={(e) => setVideoCategory(e.target.value)}
-                    className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100"
+                    className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1">القناة</label>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">القناة</label>
                   <input
                     type="text"
                     value={videoChannel}
                     onChange={(e) => setVideoChannel(e.target.value)}
-                    className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100"
+                    className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1">المدة</label>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">المدة</label>
                   <input
                     type="text"
                     value={videoDuration}
                     onChange={(e) => setVideoDuration(e.target.value)}
-                    className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100"
+                    className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100"
                   />
                 </div>
               </div>
@@ -3031,65 +3382,65 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       {/* MODAL: ADD / EDIT ARTICLE */}
       {/* ------------------------------------------------------------------- */}
       {showArticleModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
-          <div className="relative w-full max-w-2xl bg-zinc-900 border border-amber-500/40 rounded-3xl p-6 text-right max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 dark:bg-black/85 backdrop-blur-md">
+          <div className="relative w-full max-w-2xl bg-white dark:bg-zinc-900 border border-amber-500/40 rounded-3xl p-6 text-right max-h-[90vh] overflow-y-auto shadow-2xl">
             <button
               onClick={() => setShowArticleModal(false)}
-              className="absolute top-5 left-5 p-2 rounded-xl bg-zinc-800 text-zinc-400 hover:text-zinc-100"
+              className="absolute top-5 left-5 p-2 rounded-xl bg-slate-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition"
             >
               <X className="w-4 h-4" />
             </button>
 
-            <h3 className="text-lg font-bold text-amber-200 mb-4">
+            <h3 className="text-lg font-bold text-amber-700 dark:text-amber-200 mb-4">
               {editingArticleId ? 'تعديل المقال' : 'نشر مقال علمي جديد'}
             </h3>
 
             <form onSubmit={handleSaveArticle} className="space-y-3.5">
               <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1">عنوان المقال</label>
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">عنوان المقال</label>
                 <input
                   type="text"
                   required
                   value={articleTitle}
                   onChange={(e) => setArticleTitle(e.target.value)}
                   placeholder="مثال: استراتيجيات التعلم السريع والتفوق الدراسي"
-                  className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                  className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1">اسم الكاتب</label>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">اسم الكاتب</label>
                   <input
                     type="text"
                     value={articleAuthor}
                     onChange={(e) => setArticleAuthor(e.target.value)}
-                    className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100"
+                    className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1">مدة القراءة التقديرية</label>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">مدة القراءة التقديرية</label>
                   <input
                     type="text"
                     value={articleReadTime}
                     onChange={(e) => setArticleReadTime(e.target.value)}
-                    className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100"
+                    className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100"
                   />
                 </div>
               </div>
 
               {/* Article Image: Upload from Device or Direct URL */}
-              <div className="space-y-2 p-3 rounded-2xl bg-zinc-950/80 border border-zinc-800">
-                <label className="block text-xs font-bold text-amber-300">
+              <div className="space-y-2 p-3 rounded-2xl bg-slate-50 dark:bg-zinc-950/80 border border-slate-200 dark:border-zinc-800">
+                <label className="block text-xs font-bold text-amber-700 dark:text-amber-300">
                   صورة غلاف المقال (رفع من جهازك أو وضع رابط صورة) 🖼️
                 </label>
 
                 <div className="flex items-center gap-3">
                   <label
                     htmlFor="adminLocalArticleInput"
-                    className="flex-1 py-2.5 px-3 bg-zinc-900 border-2 border-dashed border-zinc-700 hover:border-amber-500 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition text-xs font-semibold text-zinc-300 group"
+                    className="flex-1 py-2.5 px-3 bg-white dark:bg-zinc-900 border-2 border-dashed border-slate-300 dark:border-zinc-700 hover:border-amber-500 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition text-xs font-semibold text-zinc-700 dark:text-zinc-300 group"
                   >
-                    <Upload className="w-3.5 h-3.5 text-amber-400 group-hover:scale-110 transition" />
+                    <Upload className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 group-hover:scale-110 transition" />
                     <span>{articleImageFilePreview ? 'تغيير صورة المقال من جهازك' : 'رفع صورة المقال من جهازك'}</span>
                   </label>
                   <input
@@ -3117,12 +3468,12 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                     setArticleImageFilePreview(e.target.value);
                   }}
                   placeholder="أو أدخل رابط صورة مباشر (URL)..."
-                  className="w-full py-2 px-3 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                  className="w-full py-2 px-3 bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1">
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
                   نص ومحتوى المقال (اكتب الشرح والملاحظات بالتفصيل) ✍️
                 </label>
                 <textarea
@@ -3131,7 +3482,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                   value={articleContent}
                   onChange={(e) => setArticleContent(e.target.value)}
                   placeholder="اكتب المقال هنا باستخدام تنسيق الماركداون: ## للعناوين، **للنص العريض**..."
-                  className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500 font-mono"
+                  className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500 font-mono"
                 />
               </div>
 
@@ -3150,47 +3501,53 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       {/* MODAL: ADD / EDIT STUDENT EXAM */}
       {/* ------------------------------------------------------------------- */}
       {showExamModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
-          <div className="relative w-full max-w-3xl bg-zinc-900 border border-amber-500/40 rounded-3xl p-6 text-right max-h-[90vh] overflow-y-auto shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 dark:bg-black/85 backdrop-blur-md">
+          <div className="relative w-full max-w-3xl bg-white dark:bg-zinc-900 border border-amber-500/40 rounded-3xl p-6 text-right max-h-[90vh] overflow-y-auto shadow-2xl">
             <button
               onClick={() => setShowExamModal(false)}
-              className="absolute top-5 left-5 p-2 rounded-xl bg-zinc-800 text-zinc-400 hover:text-zinc-100 transition"
+              className="absolute top-5 left-5 p-2 rounded-xl bg-slate-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition"
             >
               <X className="w-4 h-4" />
             </button>
 
-            <div className="border-b border-zinc-800 pb-3 mb-5">
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300">
+            <div className="border-b border-slate-200 dark:border-zinc-800 pb-3 mb-5">
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/15 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300">
                 منظومة الاختبارات الذكية
               </span>
-              <h3 className="text-lg font-bold text-zinc-100 mt-1">
+              <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mt-1">
                 إضافة امتحان إلكتروني جديد للطلاب 🎓
               </h3>
-              <p className="text-xs text-zinc-400">
+              <p className="text-xs text-zinc-600 dark:text-zinc-400">
                 أدخل بيانات الامتحان وأسئلته، وسيتاح فوراً في لوحة الطالب وبنك الامتحانات مع التصحيح التلقائي.
               </p>
             </div>
 
             <form onSubmit={handleSaveExam} className="space-y-4">
+              {examFormError && (
+                <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-500/10 border border-rose-300 dark:border-rose-500/30 text-rose-700 dark:text-rose-300 text-xs font-bold flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  <span>{examFormError}</span>
+                </div>
+              )}
               <div>
-                <label className="block text-xs font-bold text-zinc-300 mb-1">عنوان الامتحان</label>
+                <label className="block text-xs font-bold text-zinc-700 dark:text-zinc-300 mb-1">عنوان الامتحان</label>
                 <input
                   type="text"
                   required
                   value={examTitle}
                   onChange={(e) => setExamTitle(e.target.value)}
                   placeholder="مثال: امتحان الأحياء والوراثة - الصف الثالث الثانوي 2026"
-                  className="w-full py-2.5 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                  className="w-full py-2.5 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1">المادة</label>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">المادة</label>
                   <select
                     value={examSubject}
                     onChange={(e) => setExamSubject(e.target.value)}
-                    className="w-full py-2.5 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                    className="w-full py-2.5 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                   >
                     <option value="كيمياء">كيمياء</option>
                     <option value="فيزياء">فيزياء</option>
@@ -3205,11 +3562,11 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1">الصف الدراسي</label>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">الصف الدراسي</label>
                   <select
                     value={examGrade}
                     onChange={(e) => setExamGrade(e.target.value)}
-                    className="w-full py-2.5 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                    className="w-full py-2.5 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                   >
                     <option value="الصف الثالث الإعدادي">الصف الثالث الإعدادي</option>
                     <option value="الصف الأول الثانوي">الصف الأول الثانوي</option>
@@ -3219,43 +3576,43 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1">المدة (بالدقائق)</label>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">المدة (بالدقائق)</label>
                   <input
                     type="number"
                     min="5"
                     max="180"
                     value={examDuration}
                     onChange={(e) => setExamDuration(parseInt(e.target.value) || 20)}
-                    className="w-full py-2.5 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                    className="w-full py-2.5 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1">الدرجة الكلية</label>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">الدرجة الكلية</label>
                   <input
                     type="number"
                     value={examTotalMarks}
                     onChange={(e) => setExamTotalMarks(parseInt(e.target.value) || 30)}
-                    className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100"
+                    className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1">درجة النجاح</label>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">درجة النجاح</label>
                   <input
                     type="number"
                     value={examPassMarks}
                     onChange={(e) => setExamPassMarks(parseInt(e.target.value) || 18)}
-                    className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100"
+                    className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1">مستوى الصعوبة</label>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">مستوى الصعوبة</label>
                   <select
                     value={examDifficulty}
                     onChange={(e) => setExamDifficulty(e.target.value as any)}
-                    className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100"
+                    className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100"
                   >
                     <option value="متوسط">متوسط</option>
                     <option value="متقدم">متقدم</option>
@@ -3265,23 +3622,23 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1">وصف موجز للامتحان</label>
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">وصف موجز للامتحان</label>
                 <textarea
                   rows={2}
                   value={examDescription}
                   onChange={(e) => setExamDescription(e.target.value)}
                   placeholder="اكتب نبذة عن أبواب المنهج التي يغطيها الاختبار..."
-                  className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                  className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
 
               {/* Target Audience Controls (التحكم في انشاء الامتحانات لكل باقة أو لكل طالب) */}
-              <div className="p-4 rounded-2xl bg-zinc-950 border border-amber-500/30 space-y-3">
+              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-amber-500/30 space-y-3">
                 <div className="flex items-center justify-between">
-                  <label className="block text-xs font-bold text-amber-300">
+                  <label className="block text-xs font-bold text-amber-700 dark:text-amber-300">
                     🎯 الفئة الموجه لها الامتحان (التحكم بالباقات والطلاب)
                   </label>
-                  <span className="text-[10px] text-zinc-400">حدد من يحق له خوض هذا الاختبار</span>
+                  <span className="text-[10px] text-zinc-500 dark:text-zinc-400">حدد من يحق له خوض هذا الاختبار</span>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
@@ -3291,7 +3648,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                     className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
                       examTargetScope === 'all'
                         ? 'bg-amber-500 text-zinc-950 border-amber-400 font-extrabold'
-                        : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200'
+                        : 'bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
                     }`}
                   >
                     🌐 متاح لكافة الطلاب
@@ -3303,7 +3660,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                     className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
                       examTargetScope === 'specific_plans'
                         ? 'bg-amber-500 text-zinc-950 border-amber-400 font-extrabold'
-                        : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200'
+                        : 'bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
                     }`}
                   >
                     ⚡ لباقات اشتراك محددة
@@ -3315,7 +3672,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                     className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
                       examTargetScope === 'specific_students'
                         ? 'bg-amber-500 text-zinc-950 border-amber-400 font-extrabold'
-                        : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200'
+                        : 'bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
                     }`}
                   >
                     👤 لطلاب محددين بالاسم
@@ -3323,14 +3680,14 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                 </div>
 
                 {examTargetScope === 'specific_plans' && (
-                  <div className="p-3 rounded-xl bg-zinc-900 border border-zinc-800 space-y-2 text-xs">
-                    <span className="text-[11px] font-bold text-zinc-300 block">اختر الباقات المصرح لها بأداء هذا الامتحان:</span>
+                  <div className="p-3 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 space-y-2 text-xs">
+                    <span className="text-[11px] font-bold text-zinc-700 dark:text-zinc-300 block">اختر الباقات المصرح لها بأداء هذا الامتحان:</span>
                     <div className="flex flex-wrap gap-3">
                       {[
                         { id: 'basic_50', label: 'باقة التفوق الشاملة (50 ج.م)' },
                         { id: 'free_trial', label: 'الفترة التجريبية المجانية (10 أيام)' }
                       ].map(planOption => (
-                        <label key={planOption.id} className="flex items-center gap-2 cursor-pointer text-zinc-300">
+                        <label key={planOption.id} className="flex items-center gap-2 cursor-pointer text-zinc-700 dark:text-zinc-300">
                           <input
                             type="checkbox"
                             checked={examAllowedPlans.includes(planOption.id)}
@@ -3341,7 +3698,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                                 setExamAllowedPlans(examAllowedPlans.filter(p => p !== planOption.id));
                               }
                             }}
-                            className="rounded text-amber-500 focus:ring-amber-400 bg-zinc-950"
+                            className="rounded text-amber-500 focus:ring-amber-400 bg-slate-50 dark:bg-zinc-950"
                           />
                           <span>{planOption.label}</span>
                         </label>
@@ -3351,8 +3708,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                 )}
 
                 {examTargetScope === 'specific_students' && (
-                  <div className="p-3 rounded-xl bg-zinc-900 border border-zinc-800 space-y-2 text-xs">
-                    <span className="text-[11px] font-bold text-zinc-300 block">
+                  <div className="p-3 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 space-y-2 text-xs">
+                    <span className="text-[11px] font-bold text-zinc-700 dark:text-zinc-300 block">
                       اكتب البريد الإلكتروني للطلاب الموجه لهم الامتحان (مفصولاً بفواصل أو أسطر):
                     </span>
                     <textarea
@@ -3360,7 +3717,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                       value={examTargetStudentEmails}
                       onChange={(e) => setExamTargetStudentEmails(e.target.value)}
                       placeholder="student1@gmail.com, student2@example.com"
-                      className="w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 font-mono focus:outline-none focus:border-amber-500"
+                      className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 font-mono focus:outline-none focus:border-amber-500"
                     />
                     {users.length > 0 && (
                       <div className="flex flex-wrap gap-1.5 mt-1.5">
@@ -3374,7 +3731,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                                 setExamTargetStudentEmails(prev => prev ? `${prev}, ${u.email}` : u.email);
                               }
                             }}
-                            className="px-2 py-0.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-amber-300 text-[10px] transition"
+                            className="px-2 py-0.5 rounded-lg bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-amber-700 dark:text-amber-300 text-[10px] transition"
                           >
                             + {u.name} ({u.email})
                           </button>
@@ -3386,15 +3743,15 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
               </div>
 
               {/* Questions Section */}
-              <div className="border-t border-zinc-800 pt-4 space-y-4">
+              <div className="border-t border-slate-200 dark:border-zinc-800 pt-4 space-y-4">
                 <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+                  <h4 className="text-xs font-bold text-amber-700 dark:text-amber-300 flex items-center gap-1.5">
                     <span>أسئلة الامتحان ({examQuestions.length})</span>
                   </h4>
                   <button
                     type="button"
                     onClick={handleAddQuestionToExam}
-                    className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-amber-300 text-xs font-bold rounded-xl border border-zinc-700 transition flex items-center gap-1"
+                    className="px-3 py-1.5 bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-amber-700 dark:text-amber-300 text-xs font-bold rounded-xl border border-slate-300 dark:border-zinc-700 transition flex items-center gap-1"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     <span>إضافة سؤال جديد</span>
@@ -3403,14 +3760,14 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
                 <div className="space-y-4 max-h-96 overflow-y-auto pr-1">
                   {examQuestions.map((q, qIdx) => (
-                    <div key={qIdx} className="p-4 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-3">
+                    <div key={qIdx} className="p-4 rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 space-y-3">
                       <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-amber-400">سؤال رقم {qIdx + 1}</span>
+                        <span className="text-xs font-bold text-amber-700 dark:text-amber-400">سؤال رقم {qIdx + 1}</span>
                         {examQuestions.length > 1 && (
                           <button
                             type="button"
                             onClick={() => handleRemoveQuestionFromExam(qIdx)}
-                            className="text-xs text-rose-400 hover:text-rose-300 p-1"
+                            className="text-xs text-rose-600 dark:text-rose-400 hover:text-rose-500 p-1"
                             title="حذف هذا السؤال"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -3424,13 +3781,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                         value={q.question}
                         onChange={(e) => handleUpdateQuestionField(qIdx, 'question', e.target.value)}
                         placeholder={`نص السؤال رقم ${qIdx + 1}...`}
-                        className="w-full py-2 px-3 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-amber-500"
+                        className="w-full py-2 px-3 bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
                       />
 
                       {/* Question Image Attachment (Optional) */}
-                      <div className="p-3 rounded-xl bg-zinc-900/90 border border-zinc-800 space-y-2">
+                      <div className="p-3 rounded-xl bg-white dark:bg-zinc-900/90 border border-slate-200 dark:border-zinc-800 space-y-2">
                         <div className="flex items-center justify-between">
-                          <label className="text-[11px] font-bold text-amber-300 flex items-center gap-1.5">
+                          <label className="text-[11px] font-bold text-amber-700 dark:text-amber-300 flex items-center gap-1.5">
                             <ImageIcon className="w-3.5 h-3.5" />
                             <span>إرفاق صورة توضيحية للسؤال (اختياري - رسومات بيانية، دوائر، معادلات):</span>
                           </label>
@@ -3441,7 +3798,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                                 handleUpdateQuestionField(qIdx, 'imageUrl', '');
                                 handleUpdateQuestionField(qIdx, 'image', '');
                               }}
-                              className="text-[10px] text-rose-400 hover:underline"
+                              className="text-[10px] text-rose-600 dark:text-rose-400 hover:underline"
                             >
                               إزالة الصورة ✕
                             </button>
@@ -3449,8 +3806,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                         </div>
 
                         <div className="flex flex-col sm:flex-row items-center gap-2">
-                          <label className="flex-1 w-full py-2 px-3 bg-zinc-950 border border-dashed border-zinc-700 hover:border-amber-500 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition text-xs font-semibold text-zinc-300">
-                            <Upload className="w-3.5 h-3.5 text-amber-400" />
+                          <label className="flex-1 w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-dashed border-slate-300 dark:border-zinc-700 hover:border-amber-500 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                            <Upload className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
                             <span>{(q.imageUrl || q.image) ? 'تغيير صورة السؤال من جهازك' : 'رفع صورة من جهازك'}</span>
                             <input
                               type="file"
@@ -3500,18 +3857,18 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                               handleUpdateQuestionField(qIdx, 'image', e.target.value);
                             }}
                             placeholder="أو الصق رابط صورة مباشر (URL)..."
-                            className="flex-1 w-full py-2 px-3 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-100 font-mono focus:outline-none focus:border-amber-500"
+                            className="flex-1 w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 font-mono focus:outline-none focus:border-amber-500"
                           />
                         </div>
 
                         {(q.imageUrl || q.image) && (
-                          <div className="flex items-center gap-3 p-2 rounded-lg bg-zinc-950 border border-amber-500/30">
+                          <div className="flex items-center gap-3 p-2 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-amber-500/30">
                             <img
                               src={q.imageUrl || q.image}
                               alt={`معاينة رسم سؤال ${qIdx + 1}`}
-                              className="max-h-24 w-auto rounded-md object-contain border border-zinc-800"
+                              className="max-h-24 w-auto rounded-md object-contain border border-slate-200 dark:border-zinc-800"
                             />
-                            <span className="text-[10px] text-emerald-400 font-semibold">
+                            <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold">
                               تم إرفاق صورة السؤال بنجاح وتجهيزها للعرض للطلاب ✓
                             </span>
                           </div>
@@ -3520,7 +3877,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         {q.options.map((opt, optIdx) => (
-                          <div key={optIdx} className="flex items-center gap-2 bg-zinc-900 p-2 rounded-xl border border-zinc-800">
+                          <div key={optIdx} className="flex items-center gap-2 bg-white dark:bg-zinc-900 p-2 rounded-xl border border-slate-300 dark:border-zinc-800">
                             <input
                               type="radio"
                               name={`correct_${qIdx}`}
@@ -3535,7 +3892,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                               value={opt}
                               onChange={(e) => handleUpdateQuestionOption(qIdx, optIdx, e.target.value)}
                               placeholder={`الخيار (${optIdx + 1})`}
-                              className="w-full bg-transparent text-xs text-zinc-200 focus:outline-none"
+                              className="w-full bg-transparent text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none"
                             />
                           </div>
                         ))}
@@ -3547,14 +3904,14 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                           value={q.explanation}
                           onChange={(e) => handleUpdateQuestionField(qIdx, 'explanation', e.target.value)}
                           placeholder="الشرح والتفسير العلمي للإجابة الصحيحة..."
-                          className="w-full py-1.5 px-3 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-300"
+                          className="w-full py-1.5 px-3 bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-700 dark:text-zinc-300"
                         />
                         <input
                           type="text"
                           value={q.topic}
                           onChange={(e) => handleUpdateQuestionField(qIdx, 'topic', e.target.value)}
                           placeholder="موضوع أو باب السؤال (مثال: الكيمياء الكهربية)..."
-                          className="w-full py-1.5 px-3 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-300"
+                          className="w-full py-1.5 px-3 bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-700 dark:text-zinc-300"
                         />
                       </div>
                     </div>
@@ -3562,7 +3919,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                 </div>
               </div>
 
-              <div className="flex items-center justify-end pt-3 border-t border-zinc-800">
+              <div className="flex items-center justify-end pt-3 border-t border-slate-200 dark:border-zinc-800">
                 <button
                   type="submit"
                   className="px-6 py-2.5 bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400 text-zinc-950 font-bold text-xs rounded-xl hover:brightness-110 transition shadow-lg shadow-amber-500/20 active:scale-95"
@@ -3577,19 +3934,19 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
       {/* Receipt Image Preview Modal */}
       {selectedReceiptPreview && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md animate-in fade-in">
-          <div className="relative max-w-xl w-full bg-zinc-950 border border-amber-500/40 rounded-3xl p-6 text-right shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 dark:bg-black/90 backdrop-blur-md animate-in fade-in">
+          <div className="relative max-w-xl w-full bg-white dark:bg-zinc-950 border border-amber-500/40 rounded-3xl p-6 text-right shadow-2xl">
             <button
               onClick={() => setSelectedReceiptPreview(null)}
-              className="absolute top-4 left-4 p-2 rounded-xl bg-zinc-900 text-zinc-400 hover:text-zinc-100 transition"
+              className="absolute top-4 left-4 p-2 rounded-xl bg-slate-100 dark:bg-zinc-900 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition"
             >
               <X className="w-5 h-5" />
             </button>
-            <h3 className="text-sm font-bold text-amber-300 mb-4 flex items-center gap-2">
+            <h3 className="text-sm font-bold text-amber-700 dark:text-amber-300 mb-4 flex items-center gap-2">
               <Eye className="w-4 h-4" />
               <span>صورة إثبات التحويل / إيصال الدفع البنكي</span>
             </h3>
-            <div className="max-h-[70vh] overflow-auto rounded-2xl border border-zinc-800 bg-zinc-900 flex items-center justify-center p-2">
+            <div className="max-h-[70vh] overflow-auto rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900 flex items-center justify-center p-2">
               <img 
                 src={selectedReceiptPreview} 
                 alt="إيصال التحويل" 
@@ -3599,9 +3956,73 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
             <div className="mt-4 flex justify-end">
               <button
                 onClick={() => setSelectedReceiptPreview(null)}
-                className="px-5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-bold transition"
+                className="px-5 py-2 rounded-xl bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 text-xs font-bold transition"
               >
                 إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Inline PDF Book Preview Modal */}
+      {previewPdfBook && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 dark:bg-black/90 backdrop-blur-md animate-in fade-in">
+          <div className="relative max-w-4xl w-full bg-white dark:bg-zinc-950 border border-amber-500/40 rounded-3xl p-5 sm:p-6 text-right shadow-2xl flex flex-col max-h-[90vh]">
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-200 dark:border-zinc-800">
+              <h3 className="text-sm font-bold text-amber-700 dark:text-amber-300 flex items-center gap-2">
+                <BookOpen className="w-4 h-4" />
+                <span>معاينة الكتاب: {previewPdfBook.title}</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  if (previewPdfBook.isObjectUrl) URL.revokeObjectURL(previewPdfBook.url);
+                  setPreviewPdfBook(null);
+                }}
+                className="p-2 rounded-xl bg-slate-100 dark:bg-zinc-900 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex-1 min-h-[60vh] rounded-2xl overflow-hidden border border-slate-200 dark:border-zinc-800 bg-slate-100 dark:bg-zinc-900">
+              <iframe src={previewPdfBook.url} title={previewPdfBook.title} className="w-full h-[65vh]" />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Themed Confirmation Modal */}
+      {confirmDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 dark:bg-black/85 backdrop-blur-md animate-in fade-in">
+          <div className="relative max-w-md w-full bg-white dark:bg-zinc-950 border border-rose-500/40 rounded-3xl p-6 text-right shadow-2xl space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">{confirmDialog.title}</h3>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5">{confirmDialog.message}</p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200 dark:border-zinc-800">
+              <button
+                type="button"
+                onClick={() => setConfirmDialog(null)}
+                className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 text-xs font-bold transition"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const fn = confirmDialog.onConfirm;
+                  setConfirmDialog(null);
+                  await fn();
+                }}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition"
+              >
+                تأكيد التنفيذ
               </button>
             </div>
           </div>

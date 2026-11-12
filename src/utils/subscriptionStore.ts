@@ -155,10 +155,10 @@ export const calculateStudentSubscription = (
   } catch (e) {
     return {
       planId: 'basic_50',
-      planName: 'باقة الأساسيات',
+      planName: 'باقة التفوق الشاملة (50 ج.م)',
       status: 'active',
-      examsRemainingThisWeek: 2,
-      maxExamsPerWeek: 2,
+      examsRemainingThisWeek: -1,
+      maxExamsPerWeek: -1,
       startDate: new Date().toISOString(),
       endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
     };

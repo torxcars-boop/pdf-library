@@ -15,16 +15,7 @@ import {
   Image as ImageIcon, 
   Video as VideoIcon, 
   Bookmark, 
-  Search, 
-  Download, 
-  Eye, 
-  ExternalLink, 
   Sparkles, 
-  ArrowLeft,
-  CheckCircle,
-  MessageCircle,
-  ShieldCheck,
-  GraduationCap
 } from 'lucide-react';
 
 import { 
@@ -54,13 +45,22 @@ import {
 import { 
   calculateStudentSubscription, 
   saveStudentSubscription, 
-  isEducationalFeatureLocked 
 } from './utils/subscriptionStore';
 import { saveRegisteredStudent } from './utils/studentUserStore';
+import { triggerPdfDownload } from './utils/pdfStorage';
+import { 
+  ThemeMode, 
+  getStoredTheme, 
+  toggleThemeMode, 
+  THEME_CHANGED_EVENT 
+} from './utils/themeStore';
 import { TrialCountdownBanner } from './components/TrialCountdownBanner';
 import { FeatureLockedModal } from './components/FeatureLockedModal';
 
 export default function App() {
+  // Theme state (Light / Dark)
+  const [theme, setTheme] = useState<ThemeMode>(getStoredTheme);
+
   // Auth state
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [userToken, setUserToken] = useState<string>('');
@@ -72,10 +72,10 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false);
   const [isFeatureLockedModalOpen, setIsFeatureLockedModalOpen] = useState(false);
-  const [lockedFeatureName, setLockedFeatureName] = useState<string>('هذه الميزة التعليمية');
+  const [lockedFeatureName] = useState<string>('هذه الميزة التعليمية');
 
-  // Student statistics & local downloads
-  const [studentStats, setStudentStats] = useState<StudentStats>(getStudentStats);
+  // Student statistics & local downloads (scoped per user ID)
+  const [studentStats, setStudentStats] = useState<StudentStats>(() => getStudentStats());
   const [downloadedCount, setDownloadedCount] = useState<number>(getDownloadedBooksCount);
 
   // Detail View Modals
@@ -104,6 +104,29 @@ export default function App() {
     setToast(msg);
     setTimeout(() => setToast(null), 3000);
   };
+
+  const handleToggleTheme = () => {
+    const next = toggleThemeMode();
+    setTheme(next);
+  };
+
+  useEffect(() => {
+    const onThemeChanged = (e: Event) => {
+      const customEvent = e as CustomEvent<ThemeMode>;
+      if (customEvent.detail) {
+        setTheme(customEvent.detail);
+      } else {
+        setTheme(getStoredTheme());
+      }
+    };
+    window.addEventListener(THEME_CHANGED_EVENT, onThemeChanged);
+    return () => window.removeEventListener(THEME_CHANGED_EVENT, onThemeChanged);
+  }, []);
+
+  // Reload per-user student stats whenever currentUser?.id changes
+  useEffect(() => {
+    setStudentStats(getStudentStats(currentUser?.id));
+  }, [currentUser?.id]);
 
   // Initial Data Fetch & Egyptian Curriculum Synchronization with Persistent Admin Actions
   const fetchData = async () => {
@@ -212,7 +235,7 @@ export default function App() {
 
       // Refresh student downloads & statistics
       setDownloadedCount(getDownloadedBooksCount());
-      setStudentStats(getStudentStats());
+      setStudentStats(getStudentStats(currentUser?.id));
     } catch (err) {
       console.error('Fetch error:', err);
       // Fallback filtered by deletions
@@ -287,7 +310,6 @@ export default function App() {
     // Realtime Content Synchronization Listener (Cross-component and Cross-tab)
     const unsubscribeSync = listenToContentChanged(() => {
       fetchData();
-      setStudentStats(getStudentStats());
       setDownloadedCount(getDownloadedBooksCount());
     });
 
@@ -328,6 +350,7 @@ export default function App() {
     setUserToken(token);
     localStorage.setItem('arm_user_token', token);
     localStorage.setItem('arm_current_user', JSON.stringify(user));
+    saveRegisteredStudent(user);
     showToast(`مرحباً بك يا ${user.name}! تم تسجيل الدخول بنجاح ومزامنة تقدمك ✨`);
   };
 
@@ -389,18 +412,16 @@ export default function App() {
     if (item.type === 'book') {
       const found = books.find(b => String(b.id) === item.id);
       if (found) setSelectedBook(found);
-      else window.open(item.path, '_blank');
+      else triggerPdfDownload(item.path, `${item.title}.pdf`);
     } else if (item.type === 'article') {
       const found = articles.find(a => String(a.id) === item.id);
       if (found) setSelectedArticle(found);
     } else if (item.type === 'summary') {
       const found = summaries.find(s => String(s.id) === item.id);
       if (found) setSelectedSummary(found);
-      else window.open(item.path, '_blank');
     } else if (item.type === 'video') {
       const found = videos.find(v => String(v.id) === item.id);
       if (found) setSelectedVideo(found);
-      else window.open(item.path, '_blank');
     }
     setIsProfileOpen(false);
   };
@@ -497,8 +518,6 @@ export default function App() {
   };
 
   // Filtered Collections
-  const categories = ['الكل', 'كتب الطلاب', 'برمجة', 'تقنية', 'علوم', 'أدب', 'تعليم'];
-
   const filteredBooks = books.filter(b => {
     const q = searchQuery.toLowerCase();
     const matchesSearch = !searchQuery || 
@@ -545,12 +564,12 @@ export default function App() {
   const userBookmarksList = currentUser?.bookmarks || [];
 
   return (
-    <div className="min-h-screen text-zinc-100 flex flex-col justify-between selection:bg-amber-500/30 selection:text-amber-200">
+    <div className="min-h-screen text-zinc-900 dark:text-zinc-100 flex flex-col justify-between selection:bg-amber-500/30 selection:text-amber-900 dark:selection:text-amber-200">
       
       {/* Toast popup */}
       {toast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-zinc-900 border border-amber-500/40 text-amber-300 px-5 py-3 rounded-2xl shadow-2xl text-xs font-bold flex items-center gap-2 animate-in fade-in slide-in-from-bottom-4">
-          <Sparkles className="w-4 h-4 text-amber-400" />
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-white dark:bg-zinc-900 border border-amber-500/40 text-amber-800 dark:text-amber-300 px-5 py-3 rounded-2xl shadow-2xl text-xs font-bold flex items-center gap-2 animate-in fade-in slide-in-from-bottom-4">
+          <Sparkles className="w-4 h-4 text-amber-600 dark:text-amber-400" />
           <span>{toast}</span>
         </div>
       )}
@@ -579,6 +598,8 @@ export default function App() {
           bookmarksCount={userBookmarksList.length}
           onToggleSidebar={() => setIsSidebarOpen(prev => !prev)}
           onOpenSubscriptions={() => setIsSubscriptionModalOpen(true)}
+          theme={theme}
+          onToggleTheme={handleToggleTheme}
         />
 
         {/* Prominent Live Trial Countdown Banner (10-Day Free Trial Timer & Expiration) */}
@@ -590,39 +611,39 @@ export default function App() {
         />
 
         {/* Hero Section with Quick Statistics */}
-        <div className="relative overflow-hidden border-b border-amber-500/10 bg-gradient-to-b from-amber-950/20 via-zinc-950/40 to-transparent">
+        <div className="relative overflow-hidden border-b border-amber-500/15 bg-gradient-to-b from-amber-50/70 via-white/40 to-transparent dark:from-amber-950/20 dark:via-zinc-950/40 dark:to-transparent">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-12 flex flex-col items-center text-center">
             
-            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-bold mb-4 shadow-sm">
+            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-800 dark:text-amber-400 text-xs font-bold mb-4 shadow-sm">
               <Sparkles className="w-3.5 h-3.5" />
               <span>🎓 مناهج وكتب الصف الثالث الثانوي المصري 2026 + خرائط ذهنية وشروحات مرئية</span>
             </div>
 
-            <h1 className="text-3xl sm:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-amber-100 via-amber-300 to-amber-500 leading-tight mb-4">
+            <h1 className="text-3xl sm:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-amber-800 via-amber-600 to-amber-500 dark:from-amber-100 dark:via-amber-300 dark:to-amber-500 leading-tight mb-4">
               المكتبة الرقمية الفاخرة للثانوية العامة والمناهج
             </h1>
 
-            <p className="max-w-2xl text-xs sm:text-sm text-zinc-400 leading-relaxed mb-6">
+            <p className="max-w-2xl text-xs sm:text-sm text-zinc-600 dark:text-zinc-400 leading-relaxed mb-6">
               بوابتك المتكاملة لتحميل كتب ومذكرات الصف الثالث الثانوي المصري (علمي علوم، علمي رياضة، والشعبة الأدبية)، استعراض الخرائط الذهنية الذكية، ومتابعة أقوى مراجعات الفيديو والشروحات.
             </p>
 
             {/* Quick Metrics Bar */}
-            <div className="flex flex-wrap justify-center gap-3 sm:gap-6 text-xs text-zinc-400">
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-zinc-900/60 border border-zinc-800">
-                <BookOpen className="w-4 h-4 text-amber-400" />
-                <span><strong className="text-zinc-200">{books.length}</strong> كتاب ومنهج</span>
+            <div className="flex flex-wrap justify-center gap-3 sm:gap-6 text-xs text-zinc-600 dark:text-zinc-400">
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/80 dark:bg-zinc-900/60 border border-slate-200 dark:border-zinc-800 shadow-sm">
+                <BookOpen className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                <span><strong className="text-zinc-900 dark:text-zinc-200">{books.length}</strong> كتاب ومنهج</span>
               </div>
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-zinc-900/60 border border-zinc-800">
-                <ImageIcon className="w-4 h-4 text-amber-400" />
-                <span><strong className="text-zinc-200">{summaries.length}</strong> خريطة ذهنية</span>
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/80 dark:bg-zinc-900/60 border border-slate-200 dark:border-zinc-800 shadow-sm">
+                <ImageIcon className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                <span><strong className="text-zinc-900 dark:text-zinc-200">{summaries.length}</strong> خريطة ذهنية</span>
               </div>
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-zinc-900/60 border border-zinc-800">
-                <VideoIcon className="w-4 h-4 text-amber-400" />
-                <span><strong className="text-zinc-200">{videos.length}</strong> شرح فيديو</span>
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/80 dark:bg-zinc-900/60 border border-slate-200 dark:border-zinc-800 shadow-sm">
+                <VideoIcon className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                <span><strong className="text-zinc-900 dark:text-zinc-200">{videos.length}</strong> شرح فيديو</span>
               </div>
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-zinc-900/60 border border-zinc-800">
-                <FileText className="w-4 h-4 text-amber-400" />
-                <span><strong className="text-zinc-200">{articles.length}</strong> مقالة متخصصة</span>
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/80 dark:bg-zinc-900/60 border border-slate-200 dark:border-zinc-800 shadow-sm">
+                <FileText className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                <span><strong className="text-zinc-900 dark:text-zinc-200">{articles.length}</strong> مقالة متخصصة</span>
               </div>
             </div>
 
@@ -633,13 +654,13 @@ export default function App() {
         <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
 
           {/* Section Navigation Tabs */}
-          <div className="flex flex-wrap justify-center gap-2 sm:gap-2.5 mb-6 border-b border-zinc-800/80 pb-5">
+          <div className="flex flex-wrap justify-center gap-2 sm:gap-2.5 mb-6 border-b border-slate-200 dark:border-zinc-800/80 pb-5">
             <button
               onClick={() => setActiveTab('all')}
               className={`px-3.5 sm:px-4 py-2 rounded-2xl text-xs font-bold transition border ${
                 activeTab === 'all'
                   ? 'bg-amber-500 text-zinc-950 border-amber-400 shadow-lg shadow-amber-500/20'
-                  : 'bg-zinc-900/60 text-zinc-400 border-zinc-800 hover:text-amber-300'
+                  : 'bg-white dark:bg-zinc-900/60 text-zinc-700 dark:text-zinc-400 border-slate-200 dark:border-zinc-800 hover:text-amber-700 dark:hover:text-amber-300'
               }`}
             >
               🌐 عرض الكل
@@ -649,7 +670,7 @@ export default function App() {
               className={`px-3.5 sm:px-4 py-2 rounded-2xl text-xs font-bold transition border ${
                 activeTab === 'dashboard'
                   ? 'bg-amber-500 text-zinc-950 border-amber-400 shadow-lg shadow-amber-500/20'
-                  : 'bg-zinc-900/60 text-zinc-300 border-amber-500/30 hover:border-amber-500 hover:text-amber-300'
+                  : 'bg-white dark:bg-zinc-900/60 text-zinc-800 dark:text-zinc-300 border-amber-500/30 hover:border-amber-500 hover:text-amber-700 dark:hover:text-amber-300'
               }`}
             >
               📊 لوحة تحكم الطالب
@@ -659,7 +680,7 @@ export default function App() {
               className={`px-3.5 sm:px-4 py-2 rounded-2xl text-xs font-bold transition border ${
                 activeTab === 'exams'
                   ? 'bg-amber-500 text-zinc-950 border-amber-400 shadow-lg shadow-amber-500/20'
-                  : 'bg-zinc-900/60 text-zinc-300 border-amber-500/30 hover:border-amber-500 hover:text-amber-300'
+                  : 'bg-white dark:bg-zinc-900/60 text-zinc-800 dark:text-zinc-300 border-amber-500/30 hover:border-amber-500 hover:text-amber-700 dark:hover:text-amber-300'
               }`}
             >
               🎓 بنك الامتحانات (3 إعدادي - 3 ثانوي)
@@ -669,7 +690,7 @@ export default function App() {
               className={`px-3.5 sm:px-4 py-2 rounded-2xl text-xs font-bold transition border ${
                 activeTab === 'english-ai'
                   ? 'bg-amber-500 text-zinc-950 border-amber-400 shadow-lg shadow-amber-500/20'
-                  : 'bg-zinc-900/60 text-amber-300 border-amber-500/40 hover:border-amber-400 hover:brightness-110'
+                  : 'bg-white dark:bg-zinc-900/60 text-amber-700 dark:text-amber-300 border-amber-500/40 hover:border-amber-400 hover:brightness-105 dark:hover:brightness-110'
               }`}
             >
               🎙️ نطق الإنجليزية بالذكاء الاصطناعي ✨
@@ -679,7 +700,7 @@ export default function App() {
               className={`px-3.5 sm:px-4 py-2 rounded-2xl text-xs font-bold transition border ${
                 activeTab === 'books'
                   ? 'bg-amber-500 text-zinc-950 border-amber-400 shadow-lg shadow-amber-500/20'
-                  : 'bg-zinc-900/60 text-zinc-400 border-zinc-800 hover:text-amber-300'
+                  : 'bg-white dark:bg-zinc-900/60 text-zinc-700 dark:text-zinc-400 border-slate-200 dark:border-zinc-800 hover:text-amber-700 dark:hover:text-amber-300'
               }`}
             >
               📚 الكتب والمناهج ({books.length})
@@ -689,7 +710,7 @@ export default function App() {
               className={`px-3.5 sm:px-4 py-2 rounded-2xl text-xs font-bold transition border ${
                 activeTab === 'articles'
                   ? 'bg-amber-500 text-zinc-950 border-amber-400 shadow-lg shadow-amber-500/20'
-                  : 'bg-zinc-900/60 text-zinc-400 border-zinc-800 hover:text-amber-300'
+                  : 'bg-white dark:bg-zinc-900/60 text-zinc-700 dark:text-zinc-400 border-slate-200 dark:border-zinc-800 hover:text-amber-700 dark:hover:text-amber-300'
               }`}
             >
               📝 المقالات ({articles.length})
@@ -699,7 +720,7 @@ export default function App() {
               className={`px-3.5 sm:px-4 py-2 rounded-2xl text-xs font-bold transition border ${
                 activeTab === 'summaries'
                   ? 'bg-amber-500 text-zinc-950 border-amber-400 shadow-lg shadow-amber-500/20'
-                  : 'bg-zinc-900/60 text-zinc-400 border-zinc-800 hover:text-amber-300'
+                  : 'bg-white dark:bg-zinc-900/60 text-zinc-700 dark:text-zinc-400 border-slate-200 dark:border-zinc-800 hover:text-amber-700 dark:hover:text-amber-300'
               }`}
             >
               🖼️ صور الملخصات والخرائط ({summaries.length})
@@ -709,7 +730,7 @@ export default function App() {
               className={`px-3.5 sm:px-4 py-2 rounded-2xl text-xs font-bold transition border ${
                 activeTab === 'videos'
                   ? 'bg-amber-500 text-zinc-950 border-amber-400 shadow-lg shadow-amber-500/20'
-                  : 'bg-zinc-900/60 text-zinc-400 border-zinc-800 hover:text-amber-300'
+                  : 'bg-white dark:bg-zinc-900/60 text-zinc-700 dark:text-zinc-400 border-slate-200 dark:border-zinc-800 hover:text-amber-700 dark:hover:text-amber-300'
               }`}
             >
               🎬 شروحات الفيديو ({videos.length})
@@ -720,7 +741,7 @@ export default function App() {
                 className={`px-3.5 sm:px-4 py-2 rounded-2xl text-xs font-bold transition border ${
                   activeTab === 'bookmarks'
                     ? 'bg-amber-500 text-zinc-950 border-amber-400 shadow-lg shadow-amber-500/20'
-                    : 'bg-zinc-900/60 text-zinc-400 border-zinc-800 hover:text-amber-300'
+                    : 'bg-white dark:bg-zinc-900/60 text-zinc-700 dark:text-zinc-400 border-slate-200 dark:border-zinc-800 hover:text-amber-700 dark:hover:text-amber-300'
                 }`}
               >
                 ⭐ مفضلتي ({userBookmarksList.length})
@@ -728,22 +749,22 @@ export default function App() {
             )}
             <button
               onClick={() => setIsSubscriptionModalOpen(true)}
-              className="px-3.5 sm:px-4 py-2 rounded-2xl text-xs font-bold transition border bg-gradient-to-r from-amber-500/20 via-amber-400/20 to-amber-500/20 text-amber-300 border-amber-500/50 hover:border-amber-400 hover:brightness-125 shadow-lg shadow-amber-500/10 flex items-center gap-1.5 active:scale-95"
+              className="px-3.5 sm:px-4 py-2 rounded-2xl text-xs font-bold transition border bg-gradient-to-r from-amber-500/15 via-amber-400/15 to-amber-500/15 dark:from-amber-500/20 dark:via-amber-400/20 dark:to-amber-500/20 text-amber-800 dark:text-amber-300 border-amber-500/50 hover:border-amber-400 hover:brightness-105 dark:hover:brightness-125 shadow-lg shadow-amber-500/10 flex items-center gap-1.5 active:scale-95"
             >
-              ⚡ باقات الاشتراك (تبدأ من 50ج)
+              ⚡ باقة التفوق (50 ج.م اختياري)
             </button>
           </div>
 
           {/* Egyptian Curriculum Subject Classification Filter (فلتر تصنيف المواد الدراسية) */}
           {(activeTab === 'all' || activeTab === 'books') && (
-            <div className="mb-8 p-4 sm:p-5 rounded-3xl bg-zinc-900/80 border border-amber-500/20 backdrop-blur-md shadow-xl animate-in fade-in">
+            <div className="mb-8 p-4 sm:p-5 rounded-3xl bg-white dark:bg-zinc-900/80 border border-slate-200 dark:border-amber-500/20 backdrop-blur-md shadow-xl animate-in fade-in">
               <div className="flex flex-wrap items-center justify-between gap-3 mb-3.5">
                 <div className="flex items-center gap-2.5">
-                  <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/30">
+                  <div className="p-2 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30">
                     <BookOpen className="w-4 h-4" />
                   </div>
                   <div>
-                    <h3 className="text-xs sm:text-sm font-bold text-zinc-100 flex items-center gap-2">
+                    <h3 className="text-xs sm:text-sm font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
                       <span>فلتر تصنيف المواد الدراسية (مناهج الثانوية العامة المصرية 2026)</span>
                       {selectedSubject !== 'all' && (
                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500 text-zinc-950 font-bold shadow-sm">
@@ -751,7 +772,7 @@ export default function App() {
                         </span>
                       )}
                     </h3>
-                    <p className="text-[11px] text-zinc-400">
+                    <p className="text-[11px] text-zinc-600 dark:text-zinc-400">
                       اختر المادة الدراسية لتصفية الكتب والمذكرات ونماذج الإجابة بسهولة
                     </p>
                   </div>
@@ -760,7 +781,7 @@ export default function App() {
                 {selectedSubject !== 'all' && (
                   <button
                     onClick={() => setSelectedSubject('all')}
-                    className="text-xs text-amber-400 hover:text-amber-300 font-bold underline transition"
+                    className="text-xs text-amber-700 dark:text-amber-400 hover:text-amber-600 dark:hover:text-amber-300 font-bold underline transition"
                   >
                     عرض كل المواد ✕
                   </button>
@@ -785,13 +806,13 @@ export default function App() {
                       className={`px-3.5 py-1.5 rounded-xl text-xs font-bold border transition flex items-center gap-1.5 ${
                         isSelected
                           ? 'bg-amber-500 text-zinc-950 border-amber-400 shadow-md shadow-amber-500/25 scale-[1.02]'
-                          : 'bg-zinc-950/80 text-zinc-300 border-zinc-800 hover:border-amber-500/40 hover:text-amber-300'
+                          : 'bg-slate-50 dark:bg-zinc-950/80 text-zinc-700 dark:text-zinc-300 border-slate-200 dark:border-zinc-800 hover:border-amber-500/40 hover:text-amber-700 dark:hover:text-amber-300'
                       }`}
                     >
                       <span>{subj.icon}</span>
                       <span>{subj.label}</span>
                       <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
-                        isSelected ? 'bg-zinc-950 text-amber-300' : 'bg-zinc-800 text-zinc-400'
+                        isSelected ? 'bg-zinc-950 text-amber-300' : 'bg-slate-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-400'
                       }`}>
                         {count}
                       </span>
@@ -804,13 +825,13 @@ export default function App() {
 
           {/* Search Active Indicator */}
           {searchQuery && (
-            <div className="mb-6 p-3 rounded-2xl bg-zinc-900/80 border border-zinc-800 flex items-center justify-between text-xs">
-              <span className="text-zinc-300">
-                نتائج البحث عن: <strong className="text-amber-400">"{searchQuery}"</strong>
+            <div className="mb-6 p-3 rounded-2xl bg-white dark:bg-zinc-900/80 border border-slate-200 dark:border-zinc-800 flex items-center justify-between text-xs shadow-sm">
+              <span className="text-zinc-700 dark:text-zinc-300">
+                نتائج البحث عن: <strong className="text-amber-700 dark:text-amber-400">"{searchQuery}"</strong>
               </span>
               <button
                 onClick={() => setSearchQuery('')}
-                className="text-amber-400 hover:underline font-bold"
+                className="text-amber-700 dark:text-amber-400 hover:underline font-bold"
               >
                 مسح البحث ✕
               </button>
@@ -827,7 +848,7 @@ export default function App() {
                 currentUser={currentUser}
                 onUpdateStats={(newStats) => {
                   setStudentStats(newStats);
-                  saveStudentStats(newStats);
+                  saveStudentStats(newStats, currentUser?.id);
                 }}
                 onNavigateToExams={() => setActiveTab('exams')}
                 onNavigateToBooks={() => {
@@ -850,7 +871,7 @@ export default function App() {
                 currentUser={currentUser}
                 onUpdateStats={(newStats) => {
                   setStudentStats(newStats);
-                  saveStudentStats(newStats);
+                  saveStudentStats(newStats, currentUser?.id);
                 }}
                 onNavigateToStats={() => setActiveTab('dashboard')}
                 onOpenSubscriptions={() => setIsSubscriptionModalOpen(true)}
@@ -874,16 +895,16 @@ export default function App() {
           {activeTab === 'bookmarks' && (
             <section className="mb-14 animate-in fade-in">
               <div className="flex items-center justify-between mb-6">
-                <h2 className="text-xl font-bold text-amber-400 flex items-center gap-2">
-                  <Bookmark className="w-5 h-5 text-amber-400 fill-current" />
+                <h2 className="text-xl font-bold text-amber-700 dark:text-amber-400 flex items-center gap-2">
+                  <Bookmark className="w-5 h-5 text-amber-600 dark:text-amber-400 fill-current" />
                   <span>العناصر المحفوظة في مفضلتك الشخصية ({userBookmarksList.length})</span>
                 </h2>
               </div>
 
               {userBookmarksList.length === 0 ? (
-                <div className="text-center py-16 bg-zinc-900/40 border border-zinc-800 rounded-3xl p-6">
-                  <Bookmark className="w-12 h-12 text-zinc-600 mx-auto mb-3" />
-                  <p className="text-sm text-zinc-400">لم تقم بإضافة أي عنصر إلى مفضلتك بعد.</p>
+                <div className="text-center py-16 bg-white dark:bg-zinc-900/40 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm">
+                  <Bookmark className="w-12 h-12 text-zinc-400 dark:text-zinc-600 mx-auto mb-3" />
+                  <p className="text-sm text-zinc-600 dark:text-zinc-400">لم تقم بإضافة أي عنصر إلى مفضلتك بعد.</p>
                   <p className="text-xs text-zinc-500 mt-1">
                     انقر على أيقونة النجمة ⭐ على أي كتاب أو مقال لتجده هنا في أي وقت.
                   </p>
@@ -893,13 +914,13 @@ export default function App() {
                   {userBookmarksList.map((bm, idx) => (
                     <div
                       key={idx}
-                      className="bg-zinc-900/70 border border-zinc-800 rounded-2xl p-4 flex items-center justify-between gap-3 hover:border-amber-500/40 transition"
+                      className="bg-white dark:bg-zinc-900/70 border border-slate-200 dark:border-zinc-800 rounded-2xl p-4 flex items-center justify-between gap-3 hover:border-amber-500/40 transition shadow-sm"
                     >
                       <div className="overflow-hidden">
-                        <span className="text-[10px] text-amber-400 font-bold block mb-1">
+                        <span className="text-[10px] text-amber-700 dark:text-amber-400 font-bold block mb-1">
                           {bm.type === 'book' ? 'كتاب / منهج' : bm.type === 'article' ? 'مقال' : bm.type === 'summary' ? 'ملخص صورة' : 'فيديو'}
                         </span>
-                        <h4 className="font-bold text-xs text-zinc-100 truncate">{bm.title}</h4>
+                        <h4 className="font-bold text-xs text-zinc-900 dark:text-zinc-100 truncate">{bm.title}</h4>
                       </div>
                       <div className="flex items-center gap-1.5 flex-shrink-0">
                         <button
@@ -910,7 +931,7 @@ export default function App() {
                         </button>
                         <button
                           onClick={() => handleRemoveBookmark(bm)}
-                          className="p-1.5 bg-zinc-800 hover:bg-rose-500/20 text-zinc-400 hover:text-rose-400 rounded-xl"
+                          className="p-1.5 bg-slate-100 dark:bg-zinc-800 hover:bg-rose-500/20 text-zinc-500 dark:text-zinc-400 hover:text-rose-600 dark:hover:text-rose-400 rounded-xl"
                           title="حذف"
                         >
                           ✕
@@ -929,13 +950,13 @@ export default function App() {
           {(activeTab === 'all' || activeTab === 'videos') && filteredVideos.length > 0 && (
             <section className="mb-14 animate-in fade-in">
               <div className="flex items-center justify-between mb-6">
-                <h2 className="text-xl font-bold text-amber-400 flex items-center gap-2">
+                <h2 className="text-xl font-bold text-amber-700 dark:text-amber-400 flex items-center gap-2">
                   <span>🎬</span> مقاطع الفيديو والشروحات المرئية
                 </h2>
                 {activeTab === 'all' && (
                   <button
                     onClick={() => setActiveTab('videos')}
-                    className="text-xs text-amber-400 hover:underline"
+                    className="text-xs text-amber-700 dark:text-amber-400 hover:underline font-semibold"
                   >
                     عرض كل الفيديوهات ({videos.length}) ←
                   </button>
@@ -948,11 +969,11 @@ export default function App() {
                   return (
                     <div
                       key={vid.id}
-                      className="lux-card bg-zinc-900/70 border border-zinc-800 rounded-3xl overflow-hidden p-4 space-y-3 flex flex-col justify-between"
+                      className="lux-card bg-white dark:bg-zinc-900/70 border border-slate-200 dark:border-zinc-800 rounded-3xl overflow-hidden p-4 space-y-3 flex flex-col justify-between shadow-sm"
                     >
                       <div 
                         onClick={() => setSelectedVideo(vid)}
-                        className="aspect-video w-full rounded-2xl overflow-hidden bg-black border border-zinc-800 cursor-pointer relative group"
+                        className="aspect-video w-full rounded-2xl overflow-hidden bg-black border border-slate-200 dark:border-zinc-800 cursor-pointer relative group"
                       >
                         <iframe
                           src={vid.videourl.replace('watch?v=', 'embed/').split('&')[0]}
@@ -967,21 +988,21 @@ export default function App() {
                       </div>
 
                       <div>
-                        <div className="flex items-center justify-between text-[11px] text-zinc-400 mb-1.5">
-                          <span className="text-amber-400 font-bold flex items-center gap-1">
+                        <div className="flex items-center justify-between text-[11px] text-zinc-600 dark:text-zinc-400 mb-1.5">
+                          <span className="text-amber-700 dark:text-amber-400 font-bold flex items-center gap-1">
                             <span>🇪🇬</span>
                             <span>{vid.category}</span>
                           </span>
                           <span>⏱️ {vid.duration || '20:00'}</span>
                         </div>
                         {vid.channel && (
-                          <div className="text-[11px] text-amber-200/90 font-medium mb-1">
+                          <div className="text-[11px] text-amber-800 dark:text-amber-200/90 font-medium mb-1">
                             📺 {vid.channel}
                           </div>
                         )}
                         <h3 
                           onClick={() => setSelectedVideo(vid)}
-                          className="font-bold text-sm text-zinc-100 line-clamp-2 cursor-pointer hover:text-amber-300 transition"
+                          className="font-bold text-sm text-zinc-900 dark:text-zinc-100 line-clamp-2 cursor-pointer hover:text-amber-700 dark:hover:text-amber-300 transition"
                         >
                           {vid.title}
                         </h3>
@@ -999,17 +1020,17 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-between pt-2 border-t border-zinc-800">
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-200 dark:border-zinc-800">
                         <button
                           onClick={() => setSelectedVideo(vid)}
-                          className="text-xs font-bold text-amber-400 hover:underline flex items-center gap-1"
+                          className="text-xs font-bold text-amber-700 dark:text-amber-400 hover:underline flex items-center gap-1"
                         >
                           <span>مشاهدة الشرح</span> ↗
                         </button>
                         <button
                           onClick={() => handleToggleFavorite(String(vid.id), 'video', vid.title, vid.videourl)}
                           className={`p-2 rounded-xl transition ${
-                            bookmarked ? 'text-amber-400 bg-amber-500/10' : 'text-zinc-500 hover:text-amber-400'
+                            bookmarked ? 'text-amber-600 dark:text-amber-400 bg-amber-500/10' : 'text-zinc-500 hover:text-amber-600 dark:hover:text-amber-400'
                           }`}
                           title="حفظ في المفضلة"
                         >
@@ -1029,13 +1050,13 @@ export default function App() {
           {(activeTab === 'all' || activeTab === 'summaries') && filteredSummaries.length > 0 && (
             <section className="mb-14 animate-in fade-in">
               <div className="flex items-center justify-between mb-6">
-                <h2 className="text-xl font-bold text-amber-400 flex items-center gap-2">
+                <h2 className="text-xl font-bold text-amber-700 dark:text-amber-400 flex items-center gap-2">
                   <span>🖼️</span> ملخصات الصور والخرائط الذهنية الذكية
                 </h2>
                 {activeTab === 'all' && (
                   <button
                     onClick={() => setActiveTab('summaries')}
-                    className="text-xs text-amber-400 hover:underline"
+                    className="text-xs text-amber-700 dark:text-amber-400 hover:underline font-semibold"
                   >
                     عرض كل الملخصات ({summaries.length}) ←
                   </button>
@@ -1048,11 +1069,11 @@ export default function App() {
                   return (
                     <div
                       key={sum.id}
-                      className="lux-card bg-zinc-900/70 border border-zinc-800 rounded-3xl overflow-hidden p-3 space-y-3 flex flex-col justify-between"
+                      className="lux-card bg-white dark:bg-zinc-900/70 border border-slate-200 dark:border-zinc-800 rounded-3xl overflow-hidden p-3 space-y-3 flex flex-col justify-between shadow-sm"
                     >
                       <div 
                         onClick={() => setSelectedSummary(sum)}
-                        className="block h-52 rounded-2xl overflow-hidden bg-zinc-950 border border-zinc-800 relative group cursor-pointer"
+                        className="block h-52 rounded-2xl overflow-hidden bg-slate-100 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 relative group cursor-pointer"
                       >
                         <img
                           src={sum.imagepath}
@@ -1062,12 +1083,12 @@ export default function App() {
                         <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center text-xs text-amber-300 font-bold">
                           🔍 تكبير ومعاينة الخريطة
                         </div>
-                        <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg bg-black/70 text-amber-300 text-[10px] font-bold">
+                        <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg bg-black/75 text-amber-300 text-[10px] font-bold">
                           {sum.category}
                         </span>
                       </div>
 
-                      <h3 className="font-bold text-xs text-zinc-200 line-clamp-1 px-1">
+                      <h3 className="font-bold text-xs text-zinc-900 dark:text-zinc-200 line-clamp-1 px-1">
                         {sum.title}
                       </h3>
 
@@ -1086,14 +1107,14 @@ export default function App() {
                       <div className="flex items-center gap-2">
                         <button
                           onClick={() => setSelectedSummary(sum)}
-                          className="flex-1 text-center py-2 bg-zinc-800 hover:bg-zinc-700 text-amber-400 text-xs font-bold rounded-xl border border-amber-500/20 transition"
+                          className="flex-1 text-center py-2 bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-amber-700 dark:text-amber-400 text-xs font-bold rounded-xl border border-amber-500/20 transition"
                         >
                           معاينة وتنزيل ⬇️
                         </button>
                         <button
                           onClick={() => handleToggleFavorite(String(sum.id), 'summary', sum.title, sum.imagepath)}
                           className={`p-2 rounded-xl transition ${
-                            bookmarked ? 'text-amber-400 bg-amber-500/10' : 'text-zinc-500 hover:text-amber-400'
+                            bookmarked ? 'text-amber-600 dark:text-amber-400 bg-amber-500/10' : 'text-zinc-500 hover:text-amber-600 dark:hover:text-amber-400'
                           }`}
                           title="حفظ في المفضلة"
                         >
@@ -1113,13 +1134,13 @@ export default function App() {
           {(activeTab === 'all' || activeTab === 'articles') && filteredArticles.length > 0 && (
             <section className="mb-14 animate-in fade-in">
               <div className="flex items-center justify-between mb-6">
-                <h2 className="text-xl font-bold text-amber-400 flex items-center gap-2">
+                <h2 className="text-xl font-bold text-amber-700 dark:text-amber-400 flex items-center gap-2">
                   <span>📝</span> المقالات والدراسات المنشورة
                 </h2>
                 {activeTab === 'all' && (
                   <button
                     onClick={() => setActiveTab('articles')}
-                    className="text-xs text-amber-400 hover:underline"
+                    className="text-xs text-amber-700 dark:text-amber-400 hover:underline font-semibold"
                   >
                     عرض كل المقالات ({articles.length}) ←
                   </button>
@@ -1132,7 +1153,7 @@ export default function App() {
                   return (
                     <div
                       key={art.id}
-                      className="lux-card bg-zinc-900/70 rounded-3xl p-5 border border-zinc-800 flex gap-4 items-center hover:border-amber-500/40 cursor-pointer justify-between"
+                      className="lux-card bg-white dark:bg-zinc-900/70 rounded-3xl p-5 border border-slate-200 dark:border-zinc-800 flex gap-4 items-center hover:border-amber-500/40 cursor-pointer justify-between shadow-sm"
                     >
                       <div 
                         onClick={() => setSelectedArticle(art)}
@@ -1141,13 +1162,13 @@ export default function App() {
                         <img
                           src={art.imagepath || 'https://images.unsplash.com/photo-1499750310107-5fef28a66643?w=300'}
                           alt={art.title}
-                          className="w-24 h-24 object-cover rounded-2xl shadow-sm flex-shrink-0 border border-zinc-800"
+                          className="w-24 h-24 object-cover rounded-2xl shadow-sm flex-shrink-0 border border-slate-200 dark:border-zinc-800"
                         />
                         <div className="overflow-hidden">
-                          <span className="text-[10px] text-amber-500 font-bold block">
+                          <span className="text-[10px] text-amber-700 dark:text-amber-500 font-bold block">
                             قراءة: {art.readTime || '5 دقائق'} • بواسطة {art.author}
                           </span>
-                          <h3 className="text-sm font-bold text-zinc-100 mt-1 line-clamp-1 hover:text-amber-300 transition">
+                          <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100 mt-1 line-clamp-1 hover:text-amber-700 dark:hover:text-amber-300 transition">
                             {art.title}
                           </h3>
                           <div className="my-1.5">
@@ -1159,7 +1180,7 @@ export default function App() {
                               onRate={(star) => handleRateItem('article', art.id, star)}
                             />
                           </div>
-                          <p className="text-xs text-zinc-400 mt-1 line-clamp-2 leading-relaxed">
+                          <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 line-clamp-2 leading-relaxed">
                             {art.content.replace(/[\#\*\>]/g, '')}
                           </p>
                         </div>
@@ -1168,7 +1189,7 @@ export default function App() {
                       <button
                         onClick={() => handleToggleFavorite(String(art.id), 'article', art.title, `/article/${art.id}`)}
                         className={`p-2 rounded-xl transition ${
-                          bookmarked ? 'text-amber-400 bg-amber-500/10' : 'text-zinc-500 hover:text-amber-400'
+                          bookmarked ? 'text-amber-600 dark:text-amber-400 bg-amber-500/10' : 'text-zinc-500 hover:text-amber-600 dark:hover:text-amber-400'
                         }`}
                         title="حفظ في المفضلة"
                       >
@@ -1187,16 +1208,16 @@ export default function App() {
           {(activeTab === 'all' || activeTab === 'books') && (
             <section className="mb-14 animate-in fade-in">
               <div className="flex items-center justify-between mb-6">
-                <h2 className="text-xl font-bold text-amber-400 flex items-center gap-2">
+                <h2 className="text-xl font-bold text-amber-700 dark:text-amber-400 flex items-center gap-2">
                   <span>📚</span> الكتب والمناهج الدراسية الشاملة
                 </h2>
-                <span className="text-xs text-zinc-400">
-                  متاح: <strong className="text-amber-300">{filteredBooks.length}</strong> كتاب
+                <span className="text-xs text-zinc-600 dark:text-zinc-400">
+                  متاح: <strong className="text-amber-700 dark:text-amber-300">{filteredBooks.length}</strong> كتاب
                 </span>
               </div>
 
               {filteredBooks.length === 0 ? (
-                <div className="text-center py-12 text-zinc-500 bg-zinc-900/40 border border-zinc-800 rounded-3xl">
+                <div className="text-center py-12 text-zinc-500 bg-white dark:bg-zinc-900/40 border border-slate-200 dark:border-zinc-800 rounded-3xl">
                   لا توجد كتب مضافة في هذا التصنيف حالياً.
                 </div>
               ) : (
@@ -1206,11 +1227,11 @@ export default function App() {
                     return (
                       <div
                         key={pdf.id}
-                        className="lux-card bg-zinc-900/70 rounded-3xl border border-zinc-800 overflow-hidden flex flex-col justify-between"
+                        className="lux-card bg-white dark:bg-zinc-900/70 rounded-3xl border border-slate-200 dark:border-zinc-800 overflow-hidden flex flex-col justify-between shadow-sm"
                       >
                         <div 
                           onClick={() => setSelectedBook(pdf)}
-                          className="h-48 bg-zinc-950 relative border-b border-zinc-800/80 cursor-pointer overflow-hidden group"
+                          className="h-48 bg-slate-100 dark:bg-zinc-950 relative border-b border-slate-200 dark:border-zinc-800/80 cursor-pointer overflow-hidden group"
                         >
                           <img
                             src={pdf.coverpath || 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=400'}
@@ -1218,7 +1239,7 @@ export default function App() {
                             className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
                           />
                           <span className={`absolute top-3 right-3 px-3 py-1 ${
-                            pdf.is_student ? 'bg-amber-500 text-zinc-950' : 'bg-zinc-950/80 text-amber-300'
+                            pdf.is_student ? 'bg-amber-500 text-zinc-950' : 'bg-zinc-950/85 text-amber-300'
                           } rounded-xl text-[10px] font-bold shadow-md`}>
                             {pdf.is_student ? '🎓 كتب الطلاب' : pdf.category}
                           </span>
@@ -1227,18 +1248,18 @@ export default function App() {
                         <div className="p-5 flex-1">
                           <h3 
                             onClick={() => setSelectedBook(pdf)}
-                            className="font-bold text-zinc-100 text-sm line-clamp-2 cursor-pointer hover:text-amber-300 transition"
+                            className="font-bold text-zinc-900 dark:text-zinc-100 text-sm line-clamp-2 cursor-pointer hover:text-amber-700 dark:hover:text-amber-300 transition"
                           >
                             {pdf.title}
                           </h3>
                           {pdf.description && (
-                            <p className="text-[11px] text-zinc-400 mt-1.5 line-clamp-2">
+                            <p className="text-[11px] text-zinc-600 dark:text-zinc-400 mt-1.5 line-clamp-2">
                               {pdf.description}
                             </p>
                           )}
 
                           {/* Rating and Downloads */}
-                          <div className="flex items-center justify-between pt-2.5 mt-2 border-t border-zinc-800/60">
+                          <div className="flex items-center justify-between pt-2.5 mt-2 border-t border-slate-200 dark:border-zinc-800/60">
                             <RatingStars
                               rating={pdf.rating || 0}
                               ratingCount={pdf.ratingCount || 0}
@@ -1246,17 +1267,17 @@ export default function App() {
                               interactive
                               onRate={(star) => handleRateItem('book', pdf.id, star)}
                             />
-                            <span className="text-[10px] text-zinc-400 font-mono">
+                            <span className="text-[10px] text-zinc-600 dark:text-zinc-400 font-mono">
                               📥 {getRealDownloads(pdf.id, pdf.downloads || 0).toLocaleString('ar-EG')}
                             </span>
                           </div>
                         </div>
 
-                        <div className="p-4 border-t border-zinc-800/60 flex justify-between items-center bg-zinc-950/40">
+                        <div className="p-4 border-t border-slate-200 dark:border-zinc-800/60 flex justify-between items-center bg-slate-50 dark:bg-zinc-950/40">
                           <div className="flex items-center gap-2">
                             <button
                               onClick={() => setSelectedBook(pdf)}
-                              className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-amber-400 text-xs font-semibold rounded-xl border border-amber-500/20 transition flex items-center gap-1"
+                              className="px-3 py-1.5 bg-white dark:bg-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-700 text-amber-700 dark:text-amber-400 text-xs font-semibold rounded-xl border border-amber-500/25 transition flex items-center gap-1"
                             >
                               <span>👁️ معاينة</span> ↗
                             </button>
@@ -1264,7 +1285,8 @@ export default function App() {
                             <button
                               onClick={() => {
                                 recordBookDownload(pdf);
-                                setSelectedBook(pdf);
+                                triggerPdfDownload(pdf.filepath, `${pdf.title}.pdf`);
+                                showToast(`تم بدء تحميل كتاب: ${pdf.title}`);
                               }}
                               className="px-3.5 py-1.5 bg-gradient-to-r from-amber-600 to-amber-500 text-zinc-950 text-xs font-bold rounded-xl shadow hover:brightness-110 transition flex items-center gap-1"
                             >
@@ -1275,7 +1297,7 @@ export default function App() {
                           <button
                             onClick={() => handleToggleFavorite(String(pdf.id), 'book', pdf.title, pdf.filepath)}
                             className={`p-1.5 rounded-xl transition ${
-                              bookmarked ? 'text-amber-400 bg-amber-500/10' : 'text-zinc-500 hover:text-amber-400'
+                              bookmarked ? 'text-amber-600 dark:text-amber-400 bg-amber-500/10' : 'text-zinc-500 hover:text-amber-600 dark:hover:text-amber-400'
                             }`}
                             title="حفظ في المفضلة"
                           >
@@ -1315,6 +1337,8 @@ export default function App() {
         onOpenProfile={() => setIsProfileOpen(true)}
         onOpenSubscriptions={() => setIsSubscriptionModalOpen(true)}
         downloadedCount={downloadedCount}
+        theme={theme}
+        onToggleTheme={handleToggleTheme}
       />
 
       {/* ALL INTERACTIVE MODALS */}
@@ -1413,12 +1437,12 @@ export default function App() {
       />
 
       {/* Luxury Footer with Developer Contact & Security Badges */}
-      <footer className="bg-zinc-950 border-t border-zinc-800/80 py-8 mt-16">
+      <footer className="bg-white dark:bg-zinc-950 border-t border-slate-200 dark:border-zinc-800/80 py-8 mt-16 transition-colors">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 flex flex-col md:flex-row justify-between items-center gap-6 text-center md:text-right">
           
           <div className="space-y-1">
-            <p className="text-xs text-zinc-400">
-              تصميم وتطوير: <span className="font-bold text-amber-400">المصمم Ahmed Raafat</span>
+            <p className="text-xs text-zinc-600 dark:text-zinc-400">
+              تصميم وتطوير: <span className="font-bold text-amber-700 dark:text-amber-400">المصمم Ahmed Raafat</span>
             </p>
             <p className="text-[11px] text-zinc-500">
               المكتبة الرقمية الفاخرة © 2026 - نظام تعليمي متكامل بنظام أمني متقدم وتشفير للجلسات
@@ -1431,7 +1455,7 @@ export default function App() {
               href="https://wa.me/201115491611"
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-5 py-2.5 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-400 rounded-2xl text-xs font-bold transition shadow-lg active:scale-95"
+              className="inline-flex items-center gap-2 px-5 py-2.5 bg-emerald-500/15 dark:bg-emerald-600/20 hover:bg-emerald-500/25 dark:hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-700 dark:text-emerald-400 rounded-2xl text-xs font-bold transition shadow-lg active:scale-95"
             >
               <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
                 <path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2.05 22l5.3-1.39c1.45.79 3.09 1.21 4.69 1.21 5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01-1.87-1.87-4.36-2.9-7.01-2.9zm0 1.83c2.18 0 4.23.85 5.77 2.39 1.54 1.54 2.39 3.59 2.39 5.77 0 4.5-3.67 8.17-8.17 8.17-1.42 0-2.81-.37-4.03-1.08l-.29-.17-3.03.8.81-2.95-.19-.31c-.77-1.24-1.18-2.68-1.18-4.14 0-4.5 3.67-8.17 8.17-8.17zm-3.9 4.34c-.17 0-.36.06-.55.25-.19.19-.72.7-.72 1.7s.74 1.96.84 2.1c.1.14 1.45 2.22 3.51 3.11 1.91.83 2.29.67 2.7.61.41-.06 1.32-.54 1.51-1.06.19-.52.19-.97.13-1.06-.06-.09-.23-.14-.48-.27s-1.32-.65-1.52-.72c-.2-.07-.35-.11-.5.11-.15.22-.58.72-.71.87-.13.15-.26.17-.51.04-.25-.13-1.05-.39-2-1.24-.74-.66-1.24-1.47-1.38-1.72-.14-.25-.01-.39.11-.51.11-.11.25-.28.37-.42.12-.14.16-.24.24-.4.08-.16.04-.31-.02-.44-.06-.13-.55-1.33-.76-1.82-.2-.48-.4-.42-.55-.43l-.47-.01z"/>

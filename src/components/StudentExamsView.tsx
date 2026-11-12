@@ -50,6 +50,7 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [examsList, setExamsList] = useState<Exam[]>(getAllStudentExams);
   const [showQuotaModal, setShowQuotaModal] = useState<boolean>(false);
+  const [examAccessNotice, setExamAccessNotice] = useState<string | null>(null);
 
   useEffect(() => {
     setExamsList(getAllStudentExams());
@@ -82,12 +83,14 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
       return;
     }
 
+    setExamAccessNotice(null);
+
     // Check if exam is assigned to specific students
     if (exam.assignedStudentEmails && exam.assignedStudentEmails.length > 0) {
       const studentEmail = currentUser?.email?.toLowerCase();
       const isAllowed = studentEmail && exam.assignedStudentEmails.some(e => e.toLowerCase() === studentEmail);
       if (!isAllowed) {
-        alert('هذا الامتحان مخصص لطلاب محددين بالاسم من قبل المشرف.');
+        setExamAccessNotice('هذا الامتحان مخصص لطلاب محددين بالاسم من قبل المشرف.');
         return;
       }
     }
@@ -96,7 +99,7 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
     if (exam.allowedPlans && exam.allowedPlans.length > 0 && !exam.allowedPlans.includes('all')) {
       const studentPlan = currentUser?.subscription?.planId || 'free_trial';
       if (!exam.allowedPlans.includes(studentPlan as any)) {
-        alert('هذا الامتحان التدريبي متاح فقط للمشتركين في الباقات المحددة. اضغط لترقية باقتك.');
+        setExamAccessNotice('هذا الامتحان التدريبي متاح لمشتركي باقة التفوق الشاملة (50 ج.م). يمكنك الترقية الآن للاستفادة منه.');
         onOpenSubscriptions?.();
         return;
       }
@@ -212,12 +215,12 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
       feedback
     };
 
-    // Record submission into stats
+    // Record submission into stats scoped per student ID
     const updatedStats = recordExamSubmission(stats, {
       ...submission,
       totalQuestions: questions.length,
       correctQuestions: correctCount
-    });
+    }, currentUser?.id);
     onUpdateStats(updatedStats);
 
     // Deduct from weekly exam quota if on a limited plan
@@ -293,33 +296,33 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
       <div className="max-w-4xl mx-auto animate-in fade-in duration-300">
         
         {/* Result Header Card */}
-        <div className="p-6 sm:p-8 rounded-3xl bg-gradient-to-b from-zinc-900 to-zinc-950 border border-amber-500/30 shadow-2xl mb-8 relative overflow-hidden text-right">
+        <div className="p-6 sm:p-8 rounded-3xl bg-white dark:bg-gradient-to-b dark:from-zinc-900 dark:to-zinc-950 border border-amber-500/30 shadow-xl dark:shadow-2xl mb-8 relative overflow-hidden text-right">
           <div className="absolute top-0 right-0 w-64 h-64 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
           
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-6 border-b border-zinc-800/80 pb-6 mb-6">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-6 border-b border-slate-200 dark:border-zinc-800/80 pb-6 mb-6">
             <div>
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-bold mb-2">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-400 text-xs font-bold mb-2">
                 <Award className="w-3.5 h-3.5" />
                 <span>تقرير نتيجة الامتحان</span>
               </div>
-              <h2 className="text-xl sm:text-2xl font-black text-zinc-100 mb-1">
+              <h2 className="text-xl sm:text-2xl font-black text-zinc-900 dark:text-zinc-100 mb-1">
                 {viewingResultForExam.title}
               </h2>
-              <p className="text-xs text-zinc-400">
-                المادة: <strong className="text-amber-300">{viewingResultForExam.subject}</strong> · تم الحفظ تلقائياً في سجل إحصائياتك
+              <p className="text-xs text-zinc-600 dark:text-zinc-400">
+                المادة: <strong className="text-amber-700 dark:text-amber-300">{viewingResultForExam.subject}</strong> · تم الحفظ تلقائياً في سجل إحصائياتك
               </p>
             </div>
 
             {/* Score Badge */}
-            <div className="flex flex-col items-center justify-center p-4 rounded-2xl bg-zinc-950/80 border border-amber-500/40 min-w-[140px]">
-              <span className="text-xs text-zinc-400 font-bold mb-1">الدرجة المحققة</span>
-              <div className="text-3xl sm:text-4xl font-black bg-gradient-to-r from-amber-200 via-amber-400 to-amber-300 bg-clip-text text-transparent">
+            <div className="flex flex-col items-center justify-center p-4 rounded-2xl bg-slate-50 dark:bg-zinc-950/80 border border-amber-500/40 min-w-[140px]">
+              <span className="text-xs text-zinc-600 dark:text-zinc-400 font-bold mb-1">الدرجة المحققة</span>
+              <div className="text-3xl sm:text-4xl font-black bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400 dark:from-amber-200 dark:via-amber-400 dark:to-amber-300 bg-clip-text text-transparent">
                 {examResult.score} / {examResult.totalMarks}
               </div>
               <span className={`text-xs font-bold mt-1 px-2.5 py-0.5 rounded-full ${
-                examResult.percentage >= 80 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' :
-                examResult.percentage >= 50 ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' :
-                'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                examResult.percentage >= 80 ? 'bg-emerald-500/15 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30' :
+                examResult.percentage >= 50 ? 'bg-amber-500/15 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30' :
+                'bg-rose-500/15 dark:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/30'
               }`}>
                 نسبة النجاح: {examResult.percentage}%
               </span>
@@ -328,47 +331,47 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
 
           {/* Performance Summary Metrics */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
-            <div className="p-3 rounded-2xl bg-zinc-900/60 border border-zinc-800">
-              <span className="text-[11px] text-zinc-400 block mb-1">الحالة التقديرية</span>
-              <span className="text-sm font-bold text-zinc-200 flex items-center gap-1.5">
+            <div className="p-3 rounded-2xl bg-slate-50 dark:bg-zinc-900/60 border border-slate-200 dark:border-zinc-800">
+              <span className="text-[11px] text-zinc-600 dark:text-zinc-400 block mb-1">الحالة التقديرية</span>
+              <span className="text-sm font-bold text-zinc-800 dark:text-zinc-200 flex items-center gap-1.5">
                 {examResult.passed ? (
                   <>
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                    <span className="text-emerald-400">ناجح بتفوق</span>
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                    <span className="text-emerald-600 dark:text-emerald-400">ناجح بتفوق</span>
                   </>
                 ) : (
                   <>
-                    <AlertCircle className="w-4 h-4 text-rose-400" />
-                    <span className="text-rose-400">بحاجة لإعادة</span>
+                    <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+                    <span className="text-rose-600 dark:text-rose-400">بحاجة لإعادة</span>
                   </>
                 )}
               </span>
             </div>
 
-            <div className="p-3 rounded-2xl bg-zinc-900/60 border border-zinc-800">
-              <span className="text-[11px] text-zinc-400 block mb-1">زمن الإجابة المستغرق</span>
-              <span className="text-sm font-bold text-zinc-200 flex items-center gap-1.5">
-                <Clock className="w-4 h-4 text-amber-400" />
+            <div className="p-3 rounded-2xl bg-slate-50 dark:bg-zinc-900/60 border border-slate-200 dark:border-zinc-800">
+              <span className="text-[11px] text-zinc-600 dark:text-zinc-400 block mb-1">زمن الإجابة المستغرق</span>
+              <span className="text-sm font-bold text-zinc-800 dark:text-zinc-200 flex items-center gap-1.5">
+                <Clock className="w-4 h-4 text-amber-600 dark:text-amber-400" />
                 <span>{Math.floor(examResult.timeSpentSeconds / 60)} دقيقة و {examResult.timeSpentSeconds % 60} ثانية</span>
               </span>
             </div>
 
-            <div className="p-3 rounded-2xl bg-zinc-900/60 border border-zinc-800">
-              <span className="text-[11px] text-zinc-400 block mb-1">الأسئلة الصحيحة</span>
-              <span className="text-sm font-bold text-emerald-400">
+            <div className="p-3 rounded-2xl bg-slate-50 dark:bg-zinc-900/60 border border-slate-200 dark:border-zinc-800">
+              <span className="text-[11px] text-zinc-600 dark:text-zinc-400 block mb-1">الأسئلة الصحيحة</span>
+              <span className="text-sm font-bold text-emerald-600 dark:text-emerald-400">
                 {qList.filter(q => examResult.answers[q.id] === q.correctIndex).length} من {qList.length}
               </span>
             </div>
 
-            <div className="p-3 rounded-2xl bg-zinc-900/60 border border-zinc-800">
-              <span className="text-[11px] text-zinc-400 block mb-1">الأسئلة غير الموفقة</span>
-              <span className="text-sm font-bold text-rose-400">
+            <div className="p-3 rounded-2xl bg-slate-50 dark:bg-zinc-900/60 border border-slate-200 dark:border-zinc-800">
+              <span className="text-[11px] text-zinc-600 dark:text-zinc-400 block mb-1">الأسئلة غير الموفقة</span>
+              <span className="text-sm font-bold text-rose-600 dark:text-rose-400">
                 {qList.filter(q => examResult.answers[q.id] !== q.correctIndex).length} أسئلة
               </span>
             </div>
           </div>
 
-          <p className="p-4 rounded-2xl bg-amber-500/5 border border-amber-500/20 text-xs text-amber-200/90 leading-relaxed mb-6">
+          <p className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-500/5 border border-amber-500/20 text-xs text-amber-900 dark:text-amber-200/90 leading-relaxed mb-6">
             💡 <strong>ملاحظة الموجه التربوي:</strong> {examResult.feedback}
           </p>
 
@@ -384,9 +387,9 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
 
             <button
               onClick={onNavigateToStats}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-zinc-800 hover:bg-zinc-700 text-zinc-100 font-bold text-xs border border-zinc-700 transition"
+              className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-zinc-900 dark:text-zinc-100 font-bold text-xs border border-slate-300 dark:border-zinc-700 transition"
             >
-              <BarChart3 className="w-4 h-4 text-amber-400" />
+              <BarChart3 className="w-4 h-4 text-amber-600 dark:text-amber-400" />
               <span>عرض في صفحة إحصائيات الطالب</span>
             </button>
 
@@ -396,7 +399,7 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
                 setViewingResultForExam(null);
                 setActiveExam(null);
               }}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 font-semibold text-xs border border-zinc-800 transition mr-auto"
+              className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-white dark:bg-zinc-900 hover:bg-slate-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 font-semibold text-xs border border-slate-200 dark:border-zinc-800 transition mr-auto"
             >
               <span>العودة لقائمة الامتحانات</span>
               <ArrowRight className="w-4 h-4 rotate-180" />
@@ -407,11 +410,11 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
         {/* Detailed Questions Review List */}
         <div className="space-y-6 text-right">
           <div className="flex items-center justify-between">
-            <h3 className="text-lg font-bold text-zinc-100 flex items-center gap-2">
-              <BookOpen className="w-5 h-5 text-amber-400" />
+            <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+              <BookOpen className="w-5 h-5 text-amber-600 dark:text-amber-400" />
               <span>مراجعة نموذج الإجابة التفصيلي وتصحيح الأسئلة</span>
             </h3>
-            <span className="text-xs text-zinc-400">
+            <span className="text-xs text-zinc-600 dark:text-zinc-400">
               إجمالي الأسئلة: {qList.length}
             </span>
           </div>
@@ -424,27 +427,27 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
             return (
               <div 
                 key={q.id}
-                className={`p-5 sm:p-6 rounded-3xl border transition duration-200 ${
+                className={`p-5 sm:p-6 rounded-3xl border transition duration-200 bg-white dark:bg-zinc-950/80 shadow-sm ${
                   isCorrect 
-                    ? 'bg-zinc-950/80 border-emerald-500/30' 
-                    : 'bg-zinc-950/80 border-rose-500/30'
+                    ? 'border-emerald-500/40 dark:border-emerald-500/30' 
+                    : 'border-rose-500/40 dark:border-rose-500/30'
                 }`}
               >
                 {/* Question Header */}
                 <div className="flex items-start justify-between gap-4 mb-4">
                   <div className="flex items-center gap-2">
-                    <span className="w-7 h-7 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center text-xs font-bold text-amber-400">
+                    <span className="w-7 h-7 rounded-xl bg-slate-100 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 flex items-center justify-center text-xs font-bold text-amber-700 dark:text-amber-400">
                       {idx + 1}
                     </span>
-                    <span className="text-xs text-zinc-400 font-medium">
+                    <span className="text-xs text-zinc-600 dark:text-zinc-400 font-medium">
                       الموضوع: {q.topic}
                     </span>
                   </div>
 
                   <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold ${
                     isCorrect 
-                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' 
-                      : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                      ? 'bg-emerald-500/15 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30' 
+                      : 'bg-rose-500/15 dark:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/30'
                   }`}>
                     {isCorrect ? (
                       <>
@@ -461,13 +464,13 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
                 </div>
 
                 {/* Question Text */}
-                <p className="text-sm sm:text-base font-bold text-zinc-100 leading-relaxed mb-4">
+                <p className="text-sm sm:text-base font-bold text-zinc-900 dark:text-zinc-100 leading-relaxed mb-4">
                   {q.question}
                 </p>
 
                 {/* Question Image Attachment (if provided) */}
                 {(q.imageUrl || q.image) && (
-                  <div className="mb-5 rounded-2xl overflow-hidden border border-zinc-800 bg-zinc-950 p-2 flex items-center justify-center">
+                  <div className="mb-5 rounded-2xl overflow-hidden border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 p-2 flex items-center justify-center">
                     <img
                       src={q.imageUrl || q.image}
                       alt={`رسم توضيحي لسؤال ${idx + 1}`}
@@ -482,11 +485,11 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
                     const isSelected = studentChoice === optIdx;
                     const isThisCorrect = optIdx === q.correctIndex;
 
-                    let optStyle = 'bg-zinc-900/60 border-zinc-800/80 text-zinc-300';
+                    let optStyle = 'bg-slate-50 dark:bg-zinc-900/60 border-slate-200 dark:border-zinc-800/80 text-zinc-700 dark:text-zinc-300';
                     if (isThisCorrect) {
-                      optStyle = 'bg-emerald-500/15 border-emerald-500/50 text-emerald-200 font-bold';
+                      optStyle = 'bg-emerald-50 dark:bg-emerald-500/15 border-emerald-500/50 text-emerald-900 dark:text-emerald-200 font-bold';
                     } else if (isSelected && !isCorrect) {
-                      optStyle = 'bg-rose-500/15 border-rose-500/50 text-rose-200 line-through';
+                      optStyle = 'bg-rose-50 dark:bg-rose-500/15 border-rose-500/50 text-rose-800 dark:text-rose-200 line-through';
                     }
 
                     return (
@@ -497,7 +500,7 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
                         <div className="flex items-center gap-3">
                           <span className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold ${
                             isThisCorrect ? 'bg-emerald-500 text-zinc-950' : 
-                            isSelected ? 'bg-rose-500 text-zinc-100' : 'bg-zinc-800 text-zinc-400'
+                            isSelected ? 'bg-rose-500 text-zinc-100' : 'bg-slate-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400'
                           }`}>
                             {['أ', 'ب', 'ج', 'د'][optIdx]}
                           </span>
@@ -505,13 +508,13 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
                         </div>
 
                         {isThisCorrect && (
-                          <span className="text-[11px] font-bold text-emerald-400 flex items-center gap-1">
+                          <span className="text-[11px] font-bold text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
                             <Check className="w-3.5 h-3.5" />
                             الإجابة النموذجية
                           </span>
                         )}
                         {isSelected && !isThisCorrect && (
-                          <span className="text-[11px] font-bold text-rose-400 flex items-center gap-1">
+                          <span className="text-[11px] font-bold text-rose-600 dark:text-rose-400 flex items-center gap-1">
                             <X className="w-3.5 h-3.5" />
                             اختيارك السابق
                           </span>
@@ -522,12 +525,12 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
                 </div>
 
                 {/* Solution Explanation Box */}
-                <div className="p-4 rounded-2xl bg-zinc-900/90 border border-zinc-800 text-xs leading-relaxed">
-                  <div className="flex items-center gap-2 text-amber-400 font-bold mb-1.5">
+                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-zinc-900/90 border border-slate-200 dark:border-zinc-800 text-xs leading-relaxed">
+                  <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400 font-bold mb-1.5">
                     <Sparkles className="w-4 h-4" />
                     <span>تفسير الحل والشرح النموذجي:</span>
                   </div>
-                  <p className="text-zinc-300">
+                  <p className="text-zinc-700 dark:text-zinc-300">
                     {q.explanation}
                   </p>
                 </div>
@@ -554,19 +557,19 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
       <div className="max-w-4xl mx-auto animate-in fade-in duration-200">
         
         {/* Sticky Exam Simulator Header */}
-        <div className="sticky top-20 z-30 p-4 sm:p-5 rounded-3xl bg-zinc-950/90 backdrop-blur-xl border border-amber-500/30 shadow-2xl mb-6 text-right">
+        <div className="sticky top-20 z-30 p-4 sm:p-5 rounded-3xl bg-white/95 dark:bg-zinc-950/90 backdrop-blur-xl border border-amber-500/30 shadow-lg dark:shadow-2xl mb-6 text-right">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
             
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300">
+                <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-amber-500/15 dark:bg-amber-500/20 border border-amber-500/40 text-amber-700 dark:text-amber-300">
                   {activeExam.subject}
                 </span>
-                <h2 className="text-sm sm:text-base font-bold text-zinc-100 truncate max-w-md">
+                <h2 className="text-sm sm:text-base font-bold text-zinc-900 dark:text-zinc-100 truncate max-w-md">
                   {activeExam.title}
                 </h2>
               </div>
-              <p className="text-[11px] text-zinc-400 mt-0.5">
+              <p className="text-[11px] text-zinc-600 dark:text-zinc-400 mt-0.5">
                 سؤال {currentQuestionIndex + 1} من أصل {totalQuestions} · أجبت على {answeredCount} سؤالاً
               </p>
             </div>
@@ -575,8 +578,8 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
             <div className="flex items-center gap-3">
               <div className={`flex items-center gap-2 px-3.5 py-2 rounded-2xl border ${
                 remainingSeconds < 300 
-                  ? 'bg-rose-500/20 border-rose-500/50 text-rose-300 animate-pulse' 
-                  : 'bg-zinc-900 border-zinc-800 text-amber-300'
+                  ? 'bg-rose-50 dark:bg-rose-500/20 border-rose-500/50 text-rose-700 dark:text-rose-300 animate-pulse' 
+                  : 'bg-slate-100 dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 text-amber-700 dark:text-amber-300'
               }`}>
                 <Timer className="w-4 h-4" />
                 <span className="font-mono text-sm sm:text-base font-black tracking-wider">
@@ -595,7 +598,7 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
           </div>
 
           {/* Progress Bar */}
-          <div className="w-full bg-zinc-900 h-1.5 rounded-full mt-3 overflow-hidden">
+          <div className="w-full bg-slate-200 dark:bg-zinc-900 h-1.5 rounded-full mt-3 overflow-hidden">
             <div 
               className="bg-gradient-to-r from-amber-500 to-amber-300 h-full transition-all duration-300"
               style={{ width: `${progressPercent}%` }}
@@ -604,15 +607,15 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
         </div>
 
         {/* Question Card */}
-        <div className="p-6 sm:p-8 rounded-3xl bg-zinc-950/80 border border-zinc-800 shadow-xl mb-6 text-right">
+        <div className="p-6 sm:p-8 rounded-3xl bg-white dark:bg-zinc-950/80 border border-slate-200 dark:border-zinc-800 shadow-lg dark:shadow-xl mb-6 text-right">
           
           <div className="flex items-center justify-between mb-5">
             <div className="flex items-center gap-2.5">
-              <span className="w-8 h-8 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center justify-center font-bold text-sm">
+              <span className="w-8 h-8 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-400 flex items-center justify-center font-bold text-sm">
                 {currentQuestionIndex + 1}
               </span>
-              <span className="text-xs text-zinc-400 font-medium">
-                الموضوع: <strong className="text-zinc-200">{q.topic}</strong>
+              <span className="text-xs text-zinc-600 dark:text-zinc-400 font-medium">
+                الموضوع: <strong className="text-zinc-900 dark:text-zinc-200">{q.topic}</strong>
               </span>
             </div>
 
@@ -621,23 +624,23 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
               onClick={() => handleToggleFlag(q.id)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
                 isCurrentFlagged
-                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/50'
-                  : 'bg-zinc-900/60 text-zinc-400 border-zinc-800 hover:text-zinc-200'
+                  ? 'bg-amber-500/15 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 border-amber-500/50'
+                  : 'bg-slate-100 dark:bg-zinc-900/60 text-zinc-600 dark:text-zinc-400 border-slate-200 dark:border-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-200'
               }`}
             >
-              <Bookmark className={`w-3.5 h-3.5 ${isCurrentFlagged ? 'fill-current text-amber-400' : ''}`} />
+              <Bookmark className={`w-3.5 h-3.5 ${isCurrentFlagged ? 'fill-current text-amber-600 dark:text-amber-400' : ''}`} />
               <span>{isCurrentFlagged ? 'تم تمييزه للمراجعة' : 'تمييز للمراجعة'}</span>
             </button>
           </div>
 
           {/* Question Text */}
-          <h3 className="text-base sm:text-lg font-bold text-zinc-100 leading-relaxed mb-4">
+          <h3 className="text-base sm:text-lg font-bold text-zinc-900 dark:text-zinc-100 leading-relaxed mb-4">
             {q.question}
           </h3>
 
           {/* Question Image Attachment (if provided) */}
           {(q.imageUrl || q.image) && (
-            <div className="mb-6 rounded-2xl overflow-hidden border border-amber-500/20 bg-zinc-950/80 p-3 flex items-center justify-center shadow-lg">
+            <div className="mb-6 rounded-2xl overflow-hidden border border-amber-500/20 bg-slate-50 dark:bg-zinc-950/80 p-3 flex items-center justify-center shadow-sm dark:shadow-lg">
               <img
                 src={q.imageUrl || q.image}
                 alt={`رسم توضيحي لسؤال ${currentQuestionIndex + 1}`}
@@ -656,15 +659,15 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
                   onClick={() => handleSelectOption(q.id, idx)}
                   className={`w-full p-4 rounded-2xl border text-right transition flex items-center justify-between gap-4 group ${
                     isSelected
-                      ? 'bg-amber-500/15 border-amber-500 text-amber-100 shadow-lg shadow-amber-500/10 font-bold'
-                      : 'bg-zinc-900/50 border-zinc-800 text-zinc-300 hover:bg-zinc-900 hover:border-zinc-700'
+                      ? 'bg-amber-50 dark:bg-amber-500/15 border-amber-500 text-amber-950 dark:text-amber-100 shadow-md dark:shadow-lg shadow-amber-500/10 font-bold'
+                      : 'bg-slate-50 dark:bg-zinc-900/50 border-slate-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:border-slate-300 dark:hover:border-zinc-700'
                   }`}
                 >
                   <div className="flex items-center gap-3.5">
                     <span className={`w-7 h-7 rounded-xl flex items-center justify-center text-xs font-bold transition ${
                       isSelected
                         ? 'bg-amber-500 text-zinc-950 font-black'
-                        : 'bg-zinc-800 text-zinc-400 group-hover:bg-zinc-700'
+                        : 'bg-slate-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 group-hover:bg-slate-300 dark:group-hover:bg-zinc-700'
                     }`}>
                       {['أ', 'ب', 'ج', 'د'][idx]}
                     </span>
@@ -672,7 +675,7 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
                   </div>
 
                   <div className={`w-5 h-5 rounded-full border flex items-center justify-center ${
-                    isSelected ? 'border-amber-400 bg-amber-500 text-zinc-950' : 'border-zinc-700'
+                    isSelected ? 'border-amber-500 bg-amber-500 text-zinc-950' : 'border-slate-300 dark:border-zinc-700'
                   }`}>
                     {isSelected && <Check className="w-3.5 h-3.5 stroke-[3]" />}
                   </div>
@@ -682,11 +685,11 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
           </div>
 
           {/* Next / Previous Controls */}
-          <div className="flex items-center justify-between border-t border-zinc-800/80 pt-5">
+          <div className="flex items-center justify-between border-t border-slate-200 dark:border-zinc-800/80 pt-5">
             <button
               onClick={() => setCurrentQuestionIndex(prev => Math.max(0, prev - 1))}
               disabled={currentQuestionIndex === 0}
-              className="flex items-center gap-2 px-4 py-2 rounded-2xl bg-zinc-900 border border-zinc-800 text-xs font-bold text-zinc-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition"
+              className="flex items-center gap-2 px-4 py-2 rounded-2xl bg-slate-100 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-xs font-bold text-zinc-700 dark:text-zinc-300 hover:text-zinc-950 dark:hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition"
             >
               <ChevronRight className="w-4 h-4" />
               <span>السؤال السابق</span>
@@ -714,15 +717,15 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
         </div>
 
         {/* Question Grid Matrix Navigator */}
-        <div className="p-4 sm:p-5 rounded-3xl bg-zinc-950/60 border border-zinc-800 text-right">
+        <div className="p-4 sm:p-5 rounded-3xl bg-white dark:bg-zinc-950/60 border border-slate-200 dark:border-zinc-800 text-right shadow-sm">
           <div className="flex items-center justify-between mb-3 text-xs">
-            <span className="font-bold text-zinc-300">مخطط الأسئلة السريع:</span>
-            <div className="flex items-center gap-4 text-[11px] text-zinc-400">
+            <span className="font-bold text-zinc-800 dark:text-zinc-300">مخطط الأسئلة السريع:</span>
+            <div className="flex items-center gap-4 text-[11px] text-zinc-600 dark:text-zinc-400">
               <span className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-full bg-amber-500" /> تمت الإجابة
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-zinc-700" /> لم تتم الإجابة
+                <span className="w-2.5 h-2.5 rounded-full bg-slate-300 dark:bg-zinc-700" /> لم تتم الإجابة
               </span>
               <span className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-full bg-amber-400/80 ring-2 ring-amber-400/40" /> مميز للمراجعة
@@ -736,12 +739,12 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
               const isFlagged = flaggedQuestions.has(item.id);
               const isCurrent = currentQuestionIndex === i;
 
-              let btnColor = 'bg-zinc-900 border-zinc-800 text-zinc-400';
+              let btnColor = 'bg-slate-50 dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400';
               if (isAnswered) {
-                btnColor = 'bg-amber-500/20 border-amber-500/50 text-amber-300 font-bold';
+                btnColor = 'bg-amber-500/15 dark:bg-amber-500/20 border-amber-500/50 text-amber-700 dark:text-amber-300 font-bold';
               }
               if (isCurrent) {
-                btnColor += ' ring-2 ring-amber-400';
+                btnColor += ' ring-2 ring-amber-500 dark:ring-amber-400';
               }
 
               return (
@@ -762,20 +765,20 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
 
         {/* Submit Confirmation Modal */}
         {isSubmitModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
-            <div className="w-full max-w-md p-6 rounded-3xl bg-zinc-900 border border-zinc-800 shadow-2xl text-right">
-              <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center justify-center mx-auto mb-4">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 dark:bg-black/80 backdrop-blur-sm animate-in fade-in">
+            <div className="w-full max-w-md p-6 rounded-3xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 shadow-2xl text-right">
+              <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-600 dark:text-amber-400 flex items-center justify-center mx-auto mb-4">
                 <CheckCircle2 className="w-6 h-6" />
               </div>
 
-              <h3 className="text-lg font-bold text-zinc-100 text-center mb-2">
+              <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 text-center mb-2">
                 هل أنت متأكد من تسليم الامتحان؟
               </h3>
               
-              <p className="text-xs text-zinc-400 text-center leading-relaxed mb-6">
-                لقد أجبت على <strong className="text-amber-400">{answeredCount}</strong> من أصل <strong className="text-zinc-200">{totalQuestions}</strong> سؤالاً.
+              <p className="text-xs text-zinc-600 dark:text-zinc-400 text-center leading-relaxed mb-6">
+                لقد أجبت على <strong className="text-amber-600 dark:text-amber-400">{answeredCount}</strong> من أصل <strong className="text-zinc-900 dark:text-zinc-200">{totalQuestions}</strong> سؤالاً.
                 {totalQuestions - answeredCount > 0 && (
-                  <span className="text-rose-400 block mt-1">
+                  <span className="text-rose-600 dark:text-rose-400 block mt-1">
                     تنبيه: لديك {totalQuestions - answeredCount} أسئلة لم تقم بالإجابة عليها بعد!
                   </span>
                 )}
@@ -790,7 +793,7 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
                 </button>
                 <button
                   onClick={() => setIsSubmitModalOpen(false)}
-                  className="flex-1 py-2.5 rounded-2xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-semibold text-xs border border-zinc-700 transition"
+                  className="flex-1 py-2.5 rounded-2xl bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 font-semibold text-xs border border-slate-300 dark:border-zinc-700 transition"
                 >
                   متابعة الحل
                 </button>
@@ -810,17 +813,17 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
     <div className="space-y-8 animate-in fade-in duration-200">
       
       {/* Hero Exam Portal Banner */}
-      <div className="p-6 sm:p-8 rounded-3xl bg-gradient-to-r from-amber-950/30 via-zinc-900/80 to-zinc-900/60 border border-amber-500/20 shadow-xl relative overflow-hidden text-right">
+      <div className="p-6 sm:p-8 rounded-3xl bg-gradient-to-r from-amber-50 via-white to-slate-50 dark:from-amber-950/30 dark:via-zinc-900/80 dark:to-zinc-900/60 border border-amber-500/20 shadow-md dark:shadow-xl relative overflow-hidden text-right">
         <div className="flex flex-col md:flex-row items-center justify-between gap-6">
           <div className="max-w-2xl">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-bold mb-3">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-400 text-xs font-bold mb-3">
               <GraduationCap className="w-4 h-4" />
               <span>بنك الامتحانات الإلكترونية التفاعلية للثانوية العامة 2026</span>
             </div>
-            <h2 className="text-2xl sm:text-3xl font-black text-zinc-100 mb-2">
+            <h2 className="text-2xl sm:text-3xl font-black text-zinc-900 dark:text-zinc-100 mb-2">
               اختبر معلوماتك وتدرّب على أسئلة الامتحان الوزاري
             </h2>
-            <p className="text-xs sm:text-sm text-zinc-400 leading-relaxed">
+            <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-400 leading-relaxed">
               نماذج امتحانية معتمدة تغطي كافة مواد الشعبة العلمية والأدبية، محددة بوقت زمني مع تصحيح إلكتروني فوري وشرح تفصيلي لكل مسألة وسؤال.
             </p>
           </div>
@@ -836,7 +839,7 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
 
             <button
               onClick={onNavigateToStats}
-              className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-3 rounded-2xl bg-zinc-900/90 hover:bg-zinc-800 text-amber-300 font-bold text-xs border border-amber-500/30 transition"
+              className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-3 rounded-2xl bg-white dark:bg-zinc-900/90 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-amber-700 dark:text-amber-300 font-bold text-xs border border-amber-500/30 transition"
             >
               <BarChart3 className="w-4 h-4" />
               <span>عرض إحصائياتي ونتائجي السابقة</span>
@@ -846,45 +849,45 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
       </div>
 
       {/* Subscription Status & Quota Banner */}
-      <div className="p-4 sm:p-5 rounded-3xl bg-zinc-900/90 border border-zinc-800 flex flex-col sm:flex-row items-center justify-between gap-4 text-right">
+      <div className="p-4 sm:p-5 rounded-3xl bg-white dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 flex flex-col sm:flex-row items-center justify-between gap-4 text-right shadow-sm dark:shadow-none">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+          <div className="w-10 h-10 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-600 dark:text-amber-400 shrink-0">
             <Zap className="w-5 h-5" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-zinc-200">
+              <span className="text-xs font-bold text-zinc-900 dark:text-zinc-200">
                 {currentUser?.subscription?.isTrial ? (
                   (currentUser.subscription.trialDaysLeft ?? 0) > 0 ? (
-                    <>أنت في <strong className="text-amber-400">الفترة التجريبية المجانية (10 أيام)</strong> — متبقي: {currentUser.subscription.trialDaysLeft} أيام</>
+                    <>أنت في <strong className="text-amber-600 dark:text-amber-400">الفترة التجريبية المجانية (10 أيام)</strong> — متبقي: {currentUser.subscription.trialDaysLeft} أيام</>
                   ) : (
-                    <span className="text-rose-400 font-bold">انتهت الفترة التجريبية المجانية (10 أيام)</span>
+                    <span className="text-rose-600 dark:text-rose-400 font-bold">انتهت الفترة التجريبية المجانية (10 أيام)</span>
                   )
                 ) : currentUser?.subscription?.status === 'active' ? (
                   `باقة الاشتراك الشهرية: ${currentUser.subscription.planName}`
                 ) : (
-                  'باقات اشتراك منصة الامتحانات الشهرية تبدأ من 50 ج.م'
+                  'باقة التفوق الشاملة الاختيارية (50 ج.م شهرياً)'
                 )}
               </span>
               {currentUser?.subscription?.status === 'active' && (
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
                   {currentUser.subscription.isTrial ? 'فترة تجريبية' : 'اشتراك شهري نشط'}
                 </span>
               )}
             </div>
-            <p className="text-[11px] text-zinc-400 mt-0.5">
+            <p className="text-[11px] text-zinc-600 dark:text-zinc-400 mt-0.5">
               {currentUser?.subscription?.status === 'active' ? (
                 currentUser.subscription.maxExamsPerWeek > 0 ? (
                   <span>
-                    الرصيد المتاح لهذا الأسبوع: <strong className="text-amber-400">{currentUser.subscription.examsRemainingThisWeek}</strong> من أصل <strong className="text-zinc-200">{currentUser.subscription.maxExamsPerWeek}</strong> امتحانات أسبوعياً (تتجدد أسبوعياً).
+                    الرصيد المتاح لهذا الأسبوع: <strong className="text-amber-700 dark:text-amber-400">{currentUser.subscription.examsRemainingThisWeek}</strong> من أصل <strong className="text-zinc-900 dark:text-zinc-200">{currentUser.subscription.maxExamsPerWeek}</strong> امتحانات أسبوعياً (تتجدد أسبوعياً).
                   </span>
                 ) : (
-                  <span className="text-emerald-400 font-bold">
-                    رصيد امتحانات واختبارات غير محدود طوال مدة اشتراكك VIP 🌟
+                  <span className="text-emerald-700 dark:text-emerald-400 font-bold">
+                    رصيد امتحانات واختبارات غير محدود طوال مدة اشتراكك 🌟
                   </span>
                 )
               ) : (
-                <span>للاستمرار في أداء الامتحانات، اختر باقة شهرية تبدأ من 50 ج.م (امتحانين أسبوعياً)، 100 ج.م، أو 200 ج.م VIP.</span>
+                <span>يمكنك الاستمرار بالتجربة المجانية أو الاشتراك اختيارياً في باقة التفوق الشاملة بـ 50 ج.م فقط لامتحانات مفتوحة.</span>
               )}
             </p>
           </div>
@@ -895,15 +898,32 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
           className="shrink-0 flex items-center gap-2 px-4 py-2 rounded-2xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs shadow-md shadow-amber-500/20 transition active:scale-95"
         >
           <CreditCard className="w-4 h-4" />
-          <span>{currentUser?.subscription?.isTrial ? 'الاشتراك في باقة شهرية (من 50ج)' : 'تعديل أو ترقية الباقة'}</span>
+          <span>{currentUser?.subscription?.isTrial ? 'اشترك بـ 50 ج.م (اختياري)' : 'إدارة الباقة (50 ج.م)'}</span>
         </button>
       </div>
+
+      {/* Exam Access Notice Banner */}
+      {examAccessNotice && (
+        <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/30 text-amber-900 dark:text-amber-200 text-xs font-bold flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
+            <span>{examAccessNotice}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setExamAccessNotice(null)}
+            className="text-amber-700 dark:text-amber-300 hover:underline text-[11px] shrink-0"
+          >
+            إغلاق
+          </button>
+        </div>
+      )}
 
       {/* Filter and Search Bar */}
       <div className="space-y-3">
         {/* Grade Filter Row */}
-        <div className="flex items-center gap-2 flex-wrap pb-2 border-b border-zinc-850">
-          <span className="text-xs font-bold text-amber-400 ml-2">المرحلة الدراسية:</span>
+        <div className="flex items-center gap-2 flex-wrap pb-2 border-b border-zinc-200 dark:border-zinc-800">
+          <span className="text-xs font-bold text-amber-700 dark:text-amber-400 ml-2">المرحلة الدراسية:</span>
           {grades.map(grd => (
             <button
               key={grd}
@@ -911,7 +931,7 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
               className={`px-3 py-1.5 rounded-xl text-xs font-bold transition border ${
                 selectedGrade === grd
                   ? 'bg-amber-500 text-zinc-950 border-amber-400 shadow-md font-extrabold'
-                  : 'bg-zinc-900/80 text-zinc-400 border-zinc-800 hover:text-zinc-200 hover:bg-zinc-850'
+                  : 'bg-white dark:bg-zinc-900/80 text-zinc-600 dark:text-zinc-400 border-zinc-200 dark:border-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800'
               }`}
             >
               {grd}
@@ -921,7 +941,6 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
 
         {/* Subject Filter & Search Bar */}
         <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-          {/* Subject Filter Pills */}
           <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
             {subjects.map(sub => (
               <button
@@ -929,8 +948,8 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
                 onClick={() => setSelectedSubject(sub)}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition border ${
                   selectedSubject === sub
-                    ? 'bg-zinc-100 text-zinc-950 border-zinc-100 font-bold'
-                    : 'bg-zinc-900/60 text-zinc-400 border-zinc-800 hover:text-zinc-200'
+                    ? 'bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-950 border-zinc-900 dark:border-zinc-100 font-bold'
+                    : 'bg-white dark:bg-zinc-900/60 text-zinc-600 dark:text-zinc-400 border-zinc-200 dark:border-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-200'
                 }`}
               >
                 {sub}
@@ -938,16 +957,15 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
             ))}
           </div>
 
-          {/* Search */}
           <div className="relative w-full sm:w-72">
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="ابحث في الامتحانات والأسئلة..."
-              className="w-full py-2 pr-9 pl-4 text-xs bg-zinc-900/80 border border-zinc-800 rounded-2xl focus:outline-none focus:border-amber-500 text-zinc-100 placeholder:text-zinc-500 text-right"
+              className="w-full py-2 pr-9 pl-4 text-xs bg-white dark:bg-zinc-900/80 border border-zinc-200 dark:border-zinc-800 rounded-2xl focus:outline-none focus:border-amber-500 text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500 text-right"
             />
-            <Search className="w-4 h-4 text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
+            <Search className="w-4 h-4 text-zinc-400 dark:text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
           </div>
         </div>
       </div>
@@ -955,74 +973,67 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
       {/* Exams Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 text-right">
         {filteredExams.map((exam) => {
-          // Check if user has taken this exam before
           const pastSub = stats.recentExams.find(s => s.examId === exam.id);
 
           return (
             <div
               key={exam.id}
-              className="p-6 rounded-3xl bg-zinc-950/70 border border-zinc-800/80 hover:border-amber-500/40 hover:shadow-2xl hover:shadow-amber-500/5 transition duration-300 flex flex-col justify-between group"
+              className="p-6 rounded-3xl bg-white dark:bg-zinc-950/70 border border-zinc-200 dark:border-zinc-800/80 hover:border-amber-500/40 hover:shadow-xl dark:hover:shadow-amber-500/5 transition duration-300 flex flex-col justify-between group shadow-sm dark:shadow-none"
             >
               <div>
-                {/* Card Top: Subject & Badge */}
                 <div className="flex items-center justify-between mb-4">
-                  <span className="text-[11px] font-bold px-2.5 py-1 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400">
+                  <span className="text-[11px] font-bold px-2.5 py-1 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-400">
                     {exam.subject}
                   </span>
                   
-                  <span className="text-[11px] font-medium text-zinc-400">
+                  <span className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
                     {exam.badge || 'نموذج وزاري'}
                   </span>
                 </div>
 
-                {/* Exam Title */}
-                <h3 className="text-base font-bold text-zinc-100 group-hover:text-amber-300 transition duration-200 mb-2 leading-snug">
+                <h3 className="text-base font-bold text-zinc-900 dark:text-zinc-100 group-hover:text-amber-700 dark:group-hover:text-amber-300 transition duration-200 mb-2 leading-snug">
                   {exam.title}
                 </h3>
 
-                {/* Description */}
-                <p className="text-xs text-zinc-400 leading-relaxed mb-4 line-clamp-2">
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed mb-4 line-clamp-2">
                   {exam.description}
                 </p>
 
-                {/* Meta details */}
-                <div className="grid grid-cols-3 gap-2 py-3 border-y border-zinc-800/60 mb-5 text-center">
+                <div className="grid grid-cols-3 gap-2 py-3 border-y border-zinc-200 dark:border-zinc-800/60 mb-5 text-center">
                   <div>
                     <span className="text-[10px] text-zinc-500 block">المدة</span>
-                    <span className="text-xs font-bold text-zinc-200 flex items-center justify-center gap-1 mt-0.5">
-                      <Clock className="w-3 h-3 text-amber-400" />
+                    <span className="text-xs font-bold text-zinc-800 dark:text-zinc-200 flex items-center justify-center gap-1 mt-0.5">
+                      <Clock className="w-3 h-3 text-amber-600 dark:text-amber-400" />
                       {exam.durationMinutes} دقيقة
                     </span>
                   </div>
 
                   <div>
                     <span className="text-[10px] text-zinc-500 block">الأسئلة</span>
-                    <span className="text-xs font-bold text-zinc-200 flex items-center justify-center gap-1 mt-0.5">
-                      <HelpCircle className="w-3 h-3 text-amber-400" />
+                    <span className="text-xs font-bold text-zinc-800 dark:text-zinc-200 flex items-center justify-center gap-1 mt-0.5">
+                      <HelpCircle className="w-3 h-3 text-amber-600 dark:text-amber-400" />
                       {exam.questionsCount} سؤالاً
                     </span>
                   </div>
 
                   <div>
                     <span className="text-[10px] text-zinc-500 block">الدرجة</span>
-                    <span className="text-xs font-bold text-amber-400 mt-0.5 block">
+                    <span className="text-xs font-bold text-amber-700 dark:text-amber-400 mt-0.5 block">
                       {exam.totalMarks} درجة
                     </span>
                   </div>
                 </div>
 
-                {/* Past score badge if exists */}
                 {pastSub && (
-                  <div className="mb-4 p-2.5 rounded-xl bg-zinc-900/90 border border-zinc-800 flex items-center justify-between text-xs">
-                    <span className="text-zinc-400">آخر درجة حققتها:</span>
-                    <span className="font-bold text-emerald-400">
+                  <div className="mb-4 p-2.5 rounded-xl bg-slate-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 flex items-center justify-between text-xs">
+                    <span className="text-zinc-600 dark:text-zinc-400">آخر درجة حققتها:</span>
+                    <span className="font-bold text-emerald-600 dark:text-emerald-400">
                       {pastSub.score} / {pastSub.totalMarks} ({pastSub.percentage}%)
                     </span>
                   </div>
                 )}
               </div>
 
-              {/* Start Exam Button */}
               <button
                 onClick={() => handleStartExam(exam)}
                 className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs shadow-md shadow-amber-500/20 group-hover:shadow-amber-500/30 transition active:scale-95"
@@ -1036,9 +1047,9 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
       </div>
 
       {filteredExams.length === 0 && (
-        <div className="text-center py-16 bg-zinc-900/40 border border-zinc-800 rounded-3xl p-6">
-          <GraduationCap className="w-12 h-12 text-zinc-600 mx-auto mb-3" />
-          <h3 className="text-base font-bold text-zinc-300 mb-1">لم يتم العثور على امتحانات مطابقة</h3>
+        <div className="text-center py-16 bg-slate-50 dark:bg-zinc-900/40 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6">
+          <GraduationCap className="w-12 h-12 text-zinc-400 dark:text-zinc-600 mx-auto mb-3" />
+          <h3 className="text-base font-bold text-zinc-700 dark:text-zinc-300 mb-1">لم يتم العثور على امتحانات مطابقة</h3>
           <p className="text-xs text-zinc-500">جرب البحث بكلمات أخرى أو تغيير تصنيف المادة.</p>
         </div>
       )}
@@ -1046,17 +1057,17 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
       {/* Quota Exhausted Modal */}
       {showQuotaModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
-          <div className="bg-zinc-950 border border-amber-500/40 rounded-3xl max-w-md w-full p-6 text-right shadow-2xl relative">
-            <div className="w-12 h-12 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center mx-auto mb-4">
+          <div className="bg-white dark:bg-zinc-950 border border-amber-500/40 rounded-3xl max-w-md w-full p-6 text-right shadow-2xl relative">
+            <div className="w-12 h-12 rounded-2xl bg-amber-500/15 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center mx-auto mb-4">
               <Zap className="w-6 h-6" />
             </div>
 
-            <h3 className="text-lg font-black text-zinc-100 text-center mb-2">
-              لقد استهلكت رصيد امتحاناتك لهذا الأسبوع!
+            <h3 className="text-lg font-black text-zinc-900 dark:text-zinc-100 text-center mb-2">
+              {isEducationalFeatureLocked(currentUser) ? 'انتهت الفترة التجريبية المجانية!' : 'لقد استهلكت رصيد امتحاناتك لهذا الأسبوع!'}
             </h3>
             
-            <p className="text-xs text-zinc-400 text-center leading-relaxed mb-6">
-              باقتك الحالية تسمح بـ <strong className="text-amber-400">{currentUser?.subscription?.maxExamsPerWeek} امتحانات أسبوعياً</strong>. يمكنك ترقية باقتك إلى باقة التفوق (5 امتحانات أسبوعياً) أو باقة أوائل الجمهورية VIP (امتحانات غير محدودة)، أو الانتظار لتجديد الرصيد الأسبوعي القادم.
+            <p className="text-xs text-zinc-600 dark:text-zinc-400 text-center leading-relaxed mb-6">
+              اشترك الآن اختيارياً في <strong className="text-amber-700 dark:text-amber-400">باقة التفوق الشاملة (50 ج.م فقط / شهر)</strong> للحصول على امتحانات مفتوحة بلا حدود طوال الشهر وتنزيل جميع الكتب والملخصات!
             </p>
 
             <div className="space-y-3">
@@ -1068,12 +1079,12 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
                 className="w-full py-3 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-400 hover:brightness-110 text-zinc-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition active:scale-95 flex items-center justify-center gap-2"
               >
                 <CreditCard className="w-4 h-4" />
-                <span>ترقية الباقة الآن (تبدأ من 50ج حتى 200ج)</span>
+                <span>تفعيل باقة التفوق الشاملة (50 ج.م)</span>
               </button>
 
               <button
                 onClick={() => setShowQuotaModal(false)}
-                className="w-full py-2.5 rounded-2xl bg-zinc-900 hover:bg-zinc-800 text-zinc-400 font-bold text-xs border border-zinc-800 transition"
+                className="w-full py-2.5 rounded-2xl bg-zinc-100 dark:bg-zinc-900 hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-400 font-bold text-xs border border-zinc-200 dark:border-zinc-800 transition"
               >
                 إغلاق
               </button>

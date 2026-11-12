@@ -4,57 +4,7 @@
     "passwordHash": "1w2q3r4eA",
     "updatedAt": "2026-10-19T12:39:52.934Z"
   },
-  "users": [
-    {
-      "id": "usr_student_demo",
-      "name": "محمود عبد الرحمن",
-      "email": "student@example.com",
-      "password": "user123",
-      "role": "user",
-      "academicStage": "الصف الثالث الثانوي (علمي علوم)",
-      "avatar": "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80",
-      "status": "active",
-      "createdAt": "2026-09-01T10:00:00.000Z",
-      "lastLogin": "2026-10-19T12:39:52.934Z",
-      "bookmarks": [
-        {
-          "id": "1",
-          "type": "book",
-          "title": "كتاب الفيزياء للثانوية العامة 2026 - الكهربية والمغناطيسية والحديثة",
-          "path": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-          "addedAt": "2026-09-10T12:00:00.000Z"
-        },
-        {
-          "id": "1",
-          "type": "summary",
-          "title": "خريطة ذهنية: الوحدات السبع في النحو لشهادة الثانوية العامة المصرية",
-          "path": "https://images.unsplash.com/photo-1456513080510-7bf3a84b82f8?w=800&auto=format&fit=crop&q=80",
-          "addedAt": "2026-09-12T15:30:00.000Z"
-        }
-      ]
-    },
-    {
-      "id": "usr_sara_demo",
-      "name": "مريم طارق الشريف",
-      "email": "sara@example.com",
-      "password": "user123",
-      "role": "moderator",
-      "academicStage": "الصف الثالث الثانوي (علمي رياضة)",
-      "avatar": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80",
-      "status": "active",
-      "createdAt": "2026-09-05T14:20:00.000Z",
-      "lastLogin": "2026-10-19T12:39:52.934Z",
-      "bookmarks": [
-        {
-          "id": "5",
-          "type": "book",
-          "title": "كتاب الرياضيات البحتة (التفاضل والتكامل والجبر والفراغية) - ثانوية عامة",
-          "path": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-          "addedAt": "2026-09-08T09:15:00.000Z"
-        }
-      ]
-    }
-  ],
+  "users": [],
   "pdfs": [
     {
       "id": 1,
@@ -68,8 +18,8 @@
       "downloads": 0,
       "views": 0,
       "created_at": "2026-09-01T12:00:00.000Z",
-      "rating": 5,
-      "ratingCount": 2
+      "rating": 0,
+      "ratingCount": 0
     },
     {
       "id": 2,
@@ -283,8 +233,8 @@
       "duration": "58:00",
       "views": 0,
       "created_at": "2026-09-01T10:00:00.000Z",
-      "rating": 4.5,
-      "ratingCount": 2
+      "rating": 0,
+      "ratingCount": 0
     },
     {
       "id": 2,

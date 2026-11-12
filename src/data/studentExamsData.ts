@@ -1068,7 +1068,7 @@ export const getInitialStudentStats = (userId?: string): StudentStats => {
     downloadedBooksList: downloadedList,
     summariesReviewedCount: 0,
     videosWatchedCount: 0,
-    streakDays: 1,
+    streakDays: 0,
     lastActiveDate: new Date().toISOString(),
     subjectPerformance: {},
     recentExams: [],
@@ -1111,7 +1111,8 @@ export const recordExamSubmission = (
     feedback: string;
     totalQuestions: number;
     correctQuestions: number;
-  }
+  },
+  userId?: string
 ): StudentStats => {
   const newTotalExams = currentStats.totalExamsTaken + 1;
   const newPassedExams = submission.passed ? currentStats.passedExams + 1 : currentStats.passedExams;
@@ -1181,13 +1182,14 @@ export const recordExamSubmission = (
     passedExams: newPassedExams,
     averageScore: newAvgScore,
     totalStudyMinutes: newTotalStudyMinutes,
+    streakDays: Math.max(1, currentStats.streakDays || 0),
     lastActiveDate: new Date().toISOString(),
     recentExams: newRecentExams,
     subjectPerformance: updatedSubjectPerformance,
     achievements: updatedAchievements
   };
 
-  saveStudentStats(updatedStats);
+  saveStudentStats(updatedStats, userId);
   return updatedStats;
 };
 

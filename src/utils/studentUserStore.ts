@@ -4,56 +4,25 @@ import { dispatchContentChanged } from './contentStore';
 const REGISTERED_STUDENTS_KEY = 'arm_registered_students_v2';
 export const STUDENT_REGISTERED_EVENT = 'arm_student_registered_sync';
 
-// Default initial students so the Admin Portal always has student data even on fresh start
-const DEFAULT_STUDENT_ACCOUNTS: User[] = [
-  {
-    id: 'std_demo_1',
-    name: 'أحمد محمد العوضي',
-    email: 'ahmed.awadi@student.edu.eg',
-    role: 'user',
-    status: 'active',
-    academicStage: 'الثانوية العامة - علمي علوم',
-    avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
-    createdAt: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString()
-  },
-  {
-    id: 'std_demo_2',
-    name: 'مريم محمود الشافعي',
-    email: 'mariam.shafey@student.edu.eg',
-    role: 'user',
-    status: 'active',
-    academicStage: 'الثانوية العامة - علمي رياضة',
-    avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
-    createdAt: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString()
-  },
-  {
-    id: 'std_demo_3',
-    name: 'يوسف طارق المنشاوي',
-    email: 'youssef.menshawy@student.edu.eg',
-    role: 'user',
-    status: 'active',
-    academicStage: 'الثانوية العامة - أدبي',
-    avatar: 'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=150&auto=format&fit=crop&q=80',
-    createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
-  }
-];
+// 100% Real student accounts only - no demo accounts
+const DEFAULT_STUDENT_ACCOUNTS: User[] = [];
 
 export const getRegisteredStudents = (): User[] => {
   try {
     const raw = localStorage.getItem(REGISTERED_STUDENTS_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+      if (Array.isArray(parsed)) {
+        const realOnly = parsed.filter((u: User) => !String(u.id).startsWith('std_demo_'));
+        if (realOnly.length !== parsed.length) {
+          localStorage.setItem(REGISTERED_STUDENTS_KEY, JSON.stringify(realOnly));
+        }
+        return realOnly;
       }
     }
   } catch (e) {
     console.error('Error reading registered students', e);
   }
-  // Initialize with defaults if empty
-  try {
-    localStorage.setItem(REGISTERED_STUDENTS_KEY, JSON.stringify(DEFAULT_STUDENT_ACCOUNTS));
-  } catch (e) {}
   return DEFAULT_STUDENT_ACCOUNTS;
 };
 

@@ -93,7 +93,9 @@ export const getCustomItems = <T>(key: string): T[] => {
   return [];
 };
 
-export const saveCustomItem = <T extends { id: number | string }>(type: 'book' | 'summary' | 'video' | 'article', item: T) => {
+import { deletePdfFromIdb } from './pdfStorage';
+
+export const saveCustomItem = <T extends { id: number | string }>(type: 'book' | 'summary' | 'video' | 'article', item: T): boolean => {
   try {
     const key = type === 'book' ? CUSTOM_BOOKS_KEY :
                 type === 'summary' ? CUSTOM_SUMMARIES_KEY :
@@ -107,8 +109,10 @@ export const saveCustomItem = <T extends { id: number | string }>(type: 'book' |
     }
     localStorage.setItem(key, JSON.stringify(current));
     dispatchContentChanged();
+    return true;
   } catch (e) {
     console.error('Error saving custom item', e);
+    return false;
   }
 };
 
@@ -117,7 +121,11 @@ export const removeCustomItem = (type: 'book' | 'summary' | 'video' | 'article',
     const key = type === 'book' ? CUSTOM_BOOKS_KEY :
                 type === 'summary' ? CUSTOM_SUMMARIES_KEY :
                 type === 'video' ? CUSTOM_VIDEOS_KEY : CUSTOM_ARTICLES_KEY;
-    const current = getCustomItems<{ id: number | string }>(key);
+    const current = getCustomItems<{ id: number | string; filepath?: string }>(key);
+    const target = current.find(i => String(i.id) === String(id));
+    if (target?.filepath) {
+      deletePdfFromIdb(target.filepath).catch(() => {});
+    }
     const updated = current.filter(i => String(i.id) !== String(id));
     localStorage.setItem(key, JSON.stringify(updated));
   } catch (e) {

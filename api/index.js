@@ -241,19 +241,7 @@ let memoryStore = {
       views: 0
     }
   ],
-  users: [
-    {
-      id: 'usr_demo',
-      name: 'طالب الثانوية العامة',
-      email: 'student@example.com',
-      password: 'user123',
-      role: 'user',
-      academicStage: 'الصف الثالث الثانوي',
-      avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
-      status: 'active',
-      bookmarks: []
-    }
-  ],
+  users: [],
   auditLogs: [
     {
       id: 'log_vercel',
@@ -403,8 +391,8 @@ app.post(['/api/rate', '/rate'], (req, res) => {
   const item = list.find(i => i.id === Number(id));
   if (!item) return res.status(404).json({ error: 'العنصر غير موجود' });
 
-  const currentCount = item.ratingCount || 1;
-  const currentRating = item.rating || 5;
+  const currentCount = item.ratingCount || 0;
+  const currentRating = item.rating || 0;
   const newCount = currentCount + 1;
   const newRating = Math.round((((currentRating * currentCount) + star) / newCount) * 10) / 10;
   item.rating = newRating;
@@ -449,15 +437,8 @@ app.get(['/api/auth/me', '/auth/me'], (req, res) => {
   const authHeader = req.headers.authorization;
   const token = authHeader?.replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'غير مصرح' });
-  const user = memoryStore.users[0] || {
-    id: 'usr_demo',
-    name: 'طالب الثانوية العامة',
-    email: 'student@example.com',
-    role: 'user',
-    academicStage: 'الصف الثالث الثانوي (المصري)',
-    avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150',
-    bookmarks: []
-  };
+  const user = memoryStore.users[0];
+  if (!user) return res.status(404).json({ error: 'المستخدم غير موجود' });
   const { password: _, ...userSafe } = user;
   res.json({ user: userSafe });
 });
@@ -465,7 +446,8 @@ app.get(['/api/auth/me', '/auth/me'], (req, res) => {
 // User Profile Update endpoint (name, academicStage, avatar, password)
 app.put(['/api/user/profile', '/user/profile'], (req, res) => {
   const { name, academicStage, avatar, password } = req.body;
-  const user = memoryStore.users[0] || { id: 'usr_demo', name: 'طالب الثانوية العامة' };
+  const user = memoryStore.users[0];
+  if (!user) return res.status(404).json({ error: 'المستخدم غير موجود' });
   if (name) user.name = name.trim();
   if (academicStage) user.academicStage = academicStage.trim();
   if (avatar) user.avatar = avatar;
@@ -477,7 +459,8 @@ app.put(['/api/user/profile', '/user/profile'], (req, res) => {
 // Toggle Favorite / Bookmark
 app.post(['/api/user/favorite', '/user/favorite'], (req, res) => {
   const { id, type, title, path } = req.body;
-  const user = memoryStore.users[0] || { id: 'usr_demo', bookmarks: [] };
+  const user = memoryStore.users[0];
+  if (!user) return res.status(401).json({ error: 'يرجى تسجيل الدخول أولاً' });
   if (!user.bookmarks) user.bookmarks = [];
   const idx = user.bookmarks.findIndex(b => b.id === String(id) && b.type === type);
   let isBookmarked = false;
@@ -509,8 +492,8 @@ app.post(['/api/books', '/books'], (req, res) => {
     description: description || '',
     downloads: 0,
     views: 0,
-    rating: 5,
-    ratingCount: 1,
+    rating: 0,
+    ratingCount: 0,
     created_at: new Date().toISOString()
   };
   memoryStore.books.unshift(newBook);
@@ -545,8 +528,8 @@ app.post(['/api/summaries', '/summaries'], (req, res) => {
     imagepath: imagepath.trim(),
     category: category || 'عام',
     views: 0,
-    rating: 5,
-    ratingCount: 1,
+    rating: 0,
+    ratingCount: 0,
     created_at: new Date().toISOString()
   };
   memoryStore.summaries.unshift(newSum);
@@ -583,8 +566,8 @@ app.post(['/api/videos', '/videos'], (req, res) => {
     channel: channel || 'المكتبة الرقمية',
     duration: duration || '15:00',
     views: 0,
-    rating: 5,
-    ratingCount: 1,
+    rating: 0,
+    ratingCount: 0,
     created_at: new Date().toISOString()
   };
   memoryStore.videos.unshift(newVid);
@@ -621,8 +604,8 @@ app.post(['/api/articles', '/articles'], (req, res) => {
     author: author || 'ARM',
     readTime: readTime || '5 دقائق',
     views: 0,
-    rating: 5,
-    ratingCount: 1,
+    rating: 0,
+    ratingCount: 0,
     created_at: new Date().toISOString()
   };
   memoryStore.articles.unshift(newArt);
