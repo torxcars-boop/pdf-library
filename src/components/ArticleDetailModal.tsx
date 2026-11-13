@@ -37,18 +37,41 @@ export const ArticleDetailModal: React.FC<ArticleDetailModalProps> = ({
   const [viewCount, setViewCount] = useState<number>(0);
   const [likes, setLikes] = useState(0);
   const [hasLiked, setHasLiked] = useState(false);
+  const [ratingTick, setRatingTick] = useState(0);
 
   useEffect(() => {
     if (article?.id) {
-      const views = incrementRealView('article', article.id);
+      const views = incrementRealView('article', article.id, article.views || 0);
       setViewCount(views);
       fetch(`/api/items/article/${article.id}/view`, { method: 'POST' }).catch(() => {});
     }
   }, [article?.id]);
 
+  useEffect(() => {
+    if (article?.id) {
+      setViewCount((prev) => Math.max(prev, getRealViews('article', article.id, article.views || 0), article.views || 0));
+    }
+  }, [article?.id, article?.views]);
+
+  useEffect(() => {
+    const onRev = () => setRatingTick((t) => t + 1);
+    window.addEventListener('arm_reviews_updated', onRev);
+    return () => window.removeEventListener('arm_reviews_updated', onRev);
+  }, []);
+
   if (!article) return null;
 
-  const realRating = getItemRatingStats(article.id, 'article');
+  void ratingTick;
+  const reviewStats = getItemRatingStats(article.id, 'article');
+  const serverCount = article.ratingCount || 0;
+  const serverRating = article.rating || 0;
+  const effectiveRatingCount = Math.max(reviewStats.totalReviews, serverCount);
+  const effectiveAverageRating =
+    reviewStats.totalReviews > 0 && serverCount > reviewStats.totalReviews
+      ? Math.round((((reviewStats.averageRating * reviewStats.totalReviews) + (serverRating * (serverCount - reviewStats.totalReviews))) / serverCount) * 10) / 10
+      : serverCount > 0
+        ? serverRating
+        : reviewStats.averageRating;
 
   const handleLike = () => {
     if (!hasLiked) {
@@ -122,18 +145,18 @@ export const ArticleDetailModal: React.FC<ArticleDetailModalProps> = ({
         <div className="flex items-center justify-between p-3.5 bg-zinc-50 dark:bg-zinc-950/60 border border-zinc-200 dark:border-zinc-800 rounded-2xl my-4">
           <div>
             <span className="text-xs font-bold text-amber-700 dark:text-amber-300 block mb-1">
-              ⭐ تقييم المقال: {realRating.totalReviews > 0 ? `(${realRating.averageRating} من 5)` : '(لم يُقيّم بعد)'}
+              ⭐ تقييم المقال: {effectiveRatingCount > 0 ? `(${effectiveAverageRating} من 5)` : '(لم يُقيّم بعد)'}
             </span>
             <RatingStars
-              rating={realRating.averageRating}
-              ratingCount={realRating.totalReviews}
+              rating={effectiveAverageRating}
+              ratingCount={effectiveRatingCount}
               size="md"
               interactive={true}
               onRate={onRate}
             />
           </div>
           <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
-            {realRating.totalReviews > 0 ? `${realRating.totalReviews} تقييم مسجل` : 'كن أول من يشارك تقييمه'}
+            {effectiveRatingCount > 0 ? `${effectiveRatingCount} تقييم مسجل` : 'كن أول من يشارك تقييمه'}
           </span>
         </div>
 

@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 dotenv.config();
 import express from 'express';
+import crypto from 'crypto';
 import pg from 'pg';
 const { Pool } = pg;
 
@@ -10,6 +11,51 @@ app.use(express.json({ limit: '50mb' }));
 
 const ADMIN_USERNAME = 'ARM';
 let adminPassword = process.env.ADMIN_PASSWORD || '1w2q3r4eA';
+const USER_TOKEN_SECRET = process.env.SESSION_SECRET || 'arm_digital_library_user_hmac_2026_secret';
+
+function signUserToken(userId) {
+  const payload = Buffer.from(JSON.stringify({ uid: userId, t: Date.now() })).toString('base64url');
+  const sig = crypto.createHmac('sha256', USER_TOKEN_SECRET).update(payload).digest('base64url');
+  return `tok_usr_${payload}.${sig}`;
+}
+
+function verifyUserToken(token) {
+  if (!token || !token.startsWith('tok_usr_')) return null;
+  const raw = token.slice('tok_usr_'.length);
+  const parts = raw.split('.');
+  if (parts.length !== 2) return null;
+  const [payload, sig] = parts;
+  const expectedSig = crypto.createHmac('sha256', USER_TOKEN_SECRET).update(payload).digest('base64url');
+  if (sig !== expectedSig) return null;
+  try {
+    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'));
+    return typeof decoded?.uid === 'string' ? decoded.uid : null;
+  } catch {
+    return null;
+  }
+}
+
+function signAdminToken(username, secret) {
+  const payload = Buffer.from(JSON.stringify({ u: username, t: Date.now() })).toString('base64url');
+  const sig = crypto.createHmac('sha256', `arm_secret_${secret}`).update(payload).digest('base64url');
+  return `adm_hmac_${payload}.${sig}`;
+}
+
+function isValidAdminToken(token) {
+  if (!token) return false;
+  if (token === adminPassword || token.startsWith('adm_')) {
+    if (token.startsWith('adm_hmac_')) {
+      const raw = token.slice('adm_hmac_'.length);
+      const parts = raw.split('.');
+      if (parts.length !== 2) return false;
+      const [payload, sig] = parts;
+      const expectedSig = crypto.createHmac('sha256', `arm_secret_${adminPassword}`).update(payload).digest('base64url');
+      return sig === expectedSig;
+    }
+    return true;
+  }
+  return false;
+}
 
 function getPool() {
   const dbUrl = process.env.DATABASE_URL || '';
@@ -242,6 +288,14 @@ let memoryStore = {
     }
   ],
   users: [],
+  reviews: [],
+  comments: [],
+  customExams: [],
+  deletedExamIds: [],
+  supportRequests: [],
+  studentSubscriptions: {},
+  supportConfig: { basic_50: true },
+  studentStatsMap: {},
   auditLogs: [
     {
       id: 'log_vercel',
@@ -274,8 +328,55 @@ const deletedContentIds = {
   books: new Set(),
   summaries: new Set(),
   videos: new Set(),
-  articles: new Set()
+  articles: new Set(),
+  users: new Set()
 };
+
+function sanitizeUser(u) {
+  const { password: _, ...userSafe } = u;
+  const sub = memoryStore.studentSubscriptions[u.id];
+  return sub ? { ...userSafe, subscription: sub } : userSafe;
+}
+
+app.get(['/api/sync/bootstrap', '/sync/bootstrap'], (req, res) => {
+  const deletedIds = {
+    books: Array.from(deletedContentIds.books),
+    summaries: Array.from(deletedContentIds.summaries),
+    videos: Array.from(deletedContentIds.videos),
+    articles: Array.from(deletedContentIds.articles),
+    users: Array.from(deletedContentIds.users)
+  };
+  const publicSupporters = {};
+  Object.entries(memoryStore.studentSubscriptions).forEach(([uid, sub]) => {
+    if (sub && typeof sub === 'object') {
+      publicSupporters[uid] = {
+        planId: sub.planId,
+        planName: sub.planName,
+        status: sub.status,
+        approvedByAdmin: Boolean(sub.approvedByAdmin),
+        pricePaid: sub.pricePaid,
+        startDate: sub.startDate,
+        endDate: sub.endDate,
+        isTrial: false,
+      };
+    }
+  });
+  res.json({
+    ts: Date.now(),
+    onlineCount: 1,
+    books: memoryStore.books.filter(b => !deletedContentIds.books.has(b.id)),
+    summaries: memoryStore.summaries.filter(s => !deletedContentIds.summaries.has(s.id)),
+    videos: memoryStore.videos.filter(v => !deletedContentIds.videos.has(v.id)),
+    articles: memoryStore.articles.filter(a => !deletedContentIds.articles.has(a.id)),
+    deletedIds,
+    customExams: memoryStore.customExams,
+    deletedExamIds: memoryStore.deletedExamIds,
+    reviews: memoryStore.reviews,
+    comments: memoryStore.comments,
+    supportConfig: memoryStore.supportConfig,
+    studentSubscriptions: publicSupporters,
+  });
+});
 
 app.get(['/api/books', '/books'], (req, res) => {
   const filtered = memoryStore.books.filter(b => !deletedContentIds.books.has(b.id));
@@ -297,14 +398,34 @@ app.get(['/api/articles', '/articles'], (req, res) => {
   res.json({ articles: filtered });
 });
 
+app.get(['/api/deleted-ids', '/deleted-ids'], (req, res) => {
+  res.json({
+    deletedIds: {
+      books: Array.from(deletedContentIds.books),
+      summaries: Array.from(deletedContentIds.summaries),
+      videos: Array.from(deletedContentIds.videos),
+      articles: Array.from(deletedContentIds.articles),
+      users: Array.from(deletedContentIds.users)
+    }
+  });
+});
+
 app.post(['/api/deleted-ids', '/deleted-ids'], (req, res) => {
-  const { books, summaries, videos, articles } = req.body || {};
+  const { books, summaries, videos, articles, users } = req.body || {};
   if (Array.isArray(books)) books.forEach(id => deletedContentIds.books.add(Number(id)));
   if (Array.isArray(summaries)) summaries.forEach(id => deletedContentIds.summaries.add(Number(id)));
   if (Array.isArray(videos)) videos.forEach(id => deletedContentIds.videos.add(Number(id)));
   if (Array.isArray(articles)) articles.forEach(id => deletedContentIds.articles.add(Number(id)));
+  if (Array.isArray(users)) users.forEach(id => deletedContentIds.users.add(String(id)));
   res.json({
     success: true,
+    deletedIds: {
+      books: Array.from(deletedContentIds.books),
+      summaries: Array.from(deletedContentIds.summaries),
+      videos: Array.from(deletedContentIds.videos),
+      articles: Array.from(deletedContentIds.articles),
+      users: Array.from(deletedContentIds.users)
+    },
     deletedCounts: {
       books: deletedContentIds.books.size,
       summaries: deletedContentIds.summaries.size,
@@ -317,7 +438,7 @@ app.post(['/api/deleted-ids', '/deleted-ids'], (req, res) => {
 app.post(['/api/admin/login', '/admin/login'], (req, res) => {
   const { username, password } = req.body;
   if (username === ADMIN_USERNAME && password === adminPassword) {
-    const token = 'adm_' + Date.now();
+    const token = signAdminToken(ADMIN_USERNAME, adminPassword);
     return res.json({ success: true, token, username: ADMIN_USERNAME });
   }
   return res.status(401).json({ error: 'بيانات غير صحيحة' });
@@ -456,12 +577,15 @@ app.post(['/api/rate', '/rate'], (req, res) => {
 
 app.post(['/api/auth/login', '/auth/login'], (req, res) => {
   const { email, password } = req.body;
-  const user = memoryStore.users.find(u => u.email === email && u.password === password);
-  if (user) {
-    const token = 'tok_usr_' + Date.now();
-    return res.json({ success: true, token, user });
+  const user = memoryStore.users.find(u => u.email.toLowerCase() === String(email || '').trim().toLowerCase() && u.password === String(password || '').trim());
+  if (!user) {
+    return res.status(401).json({ error: 'البريد الإلكتروني أو كلمة المرور غير صحيحة' });
   }
-  return res.status(401).json({ error: 'البريد أو كلمة المرور غير صحيحة' });
+  if (user.status === 'suspended') {
+    return res.status(403).json({ error: 'تم تجميد هذا الحساب من قِبل إدارة الأمان. يرجى التواصل مع الدعم.' });
+  }
+  const token = signUserToken(user.id);
+  return res.json({ success: true, token, user: sanitizeUser(user) });
 });
 
 app.post(['/api/auth/register', '/auth/register'], (req, res) => {
@@ -469,51 +593,62 @@ app.post(['/api/auth/register', '/auth/register'], (req, res) => {
   if (!name || !email || !password) {
     return res.status(400).json({ error: 'يرجى إكمال البيانات' });
   }
+  const normalizedEmail = String(email).trim().toLowerCase();
+  if (memoryStore.users.some(u => u.email.toLowerCase() === normalizedEmail)) {
+    return res.status(400).json({ error: 'البريد الإلكتروني مسجل بالفعل' });
+  }
   const newUser = {
     id: 'usr_' + Date.now(),
-    name,
-    email,
-    password,
+    name: String(name).trim(),
+    email: normalizedEmail,
+    password: String(password).trim(),
     role: 'user',
     academicStage: academicStage || 'طالب',
-    avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150',
+    avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(name)}`,
     status: 'active',
-    bookmarks: []
+    bookmarks: [],
+    createdAt: new Date().toISOString()
   };
   memoryStore.users.push(newUser);
-  const token = 'tok_usr_' + Date.now();
-  res.json({ success: true, token, user: newUser });
+  const token = signUserToken(newUser.id);
+  res.status(201).json({ success: true, token, user: sanitizeUser(newUser) });
 });
 
 // User Session Me endpoint
 app.get(['/api/auth/me', '/auth/me'], (req, res) => {
   const authHeader = req.headers.authorization;
   const token = authHeader?.replace('Bearer ', '');
-  if (!token) return res.status(401).json({ error: 'غير مصرح' });
-  const user = memoryStore.users[0];
+  const userId = verifyUserToken(token);
+  if (!userId) return res.status(401).json({ error: 'غير مصرح' });
+  const user = memoryStore.users.find(u => u.id === userId);
   if (!user) return res.status(404).json({ error: 'المستخدم غير موجود' });
-  const { password: _, ...userSafe } = user;
-  res.json({ user: userSafe });
+  if (user.status === 'suspended') return res.status(403).json({ error: 'تم تجميد هذا الحساب' });
+  res.json({ user: sanitizeUser(user) });
 });
 
 // User Profile Update endpoint (name, academicStage, avatar, password)
 app.put(['/api/user/profile', '/user/profile'], (req, res) => {
-  const { name, academicStage, avatar, password } = req.body;
-  const user = memoryStore.users[0];
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  const userId = verifyUserToken(token);
+  if (!userId) return res.status(401).json({ error: 'يرجى تسجيل الدخول أولاً' });
+  const user = memoryStore.users.find(u => u.id === userId);
   if (!user) return res.status(404).json({ error: 'المستخدم غير موجود' });
+  const { name, academicStage, avatar, password } = req.body;
   if (name) user.name = name.trim();
   if (academicStage) user.academicStage = academicStage.trim();
   if (avatar) user.avatar = avatar;
-  if (password) user.password = password.trim();
-  const { password: _, ...userSafe } = user;
-  res.json({ message: 'تم تحديث الملف الشخصي بنجاح', user: userSafe });
+  if (password && password.trim().length >= 6) user.password = password.trim();
+  res.json({ message: 'تم تحديث الملف الشخصي بنجاح', user: sanitizeUser(user) });
 });
 
 // Toggle Favorite / Bookmark
 app.post(['/api/user/favorite', '/user/favorite'], (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  const userId = verifyUserToken(token);
+  if (!userId) return res.status(401).json({ error: 'يرجى تسجيل الدخول أولاً' });
+  const user = memoryStore.users.find(u => u.id === userId);
+  if (!user) return res.status(404).json({ error: 'المستخدم غير موجود' });
   const { id, type, title, path } = req.body;
-  const user = memoryStore.users[0];
-  if (!user) return res.status(401).json({ error: 'يرجى تسجيل الدخول أولاً' });
   if (!user.bookmarks) user.bookmarks = [];
   const idx = user.bookmarks.findIndex(b => b.id === String(id) && b.type === type);
   let isBookmarked = false;
@@ -525,6 +660,23 @@ app.post(['/api/user/favorite', '/user/favorite'], (req, res) => {
     isBookmarked = true;
   }
   res.json({ isBookmarked, bookmarksCount: user.bookmarks.length, bookmarks: user.bookmarks });
+});
+
+app.get(['/api/user/stats', '/user/stats'], (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  const userId = verifyUserToken(token);
+  if (!userId) return res.status(401).json({ error: 'يرجى تسجيل الدخول' });
+  res.json({ stats: memoryStore.studentStatsMap[userId] || null });
+});
+
+app.put(['/api/user/stats', '/user/stats'], (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  const userId = verifyUserToken(token);
+  if (!userId) return res.status(401).json({ error: 'يرجى تسجيل الدخول' });
+  const { stats } = req.body || {};
+  if (!stats || typeof stats !== 'object') return res.status(400).json({ error: 'بيانات غير صالحة' });
+  memoryStore.studentStatsMap[userId] = stats;
+  res.json({ success: true, stats });
 });
 
 // BOOKS CRUD
@@ -684,14 +836,235 @@ app.delete(['/api/articles/:id', '/articles/:id'], (req, res) => {
 app.get(['/api/admin/verify', '/admin/verify'], (req, res) => {
   const authHeader = req.headers.authorization;
   const token = authHeader?.replace('Bearer ', '');
-  if (token && (token.startsWith('adm_') || token === adminPassword)) {
+  if (isValidAdminToken(token)) {
     return res.json({ verified: true, username: ADMIN_USERNAME });
   }
   return res.status(401).json({ verified: false });
 });
 
+// SHARED EXAMS, REVIEWS, COMMENTS & SUPPORT
+app.get(['/api/exams', '/exams'], (req, res) => {
+  res.json({
+    customExams: memoryStore.customExams,
+    deletedExamIds: memoryStore.deletedExamIds,
+  });
+});
+
+app.post(['/api/exams', '/exams'], (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!isValidAdminToken(token)) return res.status(401).json({ error: 'مطلوب صلاحية الأدمن' });
+  const exam = req.body;
+  if (!exam || !exam.title || !Array.isArray(exam.questions) || exam.questions.length === 0) {
+    return res.status(400).json({ error: 'بيانات الامتحان والأسئلة غير مكتملة' });
+  }
+  const saved = { ...exam, id: exam.id || 'exam_' + Date.now(), createdByAdmin: true };
+  memoryStore.customExams = [saved, ...memoryStore.customExams.filter(e => e.id !== saved.id)];
+  memoryStore.deletedExamIds = memoryStore.deletedExamIds.filter(id => id !== saved.id);
+  res.status(201).json({ exam: saved, message: 'تم نشر الامتحان بنجاح' });
+});
+
+app.delete(['/api/exams/:id', '/exams/:id'], (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!isValidAdminToken(token)) return res.status(401).json({ error: 'مطلوب صلاحية الأدمن' });
+  const { id } = req.params;
+  if (!memoryStore.deletedExamIds.includes(id)) memoryStore.deletedExamIds.push(id);
+  memoryStore.customExams = memoryStore.customExams.filter(e => e.id !== id);
+  res.json({ success: true });
+});
+
+app.get(['/api/reviews', '/reviews'], (req, res) => {
+  const { itemId, itemType } = req.query;
+  let reviews = memoryStore.reviews;
+  if (itemId && itemType) {
+    reviews = reviews.filter(r => String(r.itemId) === String(itemId) && r.itemType === String(itemType));
+  }
+  res.json({ reviews });
+});
+
+app.post(['/api/reviews', '/reviews'], (req, res) => {
+  const body = req.body || {};
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  const uid = verifyUserToken(token) || body.userId;
+  if (!uid || !body.itemId || !body.itemType || !body.comment || typeof body.rating !== 'number') {
+    return res.status(400).json({ error: 'بيانات المراجعة غير مكتملة' });
+  }
+  const created = {
+    id: body.id || 'rev_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+    itemId: body.itemId,
+    itemType: body.itemType,
+    userId: String(uid),
+    userName: String(body.userName || 'طالب'),
+    userAvatar: body.userAvatar,
+    academicStage: body.academicStage || 'طالب',
+    rating: Math.min(5, Math.max(1, Number(body.rating))),
+    comment: String(body.comment).trim(),
+    createdAt: new Date().toISOString(),
+    isApproved: true,
+    likesCount: 0,
+  };
+  memoryStore.reviews = [created, ...memoryStore.reviews.filter(r => r.id !== created.id)];
+  res.status(201).json({ review: created });
+});
+
+app.put(['/api/reviews/:id/toggle', '/reviews/:id/toggle'], (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!isValidAdminToken(token)) return res.status(401).json({ error: 'مطلوب صلاحية الأدمن' });
+  const item = memoryStore.reviews.find(r => r.id === req.params.id);
+  if (!item) return res.status(404).json({ error: 'غير موجود' });
+  item.isApproved = !item.isApproved;
+  res.json({ review: item });
+});
+
+app.delete(['/api/reviews/:id', '/reviews/:id'], (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  const isAdmin = isValidAdminToken(token);
+  const uid = verifyUserToken(token);
+  const rev = memoryStore.reviews.find(r => r.id === req.params.id);
+  if (!rev) return res.status(404).json({ error: 'غير موجود' });
+  if (!isAdmin && uid !== rev.userId) return res.status(403).json({ error: 'غير مصرح' });
+  memoryStore.reviews = memoryStore.reviews.filter(r => r.id !== req.params.id);
+  res.json({ success: true });
+});
+
+app.get(['/api/comments', '/comments'], (req, res) => {
+  const { itemId, itemType } = req.query;
+  let comments = memoryStore.comments;
+  if (itemId && itemType) {
+    comments = comments.filter(c => String(c.itemId) === String(itemId) && c.itemType === String(itemType));
+  }
+  res.json({ comments });
+});
+
+app.post(['/api/comments', '/comments'], (req, res) => {
+  const body = req.body || {};
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  const uid = verifyUserToken(token) || body.authorId;
+  if (!uid || !body.itemId || !body.itemType || !body.content) {
+    return res.status(400).json({ error: 'بيانات التعليق غير مكتملة' });
+  }
+  const created = {
+    id: body.id || 'cmt_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+    itemId: String(body.itemId),
+    itemType: body.itemType,
+    authorId: String(uid),
+    authorName: String(body.authorName || 'طالب'),
+    authorAvatar: body.authorAvatar,
+    authorRole: body.authorRole || 'user',
+    academicStage: body.academicStage || 'طالب',
+    content: String(body.content).trim(),
+    createdAt: new Date().toISOString(),
+    likesCount: 0,
+    likedBy: [],
+    isAdminLiked: body.authorRole === 'admin' || body.authorRole === 'moderator',
+  };
+  memoryStore.comments = [created, ...memoryStore.comments.filter(c => c.id !== created.id)];
+  res.status(201).json({ comment: created });
+});
+
+app.post(['/api/comments/:id/like', '/comments/:id/like'], (req, res) => {
+  const cmt = memoryStore.comments.find(c => c.id === req.params.id);
+  if (!cmt) return res.status(404).json({ error: 'غير موجود' });
+  const actorId = String(req.body?.actorId || 'guest');
+  const idx = cmt.likedBy.indexOf(actorId);
+  let hasLiked = false;
+  if (idx >= 0) {
+    cmt.likedBy.splice(idx, 1);
+    cmt.likesCount = Math.max(0, cmt.likesCount - 1);
+  } else {
+    cmt.likedBy.push(actorId);
+    cmt.likesCount += 1;
+    hasLiked = true;
+  }
+  res.json({ likesCount: cmt.likesCount, hasLiked });
+});
+
+app.post(['/api/comments/:id/admin-like', '/comments/:id/admin-like'], (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!isValidAdminToken(token)) return res.status(401).json({ error: 'مطلوب صلاحية الأدمن' });
+  const cmt = memoryStore.comments.find(c => c.id === req.params.id);
+  if (!cmt) return res.status(404).json({ error: 'غير موجود' });
+  cmt.isAdminLiked = !cmt.isAdminLiked;
+  res.json({ comment: cmt });
+});
+
+app.delete(['/api/comments/:id', '/comments/:id'], (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  const isAdmin = isValidAdminToken(token);
+  const uid = verifyUserToken(token);
+  const cmt = memoryStore.comments.find(c => c.id === req.params.id);
+  if (!cmt) return res.status(404).json({ error: 'غير موجود' });
+  if (!isAdmin && uid !== cmt.authorId) return res.status(403).json({ error: 'غير مصرح' });
+  memoryStore.comments = memoryStore.comments.filter(c => c.id !== req.params.id);
+  res.json({ success: true });
+});
+
+app.get(['/api/support/config', '/support/config'], (req, res) => {
+  res.json({ supportConfig: memoryStore.supportConfig });
+});
+
+app.put(['/api/support/config', '/support/config'], (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!isValidAdminToken(token)) return res.status(401).json({ error: 'مطلوب صلاحية الأدمن' });
+  const { planId, isActive } = req.body || {};
+  memoryStore.supportConfig = { ...memoryStore.supportConfig, [String(planId)]: Boolean(isActive) };
+  res.json({ supportConfig: memoryStore.supportConfig });
+});
+
+app.get(['/api/support/requests', '/support/requests'], (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!isValidAdminToken(token)) return res.status(401).json({ error: 'مطلوب صلاحية الأدمن' });
+  res.json({ requests: memoryStore.supportRequests, studentSubscriptions: memoryStore.studentSubscriptions });
+});
+
+app.post(['/api/support/requests', '/support/requests'], (req, res) => {
+  const body = req.body || {};
+  if (!body.userId || !body.senderPhone) return res.status(400).json({ error: 'بيانات غير مكتملة' });
+  const created = {
+    ...body,
+    id: body.id || 'req_' + Date.now(),
+    submittedAt: body.submittedAt || new Date().toISOString(),
+    status: body.status || 'pending',
+  };
+  memoryStore.supportRequests = [created, ...memoryStore.supportRequests.filter(r => r.id !== created.id)].slice(0, 100);
+  const now = new Date();
+  const expiry = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
+  memoryStore.studentSubscriptions[String(body.userId)] = {
+    planId: body.planId || 'basic_50',
+    planName: 'داعم للمنصة المجانية ❤️',
+    status: 'active',
+    billingPeriod: 'monthly',
+    examsRemainingThisWeek: -1,
+    maxExamsPerWeek: -1,
+    startDate: now.toISOString(),
+    endDate: expiry.toISOString(),
+    isTrial: false,
+    pricePaid: body.amountEGP,
+    paymentMethod: body.paymentMethod,
+    paymentSenderPhone: body.senderPhone,
+    transactionRef: body.transactionRef,
+    approvedByAdmin: true,
+  };
+  res.status(201).json({ request: created });
+});
+
+app.put(['/api/support/requests/:id/status', '/support/requests/:id/status'], (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!isValidAdminToken(token)) return res.status(401).json({ error: 'مطلوب صلاحية الأدمن' });
+  const item = memoryStore.supportRequests.find(r => r.id === req.params.id);
+  if (!item) return res.status(404).json({ error: 'غير موجود' });
+  item.status = req.body?.status;
+  res.json({ request: item });
+});
+
+app.put(['/api/support/supporters/:userId', '/support/supporters/:userId'], (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!isValidAdminToken(token)) return res.status(401).json({ error: 'مطلوب صلاحية الأدمن' });
+  memoryStore.studentSubscriptions[req.params.userId] = { ...req.body, status: 'active', isTrial: false };
+  res.json({ subscription: memoryStore.studentSubscriptions[req.params.userId] });
+});
+
 app.get(['/api/admin/users', '/admin/users'], (req, res) => {
-  res.json({ users: memoryStore.users.map(({ password, ...u }) => u) });
+  res.json({ users: memoryStore.users.map(sanitizeUser) });
 });
 
 app.put(['/api/admin/users/:id/status', '/admin/users/:id/status'], (req, res) => {
@@ -701,11 +1074,12 @@ app.put(['/api/admin/users/:id/status', '/admin/users/:id/status'], (req, res) =
   if (!user) return res.status(404).json({ error: 'المستخدم غير موجود' });
   if (status) user.status = status;
   if (role) user.role = role;
-  res.json({ message: 'تم تحديث حالة المستخدم بنجاح', user });
+  res.json({ message: 'تم تحديث حالة المستخدم بنجاح', user: sanitizeUser(user) });
 });
 
 app.delete(['/api/admin/users/:id', '/admin/users/:id'], (req, res) => {
   const { id } = req.params;
+  deletedContentIds.users.add(String(id));
   memoryStore.users = memoryStore.users.filter(u => u.id !== id);
   res.json({ message: 'تم حذف حساب المستخدم بنجاح' });
 });

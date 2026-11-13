@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { User, Book, Summary, Video, Article, BookmarkItem, UserSubscription } from './types';
+import { User, Book, Summary, Video, Article, BookmarkItem, UserSubscription, StudentAchievement } from './types';
 import { Navbar } from './components/Navbar';
 import { AuthModal } from './components/AuthModal';
 import { UserProfileModal } from './components/UserProfileModal';
@@ -9,6 +9,7 @@ import { ArticleDetailModal } from './components/ArticleDetailModal';
 import { ImageDetailModal } from './components/ImageDetailModal';
 import { VideoDetailModal } from './components/VideoDetailModal';
 import { SubscriptionPlansModal } from './components/SubscriptionPlansModal';
+import { LevelUpCelebrationModal } from './components/LevelUpCelebrationModal';
 import { 
   BookOpen, 
   FileText, 
@@ -31,7 +32,13 @@ import { Sidebar } from './components/Sidebar';
 import { EnglishAITutor } from './components/EnglishAITutor';
 import { StudentExamsView } from './components/StudentExamsView';
 import { StudentStats } from './types';
-import { getStudentStats, saveStudentStats } from './data/studentExamsData';
+import { 
+  getStudentStats, 
+  saveStudentStats,
+  syncExamsFromServer,
+  syncUserStatsFromServer,
+  pushUserStatsToServer
+} from './data/studentExamsData';
 import { 
   filterOutDeleted, 
   getCustomItems, 
@@ -41,14 +48,26 @@ import {
   listenToContentChanged,
   getRealDownloads,
   getRealViews,
-  incrementRealDownload
+  incrementRealDownload,
+  syncDeletedStoreFromServer,
+  reconcileCustomItemsWithServer
 } from './utils/contentStore';
 import { 
   calculateStudentSubscription, 
   saveStudentSubscription,
-  isEducationalFeatureLocked
+  syncSupportFromServer,
+  SUPPORT_UPDATED_EVENT
 } from './utils/subscriptionStore';
 import { saveRegisteredStudent } from './utils/studentUserStore';
+import { setReviewsCacheFromServer } from './utils/reviewsStore';
+import { setCommentsCacheFromServer } from './utils/commentsStore';
+import {
+  initRealtimeSync,
+  syncBootstrapFromServer,
+  getLastPresenceState,
+  PRESENCE_UPDATE_EVENT,
+  REALTIME_SYNC_EVENT
+} from './utils/realtimeSync';
 import { triggerPdfDownload } from './utils/pdfStorage';
 import { 
   ThemeMode, 
@@ -57,7 +76,12 @@ import {
   THEME_CHANGED_EVENT 
 } from './utils/themeStore';
 import { TrialCountdownBanner } from './components/TrialCountdownBanner';
-import { FeatureLockedModal } from './components/FeatureLockedModal';
+import {
+  LEVEL_UP_EVENT,
+  BADGE_UNLOCKED_EVENT,
+  LevelUpEventDetail,
+  computeStudentLevel
+} from './utils/gamificationStore';
 
 export default function App() {
   // Theme state (Light / Dark)
@@ -73,12 +97,15 @@ export default function App() {
   const [isAdminOpen, setIsAdminOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false);
-  const [isFeatureLockedModalOpen, setIsFeatureLockedModalOpen] = useState(false);
-  const [lockedFeatureName] = useState<string>('هذه الميزة التعليمية');
+  const [levelUpEvent, setLevelUpEvent] = useState<LevelUpEventDetail | null>(null);
+  const currentUserIdRef = useRef<string | undefined>(undefined);
+  const currentUserRef = useRef<User | null>(null);
+  const userTokenRef = useRef<string>('');
 
   // Student statistics & local downloads (scoped per user ID)
   const [studentStats, setStudentStats] = useState<StudentStats>(() => getStudentStats());
   const [downloadedCount, setDownloadedCount] = useState<number>(getDownloadedBooksCount);
+  const [onlineUsers, setOnlineUsers] = useState<number>(() => getLastPresenceState().onlineCount || 0);
 
   // Detail View Modals
   const [selectedBook, setSelectedBook] = useState<Book | null>(null);
@@ -126,45 +153,139 @@ export default function App() {
     return () => window.removeEventListener(THEME_CHANGED_EVENT, onThemeChanged);
   }, []);
 
-  // Reload per-user student stats whenever currentUser?.id changes
+  // Reload per-user student stats & keep refs updated whenever currentUser or userToken changes
   useEffect(() => {
+    currentUserIdRef.current = currentUser?.id;
+    currentUserRef.current = currentUser;
     setStudentStats(getStudentStats(currentUser?.id));
-  }, [currentUser?.id]);
+  }, [currentUser]);
 
-  // Initial Data Fetch & Egyptian Curriculum Synchronization with Persistent Admin Actions
-  const fetchData = async () => {
-    try {
-      setLoading(true);
-      const [bRes, sRes, vRes, aRes] = await Promise.all([
-        fetch('/api/books').catch(() => null),
-        fetch('/api/summaries').catch(() => null),
-        fetch('/api/videos').catch(() => null),
-        fetch('/api/articles').catch(() => null),
-      ]);
+  useEffect(() => {
+    userTokenRef.current = userToken;
+  }, [userToken]);
 
-      // 1. Books processing: server authoritative + custom items, filtered by deletions & edits
-      let serverBooks: Book[] = [];
-      if (bRes && bRes.ok) {
-        const b = await bRes.json();
-        serverBooks = b.books || [];
+  // Listen for real-time Level-Up and Badge-Unlock events
+  useEffect(() => {
+    const onLevelUp = (e: Event) => {
+      const customEvent = e as CustomEvent<LevelUpEventDetail>;
+      if (customEvent.detail) {
+        setLevelUpEvent(customEvent.detail);
+        setStudentStats(getStudentStats(currentUserIdRef.current));
       }
-      // Never re-inject deleted books! Use server results if available, else initial seed
-      let combinedBooks = (serverBooks && serverBooks.length > 0)
-        ? [...serverBooks]
-        : [...EGYPT_THANAWEYA_BOOKS];
+    };
 
-      // Merge custom admin-uploaded books
+    const onBadgeUnlocked = (e: Event) => {
+      const customEvent = e as CustomEvent<StudentAchievement[]>;
+      const badges = customEvent.detail || [];
+      if (badges.length > 0) {
+        const first = badges[0];
+        const suffix = badges.length > 1 ? ` (+${badges.length - 1} شارة أخرى)` : '';
+        showToast(`تم فتح شارة جديدة: ${first.icon} ${first.title}${suffix}`);
+        setStudentStats(getStudentStats(currentUserIdRef.current));
+      }
+    };
+
+    window.addEventListener(LEVEL_UP_EVENT, onLevelUp);
+    window.addEventListener(BADGE_UNLOCKED_EVENT, onBadgeUnlocked);
+    return () => {
+      window.removeEventListener(LEVEL_UP_EVENT, onLevelUp);
+      window.removeEventListener(BADGE_UNLOCKED_EVENT, onBadgeUnlocked);
+    };
+  }, []);
+
+  // Initial Data Fetch & Real-Time Multi-Device Synchronization
+  const fetchData = async (silent = false) => {
+    try {
+      if (!silent) setLoading(true);
+
+      const bootstrap = await syncBootstrapFromServer();
+
+      let serverBooks: Book[] = [];
+      let serverSums: Summary[] = [];
+      let serverVids: Video[] = [];
+      let serverArts: Article[] = [];
+      let hasServerSnapshot = false;
+
+      if (bootstrap) {
+        hasServerSnapshot = true;
+        syncDeletedStoreFromServer(bootstrap.deletedIds);
+        syncExamsFromServer(bootstrap.customExams, bootstrap.deletedExamIds);
+        setReviewsCacheFromServer(bootstrap.reviews);
+        setCommentsCacheFromServer(bootstrap.comments);
+        syncSupportFromServer({
+          supportConfig: bootstrap.supportConfig,
+          studentSubscriptions: bootstrap.studentSubscriptions,
+        });
+
+        serverBooks = Array.isArray(bootstrap.books) ? bootstrap.books : [];
+        serverSums = Array.isArray(bootstrap.summaries) ? bootstrap.summaries : [];
+        serverVids = Array.isArray(bootstrap.videos) ? bootstrap.videos : [];
+        serverArts = Array.isArray(bootstrap.articles) ? bootstrap.articles : [];
+
+        reconcileCustomItemsWithServer('book', serverBooks);
+        reconcileCustomItemsWithServer('summary', serverSums);
+        reconcileCustomItemsWithServer('video', serverVids);
+        reconcileCustomItemsWithServer('article', serverArts);
+
+        if (typeof bootstrap.onlineCount === 'number' && bootstrap.onlineCount > 0) {
+          setOnlineUsers(bootstrap.onlineCount);
+        }
+
+        const activeUser = currentUserRef.current;
+        if (activeUser) {
+          const refreshedSub = calculateStudentSubscription(
+            activeUser.id,
+            activeUser.createdAt,
+            activeUser.subscription
+          );
+          if (
+            refreshedSub.planId !== activeUser.subscription?.planId ||
+            refreshedSub.approvedByAdmin !== activeUser.subscription?.approvedByAdmin
+          ) {
+            const nextUser = { ...activeUser, subscription: refreshedSub };
+            setCurrentUser(nextUser);
+            localStorage.setItem('arm_current_user', JSON.stringify(nextUser));
+            saveRegisteredStudent(nextUser);
+          }
+        }
+      } else {
+        const [bRes, sRes, vRes, aRes] = await Promise.all([
+          fetch('/api/books').catch(() => null),
+          fetch('/api/summaries').catch(() => null),
+          fetch('/api/videos').catch(() => null),
+          fetch('/api/articles').catch(() => null),
+        ]);
+        if (bRes && bRes.ok) {
+          const b = await bRes.json();
+          serverBooks = b.books || [];
+        }
+        if (sRes && sRes.ok) {
+          const s = await sRes.json();
+          serverSums = s.summaries || [];
+        }
+        if (vRes && vRes.ok) {
+          const v = await vRes.json();
+          serverVids = v.videos || [];
+        }
+        if (aRes && aRes.ok) {
+          const a = await aRes.json();
+          serverArts = a.articles || [];
+        }
+      }
+
+      // 1. Books processing: server authoritative + offline custom items, filtered by deletions & edits
+      let combinedBooks = hasServerSnapshot
+        ? [...serverBooks]
+        : (serverBooks && serverBooks.length > 0 ? [...serverBooks] : [...EGYPT_THANAWEYA_BOOKS]);
+
       const customBooks = getCustomItems<Book>('arm_custom_books_v2');
       customBooks.forEach(cb => {
         if (!combinedBooks.some(b => String(b.id) === String(cb.id))) {
           combinedBooks.unshift(cb);
         }
       });
-      // Filter out deleted books (enforcing persistent deletions)
       combinedBooks = filterOutDeleted('book', combinedBooks);
-      // Apply edited field overrides
       combinedBooks = applyEditedOverrides('book', combinedBooks);
-      // Format student category tags
       combinedBooks = combinedBooks.map(book => {
         if (
           book.title.includes('الثانوية') || 
@@ -178,67 +299,53 @@ export default function App() {
         return book;
       });
       setBooks(combinedBooks);
+      setSelectedBook(prev => prev ? (combinedBooks.find(b => b.id === prev.id) || prev) : null);
 
       // 2. Summaries processing
-      let serverSums: Summary[] = [];
-      if (sRes && sRes.ok) {
-        const s = await sRes.json();
-        serverSums = s.summaries || [];
-      }
-      let combinedSums = (serverSums && serverSums.length > 0)
+      let combinedSums = hasServerSnapshot
         ? [...serverSums]
-        : [...EGYPT_THANAWEYA_SUMMARIES];
+        : (serverSums && serverSums.length > 0 ? [...serverSums] : [...EGYPT_THANAWEYA_SUMMARIES]);
       const customSums = getCustomItems<Summary>('arm_custom_summaries_v2');
       customSums.forEach(cs => {
         if (!combinedSums.some(s => String(s.id) === String(cs.id))) {
           combinedSums.unshift(cs);
         }
       });
-      combinedSums = filterOutDeleted('summary', combinedSums);
-      combinedSums = applyEditedOverrides('summary', combinedSums);
+      combinedSums = applyEditedOverrides('summary', filterOutDeleted('summary', combinedSums));
       setSummaries(combinedSums);
+      setSelectedSummary(prev => prev ? (combinedSums.find(s => s.id === prev.id) || prev) : null);
 
       // 3. Videos processing
-      let serverVids: Video[] = [];
-      if (vRes && vRes.ok) {
-        const v = await vRes.json();
-        serverVids = v.videos || [];
-      }
-      let combinedVids = (serverVids && serverVids.length > 0)
+      let combinedVids = hasServerSnapshot
         ? [...serverVids]
-        : [...EGYPT_THANAWEYA_VIDEOS];
+        : (serverVids && serverVids.length > 0 ? [...serverVids] : [...EGYPT_THANAWEYA_VIDEOS]);
       const customVids = getCustomItems<Video>('arm_custom_videos_v2');
       customVids.forEach(cv => {
         if (!combinedVids.some(v => String(v.id) === String(cv.id))) {
           combinedVids.unshift(cv);
         }
       });
-      combinedVids = filterOutDeleted('video', combinedVids);
-      combinedVids = applyEditedOverrides('video', combinedVids);
+      combinedVids = applyEditedOverrides('video', filterOutDeleted('video', combinedVids));
       setVideos(combinedVids);
+      setSelectedVideo(prev => prev ? (combinedVids.find(v => v.id === prev.id) || prev) : null);
 
       // 4. Articles processing
-      let serverArts: Article[] = [];
-      if (aRes && aRes.ok) {
-        const a = await aRes.json();
-        serverArts = a.articles || [];
-      }
-      let combinedArts = (serverArts && serverArts.length > 0)
+      let combinedArts = hasServerSnapshot
         ? [...serverArts]
-        : [...EGYPT_THANAWEYA_ARTICLES];
+        : (serverArts && serverArts.length > 0 ? [...serverArts] : [...EGYPT_THANAWEYA_ARTICLES]);
       const customArts = getCustomItems<Article>('arm_custom_articles_v2');
       customArts.forEach(ca => {
         if (!combinedArts.some(art => String(art.id) === String(ca.id))) {
           combinedArts.unshift(ca);
         }
       });
-      combinedArts = filterOutDeleted('article', combinedArts);
-      combinedArts = applyEditedOverrides('article', combinedArts);
+      combinedArts = applyEditedOverrides('article', filterOutDeleted('article', combinedArts));
       setArticles(combinedArts);
+      setSelectedArticle(prev => prev ? (combinedArts.find(a => a.id === prev.id) || prev) : null);
 
       // Refresh student downloads & statistics
       setDownloadedCount(getDownloadedBooksCount());
-      setStudentStats(getStudentStats(currentUser?.id));
+      setStudentStats(getStudentStats(currentUserIdRef.current));
     } catch (err) {
       console.error('Fetch error:', err);
       // Fallback filtered by deletions
@@ -247,7 +354,7 @@ export default function App() {
       setSummaries(filterOutDeleted('summary', EGYPT_THANAWEYA_SUMMARIES));
       setArticles(filterOutDeleted('article', EGYPT_THANAWEYA_ARTICLES));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -314,13 +421,16 @@ export default function App() {
       });
       if (res.ok) {
         const data = await res.json();
-        // Calculate trial or retrieve active subscription for this specific student
+        // Calculate supporter status / student profile for this specific student
         const studentSub = calculateStudentSubscription(data.user.id, data.user.createdAt, data.user.subscription);
         data.user.subscription = studentSub;
         setCurrentUser(data.user);
         setUserToken(token);
         localStorage.setItem('arm_current_user', JSON.stringify(data.user));
         saveRegisteredStudent(data.user);
+        void syncUserStatsFromServer(data.user.id, token).then((stats) => {
+          setStudentStats(stats);
+        });
       }
     } catch (e) {
       // If offline, keep cached user session from localStorage
@@ -338,11 +448,11 @@ export default function App() {
       saveStudentSubscription(currentUser.id, sub);
       saveRegisteredStudent(updatedUser);
     }
-    showToast(`تم تفعيل باقة الاشتراك بنجاح: ${sub.planName} ⚡`);
+    showToast(`شكراً لدعمك الكريم لاستمرار المنصة المجانية ❤️ (${sub.planName})`);
   };
 
   useEffect(() => {
-    fetchData();
+    void fetchData(false);
 
     // 1. Immediately restore cached student session to avoid any flicker/logout
     const savedUserJson = localStorage.getItem('arm_current_user');
@@ -362,13 +472,65 @@ export default function App() {
     const savedUserToken = localStorage.getItem('arm_user_token');
     if (savedUserToken) {
       setUserToken(savedUserToken);
-      restoreUserSession(savedUserToken);
+      void restoreUserSession(savedUserToken);
     }
+
+    // 3. WebSocket Real-Time Multi-User & Cross-Device Synchronization
+    const stopRealtime = initRealtimeSync();
+
+    const handlePresence = (e: Event) => {
+      const detail = (e as CustomEvent<{ onlineCount?: number }>).detail;
+      if (detail && typeof detail.onlineCount === 'number') {
+        setOnlineUsers(detail.onlineCount);
+      }
+    };
+
+    const handleRealtimeSync = (e: Event) => {
+      const detail = (e as CustomEvent<{ scope?: string }>).detail;
+      if (detail?.scope === 'user-stats') {
+        if (currentUserRef.current && userTokenRef.current) {
+          void syncUserStatsFromServer(currentUserRef.current.id, userTokenRef.current).then((stats) => {
+            setStudentStats(stats);
+          });
+        }
+        return;
+      }
+      void fetchData(true);
+      if (detail?.scope === 'all' && currentUserRef.current && userTokenRef.current) {
+        void syncUserStatsFromServer(currentUserRef.current.id, userTokenRef.current).then((stats) => {
+          setStudentStats(stats);
+        });
+      }
+    };
+
+    const handleSupportSync = () => {
+      const activeUser = currentUserRef.current;
+      if (!activeUser) return;
+      const refreshedSub = calculateStudentSubscription(
+        activeUser.id,
+        activeUser.createdAt,
+        activeUser.subscription
+      );
+      if (
+        refreshedSub.planId !== activeUser.subscription?.planId ||
+        refreshedSub.approvedByAdmin !== activeUser.subscription?.approvedByAdmin
+      ) {
+        const updatedUser = { ...activeUser, subscription: refreshedSub };
+        setCurrentUser(updatedUser);
+        localStorage.setItem('arm_current_user', JSON.stringify(updatedUser));
+        saveRegisteredStudent(updatedUser);
+      }
+    };
+
+    window.addEventListener(PRESENCE_UPDATE_EVENT, handlePresence);
+    window.addEventListener(REALTIME_SYNC_EVENT, handleRealtimeSync);
+    window.addEventListener(SUPPORT_UPDATED_EVENT, handleSupportSync);
 
     // Realtime Content Synchronization Listener (Cross-component and Cross-tab)
     const unsubscribeSync = listenToContentChanged(() => {
-      fetchData();
+      void fetchData(true);
       setDownloadedCount(getDownloadedBooksCount());
+      setStudentStats(getStudentStats(currentUserIdRef.current));
     });
 
     // Hidden Admin Trigger: Check URL path /admin, hash #admin, or query ?admin=1
@@ -394,7 +556,11 @@ export default function App() {
     window.addEventListener('keydown', handleAdminHotKey);
 
     return () => {
+      stopRealtime();
       unsubscribeSync();
+      window.removeEventListener(PRESENCE_UPDATE_EVENT, handlePresence);
+      window.removeEventListener(REALTIME_SYNC_EVENT, handleRealtimeSync);
+      window.removeEventListener(SUPPORT_UPDATED_EVENT, handleSupportSync);
       window.removeEventListener('popstate', checkAdminRoute);
       window.removeEventListener('hashchange', checkAdminRoute);
       window.removeEventListener('keydown', handleAdminHotKey);
@@ -409,6 +575,9 @@ export default function App() {
     localStorage.setItem('arm_user_token', token);
     localStorage.setItem('arm_current_user', JSON.stringify(user));
     saveRegisteredStudent(user);
+    void syncUserStatsFromServer(user.id, token).then((stats) => {
+      setStudentStats(stats);
+    });
     showToast(`مرحباً بك يا ${user.name}! تم تسجيل الدخول بنجاح ومزامنة تقدمك ✨`);
   };
 
@@ -449,7 +618,10 @@ export default function App() {
       const data = await res.json();
 
       if (res.ok) {
-        setCurrentUser({ ...currentUser, bookmarks: data.bookmarks });
+        const updatedUser = { ...currentUser, bookmarks: data.bookmarks };
+        setCurrentUser(updatedUser);
+        localStorage.setItem('arm_current_user', JSON.stringify(updatedUser));
+        saveRegisteredStudent(updatedUser);
         showToast(data.message);
       }
     } catch (err) {
@@ -686,7 +858,7 @@ export default function App() {
             </p>
 
             {/* Quick Metrics Bar */}
-            <div className="flex flex-wrap justify-center gap-3 sm:gap-6 text-xs text-zinc-600 dark:text-zinc-400">
+            <div className="flex flex-wrap justify-center gap-3 sm:gap-4 text-xs text-zinc-600 dark:text-zinc-400">
               <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/80 dark:bg-zinc-900/60 border border-slate-200 dark:border-zinc-800 shadow-sm">
                 <BookOpen className="w-4 h-4 text-amber-600 dark:text-amber-400" />
                 <span><strong className="text-zinc-900 dark:text-zinc-200">{books.length}</strong> كتاب ومنهج</span>
@@ -703,6 +875,32 @@ export default function App() {
                 <FileText className="w-4 h-4 text-amber-600 dark:text-amber-400" />
                 <span><strong className="text-zinc-900 dark:text-zinc-200">{articles.length}</strong> مقالة متخصصة</span>
               </div>
+              {(() => {
+                const lvl = computeStudentLevel(studentStats);
+                const unlockedBadges = (studentStats.achievements || []).filter(a => a.unlocked).length;
+                return (
+                  <button
+                    onClick={() => setActiveTab('dashboard')}
+                    className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/35 text-amber-800 dark:text-amber-300 font-bold shadow-sm transition active:scale-95"
+                    title="عرض المستويات والشارات في لوحة الطالب"
+                  >
+                    <span>{lvl.current.icon}</span>
+                    <span>المستوى {lvl.current.level}: {lvl.current.title}</span>
+                    <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-white/80 dark:bg-zinc-900/70 text-amber-700 dark:text-amber-400 tabular-nums">
+                      🏅 {unlockedBadges}
+                    </span>
+                  </button>
+                );
+              })()}
+              {onlineUsers > 0 && (
+                <div
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 font-bold shadow-sm"
+                  title="عدد المستخدمين المتصلين حالياً على المنصة بشكل متزامن ومباشر"
+                >
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <span><strong className="font-mono">{onlineUsers}</strong> متصل الآن</span>
+                </div>
+              )}
             </div>
 
           </div>
@@ -807,9 +1005,9 @@ export default function App() {
             )}
             <button
               onClick={() => setIsSubscriptionModalOpen(true)}
-              className="px-3.5 sm:px-4 py-2 rounded-2xl text-xs font-bold transition border bg-gradient-to-r from-amber-500/15 via-amber-400/15 to-amber-500/15 dark:from-amber-500/20 dark:via-amber-400/20 dark:to-amber-500/20 text-amber-800 dark:text-amber-300 border-amber-500/50 hover:border-amber-400 hover:brightness-105 dark:hover:brightness-125 shadow-lg shadow-amber-500/10 flex items-center gap-1.5 active:scale-95"
+              className="px-3.5 sm:px-4 py-2 rounded-2xl text-xs font-bold transition border bg-gradient-to-r from-rose-500/10 via-amber-400/15 to-amber-500/15 dark:from-rose-500/15 dark:via-amber-400/15 dark:to-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/45 hover:border-amber-400 hover:brightness-105 dark:hover:brightness-125 shadow-sm flex items-center gap-1.5 active:scale-95"
             >
-              ⚡ باقة التفوق (50 ج.م اختياري)
+              ❤️ دعم المنصة (مجانية 100%)
             </button>
           </div>
 
@@ -907,6 +1105,7 @@ export default function App() {
                 onUpdateStats={(newStats) => {
                   setStudentStats(newStats);
                   saveStudentStats(newStats, currentUser?.id);
+                  if (userToken) void pushUserStatsToServer(newStats, userToken);
                 }}
                 onNavigateToExams={() => setActiveTab('exams')}
                 onNavigateToBooks={() => {
@@ -930,6 +1129,7 @@ export default function App() {
                 onUpdateStats={(newStats) => {
                   setStudentStats(newStats);
                   saveStudentStats(newStats, currentUser?.id);
+                  if (userToken) void pushUserStatsToServer(newStats, userToken);
                 }}
                 onNavigateToStats={() => setActiveTab('dashboard')}
                 onOpenSubscriptions={() => setIsSubscriptionModalOpen(true)}
@@ -1342,13 +1542,10 @@ export default function App() {
 
                             <button
                               onClick={() => {
-                                if (isEducationalFeatureLocked(currentUser)) {
-                                  setIsFeatureLockedModalOpen(true);
-                                  return;
-                                }
-                                recordBookDownload(pdf);
-                                const updatedDownloads = incrementRealDownload(pdf.id);
+                                recordBookDownload(pdf, currentUser?.id);
+                                const updatedDownloads = incrementRealDownload(pdf.id, pdf.downloads || 0);
                                 setDownloadedCount(getDownloadedBooksCount());
+                                setStudentStats(getStudentStats(currentUser?.id));
                                 setBooks(prev => prev.map(b => b.id === pdf.id ? { ...b, downloads: updatedDownloads } : b));
                                 void fetch(`/api/books/${pdf.id}/download`, { method: 'POST' }).catch(() => {});
                                 void triggerPdfDownload(pdf.filepath, `${pdf.title}.pdf`);
@@ -1447,7 +1644,7 @@ export default function App() {
       <AdminPortal
         isOpen={isAdminOpen}
         onClose={() => setIsAdminOpen(false)}
-        onDataChanged={fetchData}
+        onDataChanged={() => void fetchData(true)}
       />
 
       <BookDetailModal
@@ -1461,15 +1658,11 @@ export default function App() {
         onOpenSubscriptions={() => setIsSubscriptionModalOpen(true)}
       />
 
-      <FeatureLockedModal
-        isOpen={isFeatureLockedModalOpen}
-        onClose={() => setIsFeatureLockedModalOpen(false)}
-        onOpenSubscriptionModal={() => {
-          setIsFeatureLockedModalOpen(false);
-          setIsSubscriptionModalOpen(true);
-        }}
-        featureName={lockedFeatureName}
-        currentUser={currentUser}
+      <LevelUpCelebrationModal
+        event={levelUpEvent}
+        studentName={currentUser?.name}
+        onClose={() => setLevelUpEvent(null)}
+        onNavigateToDashboard={() => setActiveTab('dashboard')}
       />
 
       <ArticleDetailModal

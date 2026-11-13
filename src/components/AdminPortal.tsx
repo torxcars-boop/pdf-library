@@ -1,6 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Book, Summary, Video, Article, User, AuditLog, AdminStats, Exam, ExamQuestion, SubscriptionPlan, SubscriptionPaymentRequest, UserSubscription } from '../types';
-import { getAllStudentExams, addCustomStudentExam, deleteStudentExam } from '../data/studentExamsData';
+import { 
+  getAllStudentExams, 
+  addCustomStudentExam, 
+  deleteStudentExam, 
+  fetchExamsFromServer, 
+  EXAMS_UPDATED_EVENT 
+} from '../data/studentExamsData';
 import { 
   markItemAsDeleted, 
   saveCustomItem, 
@@ -9,7 +15,9 @@ import {
   filterOutDeleted,
   applyEditedOverrides,
   getCustomItems,
-  removeCustomItem
+  removeCustomItem,
+  syncDeletedStoreFromServer,
+  reconcileCustomItemsWithServer
 } from '../utils/contentStore';
 import { 
   getAdminPlansConfig, 
@@ -19,6 +27,8 @@ import {
   getAllSavedSubscriptions, 
   saveStudentSubscription, 
   calculateStudentSubscription, 
+  fetchAdminSupportFromServer,
+  SUPPORT_UPDATED_EVENT,
   PAYMENT_ACCOUNTS,
   DEVELOPER_WHATSAPP
 } from '../utils/subscriptionStore';
@@ -66,7 +76,8 @@ import {
   Crown,
   Phone,
   MessageCircle,
-  Star
+  Star,
+  Heart
 } from 'lucide-react';
 import { 
   getRegisteredStudents, 
@@ -78,8 +89,11 @@ import {
   getAllReviews, 
   toggleReviewApproval, 
   deleteReview, 
+  syncReviewsFromServer,
   REVIEWS_UPDATED_EVENT 
 } from '../utils/reviewsStore';
+import { syncCommentsFromServer } from '../utils/commentsStore';
+import { REALTIME_SYNC_EVENT, syncBootstrapFromServer } from '../utils/realtimeSync';
 import { 
   getTotalRealDownloads, 
   getTotalRealViews 
@@ -170,8 +184,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   const [examDifficulty, setExamDifficulty] = useState<'متوسط' | 'متقدم' | 'نموذج وزاري'>('نموذج وزاري');
   const [examBadge, setExamBadge] = useState('بنك أسئلة الوزارة');
   const [examDescription, setExamDescription] = useState('');
-  const [examTargetScope, setExamTargetScope] = useState<'all' | 'specific_plans' | 'specific_students'>('all');
-  const [examAllowedPlans, setExamAllowedPlans] = useState<string[]>(['basic_50', 'free_trial']);
+  const [examTargetScope, setExamTargetScope] = useState<'all' | 'specific_students'>('all');
   const [examTargetStudentEmails, setExamTargetStudentEmails] = useState<string>('');
   const [examQuestions, setExamQuestions] = useState<ExamQuestion[]>([
     {
@@ -220,7 +233,12 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   // Search in tables
   const [tableSearch, setTableSearch] = useState('');
 
-  // Check stored admin session on mount & listen to live student and review updates
+  const adminSessionRef = React.useRef({ loggedIn: isAdminLoggedIn, token: adminToken, open: isOpen });
+  useEffect(() => {
+    adminSessionRef.current = { loggedIn: isAdminLoggedIn, token: adminToken, open: isOpen };
+  }, [isAdminLoggedIn, adminToken, isOpen]);
+
+  // Check stored admin session on mount & listen to live student, exam, support, review, and WebSocket updates
   useEffect(() => {
     const savedToken = localStorage.getItem('arm_admin_token');
     if (savedToken) {
@@ -230,16 +248,37 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     const handleReviewsSync = () => {
       setAllReviews(getAllReviews());
     };
+    const handleExamsSync = () => {
+      setStudentExams(getAllStudentExams());
+    };
+    const handleSupportSync = () => {
+      setPaymentRequests(getPaymentRequests());
+      setStudentSubscriptionsMap(getAllSavedSubscriptions());
+      setAdminPlans(getAdminPlansConfig());
+    };
     const handleStudentSync = () => {
-      fetchAdminData();
+      if (adminSessionRef.current.loggedIn && adminSessionRef.current.token) {
+        void fetchAdminData(adminSessionRef.current.token);
+      }
+    };
+    const handleRealtimeSync = () => {
+      if (adminSessionRef.current.open && adminSessionRef.current.loggedIn && adminSessionRef.current.token) {
+        void fetchAdminData(adminSessionRef.current.token);
+      }
     };
 
     window.addEventListener(REVIEWS_UPDATED_EVENT, handleReviewsSync);
+    window.addEventListener(EXAMS_UPDATED_EVENT, handleExamsSync);
+    window.addEventListener(SUPPORT_UPDATED_EVENT, handleSupportSync);
     window.addEventListener(STUDENT_REGISTERED_EVENT, handleStudentSync);
+    window.addEventListener(REALTIME_SYNC_EVENT, handleRealtimeSync);
 
     return () => {
       window.removeEventListener(REVIEWS_UPDATED_EVENT, handleReviewsSync);
+      window.removeEventListener(EXAMS_UPDATED_EVENT, handleExamsSync);
+      window.removeEventListener(SUPPORT_UPDATED_EVENT, handleSupportSync);
       window.removeEventListener(STUDENT_REGISTERED_EVENT, handleStudentSync);
+      window.removeEventListener(REALTIME_SYNC_EVENT, handleRealtimeSync);
     };
   }, []);
 
@@ -304,68 +343,96 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     try {
       const headers = { 'Authorization': `Bearer ${token}` };
 
-      const [statsRes, booksRes, sumRes, vidRes, artRes, usersRes, logsRes] = await Promise.all([
-        fetch('/api/admin/stats', { headers }),
-        fetch('/api/books'),
-        fetch('/api/summaries'),
-        fetch('/api/videos'),
-        fetch('/api/articles'),
-        fetch('/api/admin/users', { headers }),
-        fetch('/api/admin/security/logs', { headers }),
+      const [statsRes, usersRes, logsRes, bootstrap] = await Promise.all([
+        fetch('/api/admin/stats', { headers }).catch(() => null),
+        fetch('/api/admin/users', { headers }).catch(() => null),
+        fetch('/api/admin/security/logs', { headers }).catch(() => null),
+        syncBootstrapFromServer(),
+        fetchAdminSupportFromServer(token),
+        syncCommentsFromServer(),
       ]);
 
-      if (statsRes.ok) setStats(await statsRes.json());
+      if (statsRes && statsRes.ok) setStats(await statsRes.json());
 
-      if (booksRes.ok) {
-        const b = await booksRes.json();
-        let bList: Book[] = b.books || [];
-        const customBooks = getCustomItems<Book>('arm_custom_books_v2');
-        customBooks.forEach(cb => {
+      if (bootstrap) {
+        syncDeletedStoreFromServer(bootstrap.deletedIds);
+
+        reconcileCustomItemsWithServer('book', bootstrap.books || []);
+        let bList: Book[] = [...(bootstrap.books || [])];
+        getCustomItems<Book>('arm_custom_books_v2').forEach(cb => {
           if (!bList.some(bk => String(bk.id) === String(cb.id))) bList.unshift(cb);
         });
-        bList = filterOutDeleted('book', bList);
-        bList = applyEditedOverrides('book', bList);
+        bList = applyEditedOverrides('book', filterOutDeleted('book', bList));
         setBooks(bList);
-      }
 
-      if (sumRes.ok) {
-        const s = await sumRes.json();
-        let sList: Summary[] = s.summaries || [];
-        const customSums = getCustomItems<Summary>('arm_custom_summaries_v2');
-        customSums.forEach(cs => {
+        reconcileCustomItemsWithServer('summary', bootstrap.summaries || []);
+        let sList: Summary[] = [...(bootstrap.summaries || [])];
+        getCustomItems<Summary>('arm_custom_summaries_v2').forEach(cs => {
           if (!sList.some(sm => String(sm.id) === String(cs.id))) sList.unshift(cs);
         });
-        sList = filterOutDeleted('summary', sList);
-        sList = applyEditedOverrides('summary', sList);
+        sList = applyEditedOverrides('summary', filterOutDeleted('summary', sList));
         setSummaries(sList);
-      }
 
-      if (vidRes.ok) {
-        const v = await vidRes.json();
-        let vList: Video[] = v.videos || [];
-        const customVids = getCustomItems<Video>('arm_custom_videos_v2');
-        customVids.forEach(cv => {
+        reconcileCustomItemsWithServer('video', bootstrap.videos || []);
+        let vList: Video[] = [...(bootstrap.videos || [])];
+        getCustomItems<Video>('arm_custom_videos_v2').forEach(cv => {
           if (!vList.some(vd => String(vd.id) === String(cv.id))) vList.unshift(cv);
         });
-        vList = filterOutDeleted('video', vList);
-        vList = applyEditedOverrides('video', vList);
+        vList = applyEditedOverrides('video', filterOutDeleted('video', vList));
         setVideos(vList);
-      }
 
-      if (artRes.ok) {
-        const a = await artRes.json();
-        let aList: Article[] = a.articles || [];
-        const customArts = getCustomItems<Article>('arm_custom_articles_v2');
-        customArts.forEach(ca => {
+        reconcileCustomItemsWithServer('article', bootstrap.articles || []);
+        let aList: Article[] = [...(bootstrap.articles || [])];
+        getCustomItems<Article>('arm_custom_articles_v2').forEach(ca => {
           if (!aList.some(ar => String(ar.id) === String(ca.id))) aList.unshift(ca);
         });
-        aList = filterOutDeleted('article', aList);
-        aList = applyEditedOverrides('article', aList);
+        aList = applyEditedOverrides('article', filterOutDeleted('article', aList));
         setArticles(aList);
+      } else {
+        const [booksRes, sumRes, vidRes, artRes] = await Promise.all([
+          fetch('/api/books').catch(() => null),
+          fetch('/api/summaries').catch(() => null),
+          fetch('/api/videos').catch(() => null),
+          fetch('/api/articles').catch(() => null),
+        ]);
+        await Promise.all([fetchExamsFromServer(), syncReviewsFromServer()]);
+
+        if (booksRes && booksRes.ok) {
+          const b = await booksRes.json();
+          let bList: Book[] = b.books || [];
+          getCustomItems<Book>('arm_custom_books_v2').forEach(cb => {
+            if (!bList.some(bk => String(bk.id) === String(cb.id))) bList.unshift(cb);
+          });
+          setBooks(applyEditedOverrides('book', filterOutDeleted('book', bList)));
+        }
+        if (sumRes && sumRes.ok) {
+          const s = await sumRes.json();
+          let sList: Summary[] = s.summaries || [];
+          getCustomItems<Summary>('arm_custom_summaries_v2').forEach(cs => {
+            if (!sList.some(sm => String(sm.id) === String(cs.id))) sList.unshift(cs);
+          });
+          setSummaries(applyEditedOverrides('summary', filterOutDeleted('summary', sList)));
+        }
+        if (vidRes && vidRes.ok) {
+          const v = await vidRes.json();
+          let vList: Video[] = v.videos || [];
+          getCustomItems<Video>('arm_custom_videos_v2').forEach(cv => {
+            if (!vList.some(vd => String(vd.id) === String(cv.id))) vList.unshift(cv);
+          });
+          setVideos(applyEditedOverrides('video', filterOutDeleted('video', vList)));
+        }
+        if (artRes && artRes.ok) {
+          const a = await artRes.json();
+          let aList: Article[] = a.articles || [];
+          getCustomItems<Article>('arm_custom_articles_v2').forEach(ca => {
+            if (!aList.some(ar => String(ar.id) === String(ca.id))) aList.unshift(ca);
+          });
+          setArticles(applyEditedOverrides('article', filterOutDeleted('article', aList)));
+        }
       }
 
       let uList: User[] = [];
-      if (usersRes.ok) {
+      if (usersRes && usersRes.ok) {
         const u = await usersRes.json();
         uList = u.users || [];
       }
@@ -409,16 +476,17 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       uList = filterOutDeleted('user', uList);
       setUsers(uList);
 
-      if (logsRes.ok) {
+      if (logsRes && logsRes.ok) {
         const l = await logsRes.json();
         setLogs(l.logs || []);
       }
 
-      // Synchronize latest subscriber requests, student subscriptions, and reviews
+      // Synchronize latest subscriber requests, student subscriptions, exams, and reviews
       setPaymentRequests(getPaymentRequests());
       setStudentSubscriptionsMap(getAllSavedSubscriptions());
       setAdminPlans(getAdminPlansConfig());
       setAllReviews(getAllReviews());
+      setStudentExams(getAllStudentExams());
     } catch (err) {
       console.error('Error fetching admin data:', err);
     } finally {
@@ -437,7 +505,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         const xhr = new XMLHttpRequest();
         const formData = new FormData();
         formData.append('file', file);
-        xhr.timeout = 5000;
+        xhr.timeout = 60000;
 
         xhr.upload.onprogress = (ev) => {
           if (ev.lengthComputable && ev.total > 0) {
@@ -532,7 +600,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
       let savedBookFromServer: Book | null = null;
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3500);
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
       try {
         const res = await fetch(url, {
           method,
@@ -566,7 +634,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           views: books.find(b => b.id === editingBookId)?.views || 0,
           created_at: books.find(b => b.id === editingBookId)?.created_at || new Date().toISOString(),
         };
-        saveEditedItem('book', editingBookId, updatedBook);
+        if (!savedBookFromServer) {
+          saveEditedItem('book', editingBookId, updatedBook);
+        }
         setBooks(prev => prev.map(b => (b.id === editingBookId ? updatedBook : b)));
       } else {
         const createdBook: Book = savedBookFromServer || {
@@ -576,7 +646,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           views: 0,
           created_at: new Date().toISOString(),
         };
-        saveCustomItem('book', createdBook);
+        if (!savedBookFromServer) {
+          saveCustomItem('book', createdBook);
+        }
         setBooks(prev => [createdBook, ...prev.filter(b => b.id !== createdBook.id)]);
       }
 
@@ -719,7 +791,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       title: 'حذف الامتحان',
       message: 'هل أنت متأكد من حذف هذا الامتحان بالكامل من المنصة؟',
       onConfirm: () => {
-        const updated = deleteStudentExam(id);
+        const updated = deleteStudentExam(id, adminToken);
         setStudentExams(updated);
         onDataChanged();
         setAdminToastMessage({ title: 'تم حذف الامتحان بنجاح' });
@@ -767,13 +839,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       questionsCount: examQuestions.length,
       badge: examBadge || 'امتحان مدرسي',
       description: examDescription || `امتحان تدريبي في مادة ${examSubject} لطلاب ${examGrade}`,
-      allowedPlans: examTargetScope === 'specific_plans' ? (examAllowedPlans as any) : ['all'],
+      allowedPlans: ['all'],
       assignedStudentEmails: examTargetScope === 'specific_students' ? studentEmailsList : [],
       createdByAdmin: true,
       questions: examQuestions.map((q, idx) => ({ ...q, id: idx + 1 }))
     };
 
-    const updated = addCustomStudentExam(newExam);
+    const updated = addCustomStudentExam(newExam, adminToken);
     setStudentExams(updated);
     setShowExamModal(false);
     resetExamForm();
@@ -796,7 +868,6 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     setExamBadge('بنك أسئلة الوزارة');
     setExamDescription('');
     setExamTargetScope('all');
-    setExamAllowedPlans(['basic_50', 'free_trial']);
     setExamTargetStudentEmails('');
     setExamQuestions([
       {
@@ -967,7 +1038,14 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       }
 
       if (editingSummaryId) {
-        saveEditedItem('summary', editingSummaryId, savedSumFromServer || payload);
+        const updatedSum: Summary = savedSumFromServer || {
+          ...(summaries.find(s => s.id === editingSummaryId) || { id: editingSummaryId, views: 0, created_at: new Date().toISOString() }),
+          ...payload,
+        };
+        if (!savedSumFromServer) {
+          saveEditedItem('summary', editingSummaryId, updatedSum);
+        }
+        setSummaries(prev => prev.map(s => (s.id === editingSummaryId ? updatedSum : s)));
       } else {
         const newSum: Summary = savedSumFromServer || {
           id: Date.now(),
@@ -975,7 +1053,10 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           views: 0,
           created_at: new Date().toISOString()
         };
-        saveCustomItem('summary', newSum);
+        if (!savedSumFromServer) {
+          saveCustomItem('summary', newSum);
+        }
+        setSummaries(prev => [newSum, ...prev.filter(s => s.id !== newSum.id)]);
       }
       dispatchContentChanged();
 
@@ -1064,7 +1145,14 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       }
 
       if (editingVideoId) {
-        saveEditedItem('video', editingVideoId, savedVidFromServer || payload);
+        const updatedVid: Video = savedVidFromServer || {
+          ...(videos.find(v => v.id === editingVideoId) || { id: editingVideoId, views: 0, created_at: new Date().toISOString() }),
+          ...payload,
+        };
+        if (!savedVidFromServer) {
+          saveEditedItem('video', editingVideoId, updatedVid);
+        }
+        setVideos(prev => prev.map(v => (v.id === editingVideoId ? updatedVid : v)));
       } else {
         const newVid: Video = savedVidFromServer || {
           id: Date.now(),
@@ -1072,7 +1160,10 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           views: 0,
           created_at: new Date().toISOString()
         };
-        saveCustomItem('video', newVid);
+        if (!savedVidFromServer) {
+          saveCustomItem('video', newVid);
+        }
+        setVideos(prev => [newVid, ...prev.filter(v => v.id !== newVid.id)]);
       }
       dispatchContentChanged();
 
@@ -1148,7 +1239,14 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       }
 
       if (editingArticleId) {
-        saveEditedItem('article', editingArticleId, savedArtFromServer || payload);
+        const updatedArt: Article = savedArtFromServer || {
+          ...(articles.find(a => a.id === editingArticleId) || { id: editingArticleId, views: 0, created_at: new Date().toISOString() }),
+          ...payload,
+        };
+        if (!savedArtFromServer) {
+          saveEditedItem('article', editingArticleId, updatedArt);
+        }
+        setArticles(prev => prev.map(a => (a.id === editingArticleId ? updatedArt : a)));
       } else {
         const newArt: Article = savedArtFromServer || {
           id: Date.now(),
@@ -1156,7 +1254,10 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           views: 0,
           created_at: new Date().toISOString()
         };
-        saveCustomItem('article', newArt);
+        if (!savedArtFromServer) {
+          saveCustomItem('article', newArt);
+        }
+        setArticles(prev => [newArt, ...prev.filter(a => a.id !== newArt.id)]);
       }
       dispatchContentChanged();
 
@@ -1413,7 +1514,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
             <span className="hidden md:inline">{theme === 'dark' ? 'نهاري' : 'داكن'}</span>
           </button>
 
-          {/* Real-time Subscriber Notifications Bell */}
+          {/* Real-time Platform Support Notifications Bell */}
           <button
             onClick={() => setActiveAdminTab('subscriptions')}
             className={`relative px-3 py-1.5 rounded-xl transition flex items-center gap-2 border text-xs font-bold ${
@@ -1421,13 +1522,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                 ? 'bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/50 hover:bg-amber-500/25 animate-pulse'
                 : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:text-amber-600 dark:hover:text-amber-400'
             }`}
-            title="إشعارات الاشتراكات والمدفوعات الواردة"
+            title="إشعارات مساهمات دعم المنصة الواردة"
           >
             <Bell className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-            <span className="hidden sm:inline">إشعارات المشتركين</span>
+            <span className="hidden sm:inline">إشعارات الداعمين</span>
             {paymentRequests.filter(p => p.status === 'pending').length > 0 ? (
               <span className="px-2 py-0.5 rounded-full bg-rose-500 text-white text-[10px] font-black animate-bounce">
-                {paymentRequests.filter(p => p.status === 'pending').length} طلب جديد
+                {paymentRequests.filter(p => p.status === 'pending').length} مساهمة جديدة
               </span>
             ) : (
               <span className="text-[10px] text-zinc-500 dark:text-zinc-400">
@@ -1476,7 +1577,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       <nav className="bg-white/80 dark:bg-zinc-900/60 border-b border-zinc-200 dark:border-zinc-800 px-6 flex flex-wrap gap-2 py-2 overflow-x-auto">
         {[
           { id: 'dashboard', label: '📊 لوحة المؤشرات والإحصائيات', icon: BarChart3 },
-          { id: 'subscriptions', label: `⚡ باقات واشتراكات الطلاب ${paymentRequests.filter(p => p.status === 'pending').length ? `(${paymentRequests.filter(p => p.status === 'pending').length} معلق)` : ''}`, icon: Zap },
+          { id: 'subscriptions', label: `❤️ دعم المنصة والداعمون ${paymentRequests.filter(p => p.status === 'pending').length ? `(${paymentRequests.filter(p => p.status === 'pending').length} معلق)` : ''}`, icon: Heart },
           { id: 'exams', label: `🎓 امتحانات الطلاب (${studentExams.length})`, icon: GraduationCap },
           { id: 'books', label: `📚 الكتب والمناهج (${books.length})`, icon: BookOpen },
           { id: 'summaries', label: `🖼️ ملخصات الصور (${summaries.length})`, icon: Image },
@@ -1539,7 +1640,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         {activeAdminTab === 'dashboard' && (
           <div className="space-y-6 animate-in fade-in">
 
-            {/* REAL-TIME SUBSCRIBER NOTIFICATIONS FEED (Requested explicitly by Admin) */}
+            {/* REAL-TIME SUPPORTER NOTIFICATIONS FEED */}
             <div className="bg-gradient-to-r from-amber-50 via-white to-amber-50/70 dark:from-zinc-900 dark:via-amber-950/40 dark:to-zinc-900 border-2 border-amber-500/40 rounded-3xl p-6 shadow-md dark:shadow-2xl relative overflow-hidden">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-zinc-200 dark:border-zinc-800 pb-4">
                 <div className="flex items-center gap-3">
@@ -1553,20 +1654,20 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                   <div>
                     <div className="flex items-center gap-2">
                       <h3 className="text-base font-black text-amber-800 dark:text-amber-200">
-                        إشعارات المشتركين الجدد وطلبات تفعيل الباقات
+                        إشعارات مساهمات دعم المنصة المجانية ❤️
                       </h3>
                       {paymentRequests.filter(p => p.status === 'pending').length > 0 ? (
                         <span className="px-2.5 py-0.5 rounded-full bg-rose-500 text-white text-[11px] font-black animate-pulse">
-                          {paymentRequests.filter(p => p.status === 'pending').length} تحويلات بانتظار التأكيد ⏳
+                          {paymentRequests.filter(p => p.status === 'pending').length} مساهمات بانتظار المراجعة ⏳
                         </span>
                       ) : (
                         <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40 text-[11px] font-bold">
-                          جميع الطلبات مفعلة ومحدثة ✅
+                          جميع المساهمات موثقة (المنصة مجانية 100%) ✅
                         </span>
                       )}
                     </div>
                     <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
-                      إشعارات فورية بكل طالب يقوم بالتحويل على فودافون كاش (+201092467818)، اتصالات كاش (+201107093454)، أو انستاباي.
+                      إشعارات فورية بكل مساهمة دعم اختيارية على فودافون كاش (+201092467818)، اتصالات كاش (+201107093454)، أو انستاباي.
                     </p>
                   </div>
                 </div>
@@ -1576,7 +1677,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                     onClick={() => setActiveAdminTab('subscriptions')}
                     className="px-4 py-2 rounded-xl bg-amber-500 text-zinc-950 font-black text-xs hover:brightness-110 transition flex items-center gap-1.5 shadow"
                   >
-                    <span>إدارة كافة الاشتراكات ({paymentRequests.length})</span>
+                    <span>إدارة مساهمات الدعم ({paymentRequests.length})</span>
                     <ArrowRight className="w-3.5 h-3.5 rotate-180" />
                   </button>
                 </div>
@@ -1587,7 +1688,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                 {paymentRequests.length === 0 ? (
                   <div className="p-6 text-center bg-white/80 dark:bg-zinc-950/50 rounded-2xl border border-zinc-200 dark:border-zinc-800/80">
                     <p className="text-xs text-zinc-600 dark:text-zinc-400">
-                      لا توجد طلبات اشتراك أو إيصالات تحويل مسجلة بعد. عند قيام أي طالب بالتحويل وإرفاق الإيصال، سيظهر إشعاره فوراً هنا وفي شريط الأدمن بالأعلى.
+                      لا توجد مساهمات دعم اختيارية مسجلة بعد. كافة الكتب والامتحانات متاحة مجاناً للجميع، وعند إرسال أي مساهمة دعم سيظهر إشعارها هنا فوراً.
                     </p>
                   </div>
                 ) : (
@@ -1618,12 +1719,12 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                                 ? 'bg-rose-500/20 text-rose-700 dark:text-rose-300'
                                 : 'bg-amber-500 text-zinc-950 font-bold'
                             }`}>
-                              {req.status === 'approved' ? 'مفعل بنجاح ✅' : req.status === 'rejected' ? 'مرفوض ✕' : 'طلب جديد معلق ⏳'}
+                              {req.status === 'approved' ? 'تم توثيق الدعم ✅' : req.status === 'rejected' ? 'غير مؤكد ✕' : 'مساهمة بانتظار التأكيد ⏳'}
                             </span>
                           </div>
 
                           <div className="flex items-center gap-4 text-[11px] text-zinc-600 dark:text-zinc-400 mt-1 flex-wrap font-mono">
-                            <span>وسيلة الدفع: <strong className="text-zinc-900 dark:text-zinc-200">{req.paymentMethod === 'vodafone' ? 'فودافون كاش' : req.paymentMethod === 'etisalat' ? 'اتصالات كاش' : 'انستاباي'}</strong></span>
+                            <span>وسيلة التحويل: <strong className="text-zinc-900 dark:text-zinc-200">{req.paymentMethod === 'vodafone' ? 'فودافون كاش' : req.paymentMethod === 'etisalat' ? 'اتصالات كاش' : 'انستاباي'}</strong></span>
                             <span>رقم المحوّل: <strong className="text-amber-700 dark:text-amber-400">{req.senderPhone || 'غير مدخل'}</strong></span>
                             <span>كود العملية: <strong className="text-zinc-800 dark:text-zinc-300">{req.transactionRef || '-'}</strong></span>
                             <span>التوقيت: {new Date(req.submittedAt).toLocaleTimeString('ar-EG')} - {new Date(req.submittedAt).toLocaleDateString('ar-EG')}</span>
@@ -1644,32 +1745,32 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
                         <a
                           href={`https://wa.me/${req.senderPhone ? req.senderPhone.replace(/[^0-9]/g, '') : DEVELOPER_WHATSAPP}?text=${encodeURIComponent(
-                            `مرحباً بك يا ${req.userName}، بخصوص اشتراكك في منصة المناهج والامتحانات (${req.planName}).`
+                            `مرحباً بك يا ${req.userName}، شكراً لدعمك الكريم لاستمرار المنصة التعليمية المجانية (${req.planName}).`
                           )}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="px-3 py-1.5 rounded-xl bg-emerald-600/15 dark:bg-emerald-600/20 hover:bg-emerald-600/25 dark:hover:bg-emerald-600/30 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40 text-xs font-bold transition flex items-center gap-1"
-                          title="تواصل مع الطالب عبر واتساب"
+                          title="شكر وتواصل مع الداعم عبر واتساب"
                         >
                           <MessageCircle className="w-3.5 h-3.5" />
-                          <span>واتساب الطالب</span>
+                          <span>واتساب</span>
                         </a>
 
                         {req.status !== 'approved' && (
                           <button
                             onClick={() => {
-                              updatePaymentRequestStatus(req.id, 'approved');
+                              updatePaymentRequestStatus(req.id, 'approved', adminToken);
                               setPaymentRequests(getPaymentRequests());
                               setStudentSubscriptionsMap(getAllSavedSubscriptions());
                               setAdminToastMessage({
-                                title: `تم تفعيل باقة (${req.planName}) للطالب ${req.userName} فوراً! ✅`,
-                                subtitle: 'تم تحديث حالة الاشتراك وفتح كافة المميزات للطالب'
+                                title: `تم تأكيد مساهمة الدعم ومنح وسام الداعم للطالب ${req.userName} ❤️`,
+                                subtitle: 'شكراً لتوثيق المساهمة'
                               });
                             }}
                             className="px-3 py-1.5 rounded-xl bg-emerald-500 text-zinc-950 font-black text-xs hover:brightness-110 transition flex items-center gap-1 shadow"
                           >
                             <CheckCircle className="w-3.5 h-3.5" />
-                            <span>قبول وتفعيل</span>
+                            <span>تأكيد الدعم</span>
                           </button>
                         )}
                       </div>
@@ -1731,9 +1832,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                 <span className="text-2xl font-black text-emerald-600 dark:text-emerald-400 font-mono">
                   {paymentRequests.filter(r => r.status === 'approved').reduce((acc, r) => acc + (r.amountEGP || 50), 0)} ج.م
                 </span>
-                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 font-semibold">إيرادات الاشتراكات المؤكدة</p>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 font-semibold">مساهمات دعم المنصة المؤكدة</p>
                 <div className="text-[11px] text-emerald-700 dark:text-emerald-500 mt-2 font-bold">
-                  {paymentRequests.filter(r => r.status === 'approved').length} اشتراكات مفعلة
+                  {paymentRequests.filter(r => r.status === 'approved').length} مساهمات دعم اختيارية
                 </div>
               </div>
 
@@ -1819,25 +1920,25 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         )}
 
         {/* ------------------------------------------------------------------- */}
-        {/* 1.5 SUBSCRIPTIONS & STUDENT ACCOUNTS MANAGEMENT */}
+        {/* 1.5 PLATFORM SUPPORT & SUPPORTERS MANAGEMENT */}
         {/* ------------------------------------------------------------------- */}
         {activeAdminTab === 'subscriptions' && (
           <div className="space-y-8 animate-in fade-in">
             
-            {/* 1. Toggle & Control Packages Availability */}
+            {/* 1. Toggle & Control Voluntary Support Visibility */}
             <div className="p-6 rounded-3xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 space-y-4 shadow-sm dark:shadow-none">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-zinc-200 dark:border-zinc-800 pb-4">
                 <div>
                   <h3 className="text-base font-bold text-amber-800 dark:text-amber-200 flex items-center gap-2">
-                    <Zap className="w-5 h-5 text-amber-600 dark:text-amber-400" />
-                    <span>التحكم في تفعيل وإيقاف باقة الاشتراك الشهرية (50 ج.م)</span>
+                    <Heart className="w-5 h-5 text-rose-500" />
+                    <span>إعدادات الدعم الاختياري للمنصة (جميع الخدمات مجانية 100%)</span>
                   </h3>
                   <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
-                    يمكنك تفعيل أو إيقاف استقبال الاشتراكات الاختيارية فوراً بضغطة زر.
+                    جميع الكتب والامتحانات متاحة مجاناً بالكامل لجميع الطلاب. يمكنك إظهار أو إخفاء بوابة المساهمات الاختيارية لدعم استمرار المنصة.
                   </p>
                 </div>
-                <span className="text-xs font-bold px-3 py-1 rounded-full bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/30">
-                  باقة الـ 50 ج.م الاختيارية
+                <span className="text-xs font-bold px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                  المنصة مجانية للجميع ❤️
                 </span>
               </div>
 
@@ -1855,7 +1956,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                     >
                       <div className="flex items-center justify-between mb-3">
                         <span className="text-xs font-black text-zinc-900 dark:text-zinc-200">{plan.name}</span>
-                        <span className="text-xs font-bold text-amber-700 dark:text-amber-400 font-mono">{plan.priceEGP} ج.م / شهر</span>
+                        <span className="text-xs font-bold text-amber-700 dark:text-amber-400 font-mono">اختياري ({plan.priceEGP} ج.م)</span>
                       </div>
 
                       <p className="text-[11px] text-zinc-600 dark:text-zinc-400 mb-4 min-h-[30px]">{plan.tagline}</p>
@@ -1865,13 +1966,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                           isActive ? 'text-emerald-600 dark:text-emerald-400' : 'text-zinc-500'
                         }`}>
                           <span className={`w-2 h-2 rounded-full ${isActive ? 'bg-emerald-500' : 'bg-zinc-400 dark:bg-zinc-600'}`} />
-                          <span>{isActive ? 'مفعلة وتستقبل اشتراكات' : 'موقوفة مؤقتاً'}</span>
+                          <span>{isActive ? 'بوابة الدعم مفعلة' : 'موقوفة مؤقتاً'}</span>
                         </span>
 
                         <button
                           onClick={() => {
                             const newStatus = !isActive;
-                            saveAdminPlanStatus(plan.id, newStatus);
+                            saveAdminPlanStatus(plan.id, newStatus, adminToken);
                             setAdminPlans(getAdminPlansConfig());
                           }}
                           className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
@@ -1880,7 +1981,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                               : 'bg-emerald-500/15 dark:bg-emerald-500/20 hover:bg-emerald-500/25 dark:hover:bg-emerald-500/30 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40'
                           }`}
                         >
-                          {isActive ? 'إيقاف الباقة ⛔' : 'تفعيل الباقة ✅'}
+                          {isActive ? 'إخفاء مؤقتاً ⛔' : 'تفعيل استقبال الدعم ✅'}
                         </button>
                       </div>
                     </div>
@@ -1889,36 +1990,36 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
               </div>
             </div>
 
-            {/* 2. Payment Proof Verification & Approvals */}
+            {/* 2. Support Proof Verification & Approvals */}
             <div className="p-6 rounded-3xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 space-y-4 shadow-sm dark:shadow-none">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-zinc-200 dark:border-zinc-800 pb-4">
                 <div>
                   <h3 className="text-base font-bold text-amber-800 dark:text-amber-200 flex items-center gap-2">
                     <CreditCard className="w-5 h-5 text-amber-600 dark:text-amber-400" />
-                    <span>طلبات التحويل وإثباتات الدفع وإيصالات الطلاب</span>
+                    <span>سجل مساهمات الدعم وإثباتات التحويل</span>
                   </h3>
                   <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
-                    راجع التحويلات الواردة على فودافون كاش (+201092467818)، اتصالات كاش (+201107093454)، وانستاباي (mostafarafat2007@instapay) وتأكيد التفعيل.
+                    راجع مساهمات الدعم الواردة على فودافون كاش (+201092467818)، اتصالات كاش (+201107093454)، وانستاباي (mostafarafat2007@instapay).
                   </p>
                 </div>
                 <span className="text-xs font-bold px-3 py-1 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300">
-                  إجمالي الطلبات: {paymentRequests.length}
+                  إجمالي المساهمات: {paymentRequests.length}
                 </span>
               </div>
 
               {paymentRequests.length === 0 ? (
                 <div className="text-center py-10 bg-slate-50 dark:bg-zinc-950/40 border border-zinc-200 dark:border-zinc-800/80 rounded-2xl p-4">
                   <CreditCard className="w-10 h-10 text-zinc-400 dark:text-zinc-600 mx-auto mb-2" />
-                  <p className="text-xs text-zinc-600 dark:text-zinc-400">لا توجد طلبات تحويل جديدة مسجلة حالياً.</p>
+                  <p className="text-xs text-zinc-600 dark:text-zinc-400">لا توجد مساهمات دعم مسجلة حالياً.</p>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-right text-xs">
                     <thead>
                       <tr className="border-b border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400">
-                        <th className="py-2.5 px-3">الطالب</th>
-                        <th className="py-2.5 px-3">الباقة والمبلغ</th>
-                        <th className="py-2.5 px-3">وسيلة الدفع</th>
+                        <th className="py-2.5 px-3">الداعم</th>
+                        <th className="py-2.5 px-3">المساهمة والمبلغ</th>
+                        <th className="py-2.5 px-3">وسيلة التحويل</th>
                         <th className="py-2.5 px-3">رقم الهاتف المحول منه</th>
                         <th className="py-2.5 px-3">كود التحويل</th>
                         <th className="py-2.5 px-3 text-center">إثبات التحويل</th>
@@ -1969,8 +2070,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                                 ? 'bg-rose-500/15 dark:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/40'
                                 : 'bg-amber-500/15 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/40'
                             }`}>
-                              {req.status === 'approved' && 'تم القبول والتفعيل ✅'}
-                              {req.status === 'rejected' && 'مرفوض ✕'}
+                              {req.status === 'approved' && 'تم تأكيد الدعم ✅'}
+                              {req.status === 'rejected' && 'غير مؤكد ✕'}
                               {req.status === 'pending' && 'معلق قيد المراجعة ⏳'}
                             </span>
                           </td>
@@ -1979,28 +2080,28 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                               {req.status !== 'approved' && (
                                 <button
                                   onClick={() => {
-                                    updatePaymentRequestStatus(req.id, 'approved');
+                                    updatePaymentRequestStatus(req.id, 'approved', adminToken);
                                     setPaymentRequests(getPaymentRequests());
                                     setStudentSubscriptionsMap(getAllSavedSubscriptions());
                                     setAdminToastMessage({
-                                      title: `تم قبول التحويل وتفعيل الباقة للطالب ${req.userName} فوراً! ✅`
+                                      title: `تم توثيق مساهمة الدعم ومنح وسام الداعم للطالب ${req.userName} ❤️`
                                     });
                                   }}
                                   className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white dark:text-zinc-950 font-bold text-[11px] transition"
                                 >
-                                  قبول وتفعيل
+                                  تأكيد الدعم
                                 </button>
                               )}
                               {req.status !== 'rejected' && (
                                 <button
                                   onClick={() => {
-                                    updatePaymentRequestStatus(req.id, 'rejected');
+                                    updatePaymentRequestStatus(req.id, 'rejected', adminToken);
                                     setPaymentRequests(getPaymentRequests());
                                     setStudentSubscriptionsMap(getAllSavedSubscriptions());
                                   }}
                                   className="px-2.5 py-1 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 font-bold text-[11px] border border-zinc-200 dark:border-zinc-700 transition"
                                 >
-                                  رفض
+                                  إلغاء
                                 </button>
                               )}
                             </div>
@@ -2013,16 +2114,16 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
               )}
             </div>
 
-            {/* 3. Individual Student Subscriptions & 10-Day Free Trial Management */}
+            {/* 3. Individual Student Accounts & Supporter Badge Management */}
             <div className="p-6 rounded-3xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 space-y-4 shadow-sm dark:shadow-none">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-zinc-200 dark:border-zinc-800 pb-4">
                 <div>
                   <h3 className="text-base font-bold text-amber-800 dark:text-amber-200 flex items-center gap-2">
                     <Users className="w-5 h-5 text-amber-600 dark:text-amber-400" />
-                    <span>حسابات واشتراكات الطلاب الفردية (فترة تجريبية 10 أيام وباقة 50 ج.م)</span>
+                    <span>حسابات الطلاب وأوسمة داعمي المنصة (الجميع مجاني بالكامل)</span>
                   </h3>
                   <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
-                    لكل طالب حسابه الخاص وفترته التجريبية المجانية (10 أيام). يمكنك تفعيل باقة 50 ج.م أو تمديد التجربة أو تجديد الرصيد.
+                    جميع الطلاب يمتلكون صلاحية وصول مجانية وكاملة لكل الكتب والامتحانات بلا حدود. يمكنك منح وسام داعم المنصة تقديراً للمساهمين.
                   </p>
                 </div>
               </div>
@@ -2033,17 +2134,15 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                     <tr className="border-b border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400">
                       <th className="py-2.5 px-3">الطالب المسجل</th>
                       <th className="py-2.5 px-3">المرحلة</th>
-                      <th className="py-2.5 px-3">الباقة الحالية</th>
-                      <th className="py-2.5 px-3">الفترة التجريبية / الصلاحية</th>
-                      <th className="py-2.5 px-3">رصيد امتحانات الأسبوع</th>
-                      <th className="py-2.5 px-3 text-center">التحكم الفوري بحساب الطالب</th>
+                      <th className="py-2.5 px-3">حالة العضوية</th>
+                      <th className="py-2.5 px-3">الامتحانات والكتب</th>
+                      <th className="py-2.5 px-3 text-center">إدارة وسام الداعم</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800/60">
                     {users.map((student) => {
                       const sub = calculateStudentSubscription(student.id, student.createdAt, studentSubscriptionsMap[student.id]);
-                      const isTrial = sub.isTrial;
-                      const daysLeft = sub.trialDaysLeft ?? 0;
+                      const isSupporter = sub.planId === 'supporter' || sub.planId === 'basic_50';
 
                       return (
                         <tr key={student.id} className="hover:bg-slate-50 dark:hover:bg-zinc-950/40 transition">
@@ -2056,27 +2155,16 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                           </td>
                           <td className="py-3 px-3">
                             <span className={`px-2.5 py-1 rounded-xl text-[11px] font-bold inline-block ${
-                              sub.planId === 'basic_50'
+                              isSupporter
                                 ? 'bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/40'
-                                : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
+                                : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
                             }`}>
                               {sub.planName}
                             </span>
                           </td>
                           <td className="py-3 px-3">
-                            {isTrial ? (
-                              <span className={`text-xs font-bold ${daysLeft > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-rose-600 dark:text-rose-400'}`}>
-                                {daysLeft > 0 ? `تجريبي (متبقي ${daysLeft} أيام)` : 'انتهت الـ 10 أيام ⚠️'}
-                              </span>
-                            ) : (
-                              <span className="text-zinc-600 dark:text-zinc-400 text-xs">
-                                ينتهي في: {new Date(sub.endDate).toLocaleDateString('ar-EG')}
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-3 px-3">
-                            <span className="font-bold text-amber-700 dark:text-amber-400">
-                              {sub.maxExamsPerWeek === -1 ? 'غير محدود 🌟' : `${sub.examsRemainingThisWeek} من ${sub.maxExamsPerWeek}`}
+                            <span className="font-bold text-emerald-700 dark:text-emerald-400">
+                              مفتوح بالكامل مجاناً 🌟
                             </span>
                           </td>
                           <td className="py-3 px-3 text-center">
@@ -2085,71 +2173,28 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                                 onClick={() => {
                                   const now = new Date();
                                   const updatedSub: UserSubscription = {
-                                    planId: 'basic_50',
-                                    planName: 'باقة التفوق الشاملة (50 ج.م)',
+                                    planId: 'supporter',
+                                    planName: 'داعم للمنصة المجانية ❤️',
                                     status: 'active',
                                     billingPeriod: 'monthly',
                                     examsRemainingThisWeek: 9999,
                                     maxExamsPerWeek: -1,
                                     startDate: now.toISOString(),
-                                    endDate: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+                                    endDate: new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000).toISOString(),
                                     isTrial: false,
                                     approvedByAdmin: true
                                   };
-                                  saveStudentSubscription(student.id, updatedSub);
+                                  saveStudentSubscription(student.id, updatedSub, true, adminToken);
                                   setStudentSubscriptionsMap(getAllSavedSubscriptions());
                                   setAdminToastMessage({
-                                    title: `تم تفعيل باقة التفوق الشاملة (50 ج.م شهرياً) للطالب ${student.name}! ✨`
+                                    title: `تم منح وسام داعم المنصة للطالب ${student.name}! ❤️`
                                   });
                                 }}
-                                className="px-3 py-1.5 rounded-lg bg-emerald-600/15 dark:bg-emerald-600/30 hover:bg-emerald-600/25 dark:hover:bg-emerald-600/50 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40 text-xs font-bold transition flex items-center gap-1 shadow-sm"
-                                title="تفعيل باقة 50 ج.م شهرياً الشاملة"
+                                className="px-3 py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-800 dark:text-amber-300 border border-amber-500/40 text-xs font-bold transition flex items-center gap-1 shadow-sm"
+                                title="منح وسام داعم المنصة المجانية"
                               >
-                                <Check className="w-3.5 h-3.5" />
-                                <span>تفعيل اشتراك 50ج</span>
-                              </button>
-
-                              <button
-                                onClick={() => {
-                                  const now = new Date();
-                                  const updatedSub: UserSubscription = {
-                                    ...sub,
-                                    status: 'active',
-                                    isTrial: true,
-                                    trialDaysLeft: 10,
-                                    examsRemainingThisWeek: 2,
-                                    maxExamsPerWeek: 2,
-                                    endDate: new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000).toISOString()
-                                  };
-                                  saveStudentSubscription(student.id, updatedSub);
-                                  setStudentSubscriptionsMap(getAllSavedSubscriptions());
-                                  setAdminToastMessage({
-                                    title: `تم تمديد الفترة التجريبية 10 أيام إضافية للطالب ${student.name}! ✅`
-                                  });
-                                }}
-                                className="px-2 py-1 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700 text-[10px] font-bold transition"
-                                title="تمديد الفترة التجريبية 10 أيام إضافية"
-                              >
-                                +10 أيام تجربة
-                              </button>
-
-                              <button
-                                onClick={() => {
-                                  const maxExams = sub.maxExamsPerWeek === -1 ? 9999 : sub.maxExamsPerWeek;
-                                  const updatedSub: UserSubscription = {
-                                    ...sub,
-                                    examsRemainingThisWeek: maxExams
-                                  };
-                                  saveStudentSubscription(student.id, updatedSub);
-                                  setStudentSubscriptionsMap(getAllSavedSubscriptions());
-                                  setAdminToastMessage({
-                                    title: `تم تجديد رصيد الامتحانات الأسبوعي للطالب ${student.name}! ✅`
-                                  });
-                                }}
-                                className="px-2 py-1 rounded-lg bg-emerald-600/15 dark:bg-emerald-600/20 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-600/25 dark:hover:bg-emerald-600/30 border border-emerald-500/30 text-[10px] font-bold transition"
-                                title="تجديد حصة الامتحانات لهذا الأسبوع"
-                              >
-                                تجديد الرصيد ↺
+                                <Heart className="w-3.5 h-3.5" />
+                                <span>منح وسام داعم ❤️</span>
                               </button>
                             </div>
                           </td>
@@ -2643,7 +2688,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                         <div className="flex items-center gap-2">
                           <button
                             onClick={() => {
-                              toggleReviewApproval(rev.id);
+                              toggleReviewApproval(rev.id, adminToken);
                               setAllReviews(getAllReviews());
                             }}
                             className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
@@ -2658,7 +2703,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
                           <button
                             onClick={() => {
-                              deleteReview(rev.id);
+                              deleteReview(rev.id, adminToken);
                               setAllReviews(getAllReviews());
                               setAdminToastMessage({ title: 'تم حذف المراجعة بنجاح' });
                             }}
@@ -3637,16 +3682,16 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                 />
               </div>
 
-              {/* Target Audience Controls (التحكم في انشاء الامتحانات لكل باقة أو لكل طالب) */}
+              {/* Target Audience Controls */}
               <div className="p-4 rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-amber-500/30 space-y-3">
                 <div className="flex items-center justify-between">
                   <label className="block text-xs font-bold text-amber-700 dark:text-amber-300">
-                    🎯 الفئة الموجه لها الامتحان (التحكم بالباقات والطلاب)
+                    🎯 الفئة الموجه لها الامتحان (متاح مجاناً للجميع أو مخصص)
                   </label>
-                  <span className="text-[10px] text-zinc-500 dark:text-zinc-400">حدد من يحق له خوض هذا الاختبار</span>
+                  <span className="text-[10px] text-zinc-500 dark:text-zinc-400">كل الامتحانات مجانية 100%</span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <button
                     type="button"
                     onClick={() => setExamTargetScope('all')}
@@ -3656,19 +3701,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                         : 'bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
                     }`}
                   >
-                    🌐 متاح لكافة الطلاب
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setExamTargetScope('specific_plans')}
-                    className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
-                      examTargetScope === 'specific_plans'
-                        ? 'bg-amber-500 text-zinc-950 border-amber-400 font-extrabold'
-                        : 'bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
-                    }`}
-                  >
-                    ⚡ لباقات اشتراك محددة
+                    🌐 متاح مجاناً لكافة الطلاب
                   </button>
 
                   <button
@@ -3680,37 +3713,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                         : 'bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
                     }`}
                   >
-                    👤 لطلاب محددين بالاسم
+                    👤 مخصص لطلاب محددين بالبريد
                   </button>
                 </div>
-
-                {examTargetScope === 'specific_plans' && (
-                  <div className="p-3 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 space-y-2 text-xs">
-                    <span className="text-[11px] font-bold text-zinc-700 dark:text-zinc-300 block">اختر الباقات المصرح لها بأداء هذا الامتحان:</span>
-                    <div className="flex flex-wrap gap-3">
-                      {[
-                        { id: 'basic_50', label: 'باقة التفوق الشاملة (50 ج.م)' },
-                        { id: 'free_trial', label: 'الفترة التجريبية المجانية (10 أيام)' }
-                      ].map(planOption => (
-                        <label key={planOption.id} className="flex items-center gap-2 cursor-pointer text-zinc-700 dark:text-zinc-300">
-                          <input
-                            type="checkbox"
-                            checked={examAllowedPlans.includes(planOption.id)}
-                            onChange={(e) => {
-                              if (e.target.checked) {
-                                setExamAllowedPlans([...examAllowedPlans, planOption.id]);
-                              } else {
-                                setExamAllowedPlans(examAllowedPlans.filter(p => p !== planOption.id));
-                              }
-                            }}
-                            className="rounded text-amber-500 focus:ring-amber-400 bg-slate-50 dark:bg-zinc-950"
-                          />
-                          <span>{planOption.label}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                )}
 
                 {examTargetScope === 'specific_students' && (
                   <div className="p-3 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 space-y-2 text-xs">

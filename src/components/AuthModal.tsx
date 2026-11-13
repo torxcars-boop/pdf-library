@@ -63,6 +63,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
     setError(null);
     setLoading(true);
 
+    class ServerRejectionError extends Error {}
+
     try {
       let loggedUser: User | null = null;
       let token = 'tok_usr_' + Date.now();
@@ -73,21 +75,26 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email: loginEmail, password: loginPassword }),
         });
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (res.ok && data.user) {
           loggedUser = data.user;
           token = data.token || token;
-        } else if (res.status === 400 && data.error && !data.error.includes('فشل')) {
-          throw new Error(data.error);
+        } else if (res.status === 400 || res.status === 401 || res.status === 403) {
+          throw new ServerRejectionError(data.error || 'البريد الإلكتروني أو كلمة المرور غير صحيحة');
+        } else {
+          throw new Error(data.error || 'تعذر الاتصال بالخادم');
         }
       } catch (networkErr: any) {
-        // If server error or cold start, check local students
+        if (networkErr instanceof ServerRejectionError) {
+          throw networkErr;
+        }
+        // Only fall back to local cache when the server is genuinely unreachable offline
         const localStudents = getRegisteredStudents();
-        const found = localStudents.find(s => s.email.toLowerCase() === loginEmail.toLowerCase());
+        const found = localStudents.find(s => s.email.toLowerCase() === loginEmail.trim().toLowerCase());
         if (found) {
           loggedUser = found;
         } else {
-          throw networkErr;
+          throw new Error('البريد الإلكتروني أو كلمة المرور غير صحيحة');
         }
       }
 
@@ -168,7 +175,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
       // Save student so they appear in Admin Portal immediately!
       saveRegisteredStudent(registeredUser);
       triggerCelebration();
-      setSuccessMsg('تم إنشاء حسابك وتفعيل الـ 10 أيام التجريبية المجانية بنجاح! 🚀');
+      setSuccessMsg('تم إنشاء حسابك مجاناً بالكامل في المنصة! جميع الكتب والامتحانات مفتوحة لك 🚀');
       setTimeout(() => {
         onLoginSuccess(registeredUser!, token);
         onClose();

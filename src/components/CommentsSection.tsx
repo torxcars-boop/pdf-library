@@ -2,12 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { User } from '../types';
 import { 
   CommentItem, 
+  COMMENTS_UPDATED_EVENT,
+  syncCommentsFromServer,
   getCommentsForItem, 
   addComment, 
   toggleLikeComment, 
   toggleAdminLikeComment, 
   deleteComment 
 } from '../utils/commentsStore';
+import { REALTIME_SYNC_EVENT } from '../utils/realtimeSync';
 import { 
   MessageSquare, 
   Send, 
@@ -45,12 +48,38 @@ export const CommentsSection: React.FC<CommentsSectionProps> = ({
   // Check if current user is admin / teacher
   const isAdmin = user?.role === 'moderator' || user?.role === 'admin' || !!localStorage.getItem('arm_admin_token');
 
+  const getActorId = () => {
+    if (user?.id) return user.id;
+    let guestId = localStorage.getItem('arm_guest_id');
+    if (!guestId) {
+      guestId = Math.random().toString(36).substring(2, 9);
+      localStorage.setItem('arm_guest_id', guestId);
+    }
+    return `guest_${guestId}`;
+  };
+
   const refreshComments = () => {
     setComments(getCommentsForItem(itemId, itemType));
   };
 
   useEffect(() => {
     refreshComments();
+    void syncCommentsFromServer(itemId, itemType);
+
+    const handleCommentsUpdated = () => refreshComments();
+    const handleRealtime = (e: Event) => {
+      const detail = (e as CustomEvent<{ scope?: string }>).detail;
+      if (!detail?.scope || detail.scope === 'comments' || detail.scope === 'all') {
+        void syncCommentsFromServer(itemId, itemType);
+      }
+    };
+
+    window.addEventListener(COMMENTS_UPDATED_EVENT, handleCommentsUpdated);
+    window.addEventListener(REALTIME_SYNC_EVENT, handleRealtime);
+    return () => {
+      window.removeEventListener(COMMENTS_UPDATED_EVENT, handleCommentsUpdated);
+      window.removeEventListener(REALTIME_SYNC_EVENT, handleRealtime);
+    };
   }, [itemId, itemType]);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -80,10 +109,7 @@ export const CommentsSection: React.FC<CommentsSectionProps> = ({
   };
 
   const handleLike = (commentId: string) => {
-    const currentUserId = user?.id || 'guest_' + (localStorage.getItem('arm_guest_id') || 'guest');
-    if (!localStorage.getItem('arm_guest_id')) {
-      localStorage.setItem('arm_guest_id', Math.random().toString(36).substring(2, 9));
-    }
+    const currentUserId = getActorId();
     toggleLikeComment(commentId, currentUserId);
     refreshComments();
   };
@@ -215,7 +241,7 @@ export const CommentsSection: React.FC<CommentsSectionProps> = ({
           </div>
         ) : (
           filteredComments.map((comment) => {
-            const currentUserId = user?.id || '';
+            const currentUserId = getActorId();
             const isLikedByMe = comment.likedBy.includes(currentUserId);
             const canDelete = isAdmin || (user && user.id === comment.authorId);
 

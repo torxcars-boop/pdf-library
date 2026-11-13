@@ -1,22 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { StudentStats, ExamSubmission, User } from '../types';
+import { BadgesShowcase } from './BadgesShowcase';
+import { evaluateAndNotifyProgress } from '../utils/gamificationStore';
 import { 
-  BarChart3, 
   Award, 
   Clock, 
   Flame, 
   GraduationCap, 
-  BookOpen, 
   CheckCircle2, 
   Target, 
-  Sparkles, 
   Timer, 
   Play, 
   Pause, 
   RotateCcw, 
   Calendar, 
   TrendingUp, 
-  ArrowLeft,
   ChevronRight,
   Eye,
   FileCheck
@@ -67,12 +65,13 @@ export const StudentStatsView: React.FC<StudentStatsViewProps> = ({
   // Log completed focus study session
   const handleLogCompletedFocusSession = (minutes: number) => {
     const newTotalMinutes = stats.totalStudyMinutes + minutes;
-    const updatedStats: StudentStats = {
+    const candidateStats: StudentStats = {
       ...stats,
       totalStudyMinutes: newTotalMinutes,
       streakDays: Math.max(stats.streakDays, stats.streakDays + 1)
     };
-    onUpdateStats(updatedStats);
+    const evaluated = evaluateAndNotifyProgress(candidateStats, currentUser?.id, 'focus', true);
+    onUpdateStats(evaluated);
     setSessionCompletedMsg(`أحسنت! أتممت جلسة تركيز مدتها ${minutes} دقيقة وتمت إضافتها لسجل إحصائياتك.`);
     setTimeout(() => setSessionCompletedMsg(null), 5000);
   };
@@ -445,59 +444,9 @@ export const StudentStatsView: React.FC<StudentStatsViewProps> = ({
           </div>
         </div>
 
-        {/* Student Badges & Achievements */}
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-base font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
-              <Award className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-              <span>أوسمة وشارات التفوق ({stats.achievements.filter(a => a.unlocked).length}/{stats.achievements.length})</span>
-            </h3>
-          </div>
-
-          <div className="space-y-3">
-            {stats.achievements.map((ach) => (
-              <div
-                key={ach.id}
-                className={`p-4 rounded-2xl border transition ${
-                  ach.unlocked
-                    ? 'bg-white dark:bg-zinc-950/80 border-amber-500/30 shadow-sm dark:shadow-none'
-                    : 'bg-slate-50 dark:bg-zinc-950/40 border-zinc-200 dark:border-zinc-800/60 opacity-65'
-                }`}
-              >
-                <div className="flex items-start gap-3">
-                  <span className="text-2xl">{ach.icon}</span>
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-xs font-bold text-zinc-900 dark:text-zinc-200">{ach.title}</h4>
-                      {ach.unlocked && (
-                        <span className="text-[10px] text-amber-700 dark:text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded-full font-bold">
-                          تم الفتح ✓
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-[11px] text-zinc-600 dark:text-zinc-400 mt-1 leading-relaxed">
-                      {ach.description}
-                    </p>
-                    
-                    {!ach.unlocked && (
-                      <div className="mt-2.5">
-                        <div className="flex justify-between text-[10px] text-zinc-500 mb-1">
-                          <span>التقدم</span>
-                          <span>{ach.progress}%</span>
-                        </div>
-                        <div className="w-full bg-zinc-200 dark:bg-zinc-900 h-1.5 rounded-full overflow-hidden">
-                          <div 
-                            className="bg-zinc-400 dark:bg-zinc-600 h-full rounded-full"
-                            style={{ width: `${ach.progress}%` }}
-                          />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
+        {/* Student Badges & Levels */}
+        <div>
+          <BadgesShowcase stats={stats} compact />
         </div>
 
       </div>

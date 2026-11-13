@@ -41,6 +41,43 @@ export function getCommentsForItem(itemId: string | number, itemType: string): C
   return all.filter(c => String(c.itemId) === String(itemId) && c.itemType === itemType);
 }
 
+export const COMMENTS_UPDATED_EVENT = 'arm_comments_updated';
+
+function dispatchCommentsUpdated(detail?: unknown) {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(COMMENTS_UPDATED_EVENT, { detail }));
+  }
+}
+
+export function setCommentsCacheFromServer(serverComments: CommentItem[] | undefined | null) {
+  if (!Array.isArray(serverComments)) return;
+  try {
+    localStorage.setItem(COMMENTS_STORAGE_KEY, JSON.stringify(serverComments));
+    dispatchCommentsUpdated();
+  } catch (e) {
+    console.error('Error updating comments cache from server:', e);
+  }
+}
+
+export async function syncCommentsFromServer(itemId?: string | number, itemType?: string): Promise<CommentItem[]> {
+  try {
+    const res = await fetch('/api/comments', { cache: 'no-store' });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.comments)) {
+        setCommentsCacheFromServer(data.comments);
+        if (itemId !== undefined && itemType) {
+          return data.comments.filter((c: CommentItem) => String(c.itemId) === String(itemId) && c.itemType === itemType);
+        }
+        return data.comments;
+      }
+    }
+  } catch {
+    // offline fallback
+  }
+  return itemId !== undefined && itemType ? getCommentsForItem(itemId, itemType) : getAllComments();
+}
+
 export function addComment(comment: Omit<CommentItem, 'id' | 'createdAt' | 'likesCount' | 'likedBy'>): CommentItem {
   const all = getAllComments();
   const newComment: CommentItem = {
@@ -57,6 +94,21 @@ export function addComment(comment: Omit<CommentItem, 'id' | 'createdAt' | 'like
   } catch (e) {
     console.error('Error saving comment:', e);
   }
+
+  dispatchCommentsUpdated(newComment);
+
+  if (typeof window !== 'undefined') {
+    const userToken = localStorage.getItem('arm_user_token') || '';
+    fetch('/api/comments', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(userToken ? { Authorization: `Bearer ${userToken}` } : {}),
+      },
+      body: JSON.stringify(newComment),
+    }).catch(() => {});
+  }
+
   return newComment;
 }
 
@@ -82,10 +134,21 @@ export function toggleLikeComment(commentId: string, userId: string): { likesCou
   } catch (e) {
     console.error('Error updating comment like:', e);
   }
+
+  dispatchCommentsUpdated();
+
+  if (typeof window !== 'undefined') {
+    fetch(`/api/comments/${encodeURIComponent(commentId)}/like`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ actorId: userId }),
+    }).catch(() => {});
+  }
+
   return { likesCount: c.likesCount, hasLiked };
 }
 
-export function toggleAdminLikeComment(commentId: string): boolean {
+export function toggleAdminLikeComment(commentId: string, adminTokenOverride?: string): boolean {
   const all = getAllComments();
   const c = all.find(item => item.id === commentId);
   if (!c) return false;
@@ -96,10 +159,23 @@ export function toggleAdminLikeComment(commentId: string): boolean {
   } catch (e) {
     console.error('Error updating admin like:', e);
   }
+
+  dispatchCommentsUpdated();
+
+  if (typeof window !== 'undefined') {
+    const adminToken = adminTokenOverride || localStorage.getItem('arm_admin_token') || '';
+    if (adminToken) {
+      fetch(`/api/comments/${encodeURIComponent(commentId)}/admin-like`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${adminToken}` },
+      }).catch(() => {});
+    }
+  }
+
   return !!c.isAdminLiked;
 }
 
-export function deleteComment(commentId: string): boolean {
+export function deleteComment(commentId: string, authTokenOverride?: string): boolean {
   const all = getAllComments();
   const filtered = all.filter(c => c.id !== commentId);
   try {
@@ -107,5 +183,18 @@ export function deleteComment(commentId: string): boolean {
   } catch (e) {
     console.error('Error deleting comment:', e);
   }
+
+  dispatchCommentsUpdated();
+
+  if (typeof window !== 'undefined') {
+    const token = authTokenOverride || localStorage.getItem('arm_admin_token') || localStorage.getItem('arm_user_token') || '';
+    if (token) {
+      fetch(`/api/comments/${encodeURIComponent(commentId)}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => {});
+    }
+  }
+
   return true;
 }

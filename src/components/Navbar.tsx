@@ -11,7 +11,7 @@ import {
   Sparkles,
   Menu,
   BarChart3,
-  Zap,
+  Heart,
   Sun,
   Moon
 } from 'lucide-react';
@@ -180,14 +180,14 @@ export const Navbar: React.FC<NavbarProps> = ({
             <span>لوحة الطالب 📊</span>
           </button>
 
-          {/* Optional Single Subscription Quick Button */}
+          {/* Voluntary Platform Support Quick Button */}
           <button
             onClick={onOpenSubscriptions || (() => onSelectTab('pricing'))}
             className="hidden xl:flex items-center gap-1.5 px-3 py-2 rounded-2xl bg-amber-50 dark:bg-gradient-to-r dark:from-amber-500/20 dark:to-amber-600/20 hover:bg-amber-100 dark:hover:from-amber-500/30 dark:hover:to-amber-600/30 text-amber-800 dark:text-amber-300 border border-amber-500/40 text-xs font-bold transition shadow-sm"
-            title="باقة التفوق الاختيارية بـ 50 ج.م شهرياً - امتحانات وكتب غير محدودة"
+            title="المنصة مجانية 100% للجميع — ساهم اختيارياً لدعم استمرارها"
           >
-            <Zap className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
-            <span>الاشتراك الاختياري (50 ج.م) ⚡</span>
+            <Heart className="w-3.5 h-3.5 text-rose-500 dark:text-rose-400" />
+            <span>دعم المنصة ❤️</span>
           </button>
 
           {/* Admin Portal Quick Button */}
@@ -253,11 +253,11 @@ export const Navbar: React.FC<NavbarProps> = ({
                     className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs text-amber-700 dark:text-amber-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition"
                   >
                     <span className="flex items-center gap-2">
-                      <Zap className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
-                      باقة التفوق (50 ج.م اختياري)
+                      <Heart className="w-3.5 h-3.5 text-rose-500 dark:text-rose-400" />
+                      دعم المنصة (مجانية 100%)
                     </span>
-                    <span className="text-[10px] bg-amber-500/15 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400 font-bold px-1.5 py-0.5 rounded">
-                      {user.subscription?.status === 'active' ? 'مفعل' : 'متاح'}
+                    <span className="text-[10px] bg-emerald-500/15 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 font-bold px-1.5 py-0.5 rounded">
+                      {user.subscription?.approvedByAdmin || user.subscription?.pricePaid ? 'داعم ❤️' : 'اختياري'}
                     </span>
                   </button>
 

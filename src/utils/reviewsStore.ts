@@ -33,13 +33,50 @@ export function getItemRatingStats(itemId: string | number, itemType: string): {
   return { averageRating: avg, totalReviews: reviews.length };
 }
 
+export const REVIEWS_UPDATED_EVENT = 'arm_reviews_updated';
+
+function dispatchReviewsUpdated(detail?: unknown) {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(REVIEWS_UPDATED_EVENT, { detail }));
+  }
+}
+
+export function setReviewsCacheFromServer(serverReviews: ItemReview[] | undefined | null) {
+  if (!Array.isArray(serverReviews)) return;
+  try {
+    localStorage.setItem(REVIEWS_STORAGE_KEY, JSON.stringify(serverReviews));
+    dispatchReviewsUpdated();
+  } catch (e) {
+    console.error('Error updating reviews cache from server:', e);
+  }
+}
+
+export async function syncReviewsFromServer(itemId?: string | number, itemType?: string): Promise<ItemReview[]> {
+  try {
+    const res = await fetch('/api/reviews', { cache: 'no-store' });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.reviews)) {
+        setReviewsCacheFromServer(data.reviews);
+        if (itemId !== undefined && itemType) {
+          return data.reviews.filter((r: ItemReview) => String(r.itemId) === String(itemId) && r.itemType === itemType);
+        }
+        return data.reviews;
+      }
+    }
+  } catch {
+    // offline fallback
+  }
+  return itemId !== undefined && itemType ? getReviewsForItem(itemId, itemType) : getAllReviews();
+}
+
 export function addReview(newRev: Omit<ItemReview, 'id' | 'createdAt' | 'isApproved'>): ItemReview {
   const all = getAllReviews();
   const created: ItemReview = {
     ...newRev,
     id: 'rev_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
     createdAt: new Date().toISOString(),
-    isApproved: true, // Published immediately as requested
+    isApproved: true, // Published immediately
     likesCount: 0,
   };
   all.unshift(created);
@@ -49,14 +86,24 @@ export function addReview(newRev: Omit<ItemReview, 'id' | 'createdAt' | 'isAppro
     console.error('Error saving review:', e);
   }
 
-  // Broadcast sync event
+  dispatchReviewsUpdated(created);
+
   if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('arm_reviews_updated', { detail: created }));
+    const userToken = localStorage.getItem('arm_user_token') || '';
+    fetch('/api/reviews', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(userToken ? { Authorization: `Bearer ${userToken}` } : {}),
+      },
+      body: JSON.stringify(created),
+    }).catch(() => {});
   }
+
   return created;
 }
 
-export function toggleApproveReview(reviewId: string): boolean {
+export function toggleApproveReview(reviewId: string, adminTokenOverride?: string): boolean {
   const all = getAllReviews();
   const item = all.find(r => r.id === reviewId);
   if (!item) return false;
@@ -66,13 +113,22 @@ export function toggleApproveReview(reviewId: string): boolean {
   } catch (e) {
     console.error('Error updating review:', e);
   }
+  dispatchReviewsUpdated();
+
   if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('arm_reviews_updated'));
+    const token = adminTokenOverride || localStorage.getItem('arm_admin_token') || '';
+    if (token) {
+      fetch(`/api/reviews/${encodeURIComponent(reviewId)}/toggle`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => {});
+    }
   }
+
   return item.isApproved;
 }
 
-export function deleteReview(reviewId: string): boolean {
+export function deleteReview(reviewId: string, authTokenOverride?: string): boolean {
   const all = getAllReviews();
   const filtered = all.filter(r => r.id !== reviewId);
   try {
@@ -80,11 +136,19 @@ export function deleteReview(reviewId: string): boolean {
   } catch (e) {
     console.error('Error deleting review:', e);
   }
+  dispatchReviewsUpdated();
+
   if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('arm_reviews_updated'));
+    const token = authTokenOverride || localStorage.getItem('arm_admin_token') || localStorage.getItem('arm_user_token') || '';
+    if (token) {
+      fetch(`/api/reviews/${encodeURIComponent(reviewId)}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => {});
+    }
   }
+
   return true;
 }
 
-export const REVIEWS_UPDATED_EVENT = 'arm_reviews_updated';
 export const toggleReviewApproval = toggleApproveReview;

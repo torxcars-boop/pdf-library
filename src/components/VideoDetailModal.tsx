@@ -28,18 +28,41 @@ export const VideoDetailModal: React.FC<VideoDetailModalProps> = ({
   onRate,
 }) => {
   const [viewCount, setViewCount] = useState<number>(0);
+  const [ratingTick, setRatingTick] = useState(0);
 
   useEffect(() => {
     if (video?.id) {
-      const views = incrementRealView('video', video.id);
+      const views = incrementRealView('video', video.id, video.views || 0);
       setViewCount(views);
       fetch(`/api/items/video/${video.id}/view`, { method: 'POST' }).catch(() => {});
     }
   }, [video?.id]);
 
+  useEffect(() => {
+    if (video?.id) {
+      setViewCount((prev) => Math.max(prev, getRealViews('video', video.id, video.views || 0), video.views || 0));
+    }
+  }, [video?.id, video?.views]);
+
+  useEffect(() => {
+    const onRev = () => setRatingTick((t) => t + 1);
+    window.addEventListener('arm_reviews_updated', onRev);
+    return () => window.removeEventListener('arm_reviews_updated', onRev);
+  }, []);
+
   if (!video) return null;
 
-  const realRating = getItemRatingStats(video.id, 'video');
+  void ratingTick;
+  const reviewStats = getItemRatingStats(video.id, 'video');
+  const serverCount = video.ratingCount || 0;
+  const serverRating = video.rating || 0;
+  const effectiveRatingCount = Math.max(reviewStats.totalReviews, serverCount);
+  const effectiveAverageRating =
+    reviewStats.totalReviews > 0 && serverCount > reviewStats.totalReviews
+      ? Math.round((((reviewStats.averageRating * reviewStats.totalReviews) + (serverRating * (serverCount - reviewStats.totalReviews))) / serverCount) * 10) / 10
+      : serverCount > 0
+        ? serverRating
+        : reviewStats.averageRating;
 
   const getEmbedUrl = (url: string) => {
     if (!url) return '';
@@ -114,14 +137,14 @@ export const VideoDetailModal: React.FC<VideoDetailModalProps> = ({
             {/* Interactive Rating */}
             <div className="flex items-center gap-3 mt-2">
               <RatingStars
-                rating={realRating.averageRating}
-                ratingCount={realRating.totalReviews}
+                rating={effectiveAverageRating}
+                ratingCount={effectiveRatingCount}
                 size="md"
                 interactive={true}
                 onRate={onRate}
               />
               <span className="text-[10px] text-zinc-500 dark:text-zinc-400">
-                {realRating.totalReviews > 0 ? `(${realRating.averageRating} من 5 - ${realRating.totalReviews} تقييم حقيقي)` : 'لم يُقيّم بعد'}
+                {effectiveRatingCount > 0 ? `(${effectiveAverageRating} من 5 - ${effectiveRatingCount} تقييم حقيقي)` : 'لم يُقيّم بعد'}
               </span>
             </div>
           </div>

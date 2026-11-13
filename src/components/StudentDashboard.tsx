@@ -3,9 +3,10 @@ import { StudentStats, ExamSubmission, User, DownloadedBookItem } from '../types
 import { getDownloadedBooks } from '../utils/contentStore';
 import { triggerPdfDownload } from '../utils/pdfStorage';
 import { TrialCountdownBanner } from './TrialCountdownBanner';
+import { BadgesShowcase } from './BadgesShowcase';
+import { computeStudentLevel, evaluateAndNotifyProgress } from '../utils/gamificationStore';
 import { 
   BarChart3, 
-  Award, 
   Flame, 
   BookOpen, 
   CheckCircle2, 
@@ -22,8 +23,6 @@ import {
   PieChart as PieIcon, 
   X, 
   Volume2,
-  Zap,
-  CreditCard,
   ExternalLink
 } from 'lucide-react';
 
@@ -102,12 +101,13 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
 
   const handleLogCompletedFocusSession = (minutes: number) => {
     const newTotal = stats.totalStudyMinutes + minutes;
-    const updatedStats: StudentStats = {
+    const candidateStats: StudentStats = {
       ...stats,
       totalStudyMinutes: newTotal,
       streakDays: Math.max(stats.streakDays, stats.streakDays + 1)
     };
-    onUpdateStats(updatedStats);
+    const evaluated = evaluateAndNotifyProgress(candidateStats, currentUser?.id, 'focus', true);
+    onUpdateStats(evaluated);
     setFocusCompletedMsg(`رائع جداً! أتممت جلسة تركيز مدتها ${minutes} دقيقة وتم تسجيلها في إحصائياتك.`);
     setTimeout(() => setFocusCompletedMsg(null), 5000);
   };
@@ -217,9 +217,17 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                 <span className="px-2.5 py-0.5 rounded-full bg-amber-500/15 dark:bg-amber-500/20 border border-amber-500/40 text-amber-800 dark:text-amber-300 text-xs font-bold">
                   {currentUser?.academicStage || 'المرحلة الثانوية'}
                 </span>
+                {(() => {
+                  const lvl = computeStudentLevel(stats);
+                  return (
+                    <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 dark:bg-emerald-500/20 border border-emerald-500/35 text-emerald-800 dark:text-emerald-300 text-xs font-bold">
+                      {lvl.current.icon} المستوى {lvl.current.level}: {lvl.current.title}
+                    </span>
+                  );
+                })()}
               </div>
               <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-400 mt-1 max-w-xl">
-                لوحة إحصائياتك الأكاديمية الحقيقية: تابع كتبك المحملة، متوسط درجاتك الفعلي، والمواد التي تتدرب عليها.
+                لوحة إحصائياتك الأكاديمية الحقيقية: تابع كتبك المحملة، شارات التفوق، مستواك الدراسي، والمواد التي تتدرب عليها.
               </p>
             </div>
           </div>
@@ -253,57 +261,6 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
             )}
           </div>
         </div>
-      </div>
-
-      {/* ------------------------------------------------------------------- */}
-      {/* 1.25 LIVE TRIAL COUNTDOWN WIDGET (10-Day Free Trial Timer & Expiration) */}
-      {/* ------------------------------------------------------------------- */}
-      {onOpenSubscriptions && (
-        <TrialCountdownBanner
-          currentUser={currentUser}
-          onOpenSubscriptionModal={onOpenSubscriptions}
-          variant="card"
-        />
-      )}
-
-      {/* ------------------------------------------------------------------- */}
-      {/* 1.5 OPTIONAL SUBSCRIPTION STATUS BANNER (Single 50 EGP Plan) */}
-      {/* ------------------------------------------------------------------- */}
-      <div className="bg-gradient-to-r from-amber-50 via-white to-slate-50 dark:from-amber-950/40 dark:via-zinc-900 dark:to-zinc-900 border border-amber-500/30 rounded-3xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-md dark:shadow-xl">
-        <div className="flex items-center gap-3.5">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-amber-600 to-amber-400 flex items-center justify-center text-zinc-950 shadow-lg shadow-amber-500/20 flex-shrink-0">
-            <Zap className="w-6 h-6 stroke-[2.5]" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <h3 className="text-sm font-black text-zinc-900 dark:text-zinc-100">
-                {currentUser?.subscription?.status === 'active' 
-                  ? `العضوية المفعلة: ${currentUser.subscription.planName}`
-                  : 'باقة التفوق الشاملة الاختيارية (50 ج.م فقط شهرياً)'}
-              </h3>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/15 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/40">
-                {currentUser?.subscription?.status === 'active' ? 'مفعلة ✅' : 'اشتراك اختياري مميز'}
-              </span>
-            </div>
-            <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
-              {currentUser?.subscription?.status === 'active' 
-                ? 'لديك صلاحية كاملة لجميع الامتحانات، تحميل الكتب بدون قيود، ومميزات المتابعة الفورية.'
-                : 'احصل على امتحانات إلكترونية بلا حدود، تحميل غير محدود للكتب، ومعلم نطق الإنجليزية الذكي بـ 50 ج.م فقط.'}
-            </p>
-          </div>
-        </div>
-
-        {onOpenSubscriptions && (
-          <button
-            onClick={onOpenSubscriptions}
-            className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400 hover:brightness-110 text-zinc-950 font-black text-xs shadow-md transition flex items-center gap-2 flex-shrink-0 active:scale-95"
-          >
-            <CreditCard className="w-4 h-4" />
-            <span>
-              {currentUser?.subscription?.status === 'active' ? 'تفاصيل اشتراكك' : 'اشترك الآن (50 ج.م اختياري) ⚡'}
-            </span>
-          </button>
-        )}
       </div>
 
       {/* ------------------------------------------------------------------- */}
@@ -915,41 +872,17 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
       </div>
 
       {/* ------------------------------------------------------------------- */}
-      {/* 6. ACHIEVEMENTS & BADGES */}
+      {/* 6. BADGES, LEVELS & VOLUNTARY SUPPORT */}
       {/* ------------------------------------------------------------------- */}
-      <div className="bg-white dark:bg-zinc-900/90 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 shadow-xl space-y-4">
-        <h3 className="text-base font-bold text-amber-800 dark:text-amber-200 flex items-center gap-2 border-b border-slate-200 dark:border-zinc-800 pb-3">
-          <Award className="w-5 h-5 text-amber-600 dark:text-amber-400" />
-          <span>الأوسمة والإنجازات الأكاديمية للطالب 🏆</span>
-        </h3>
+      <BadgesShowcase stats={stats} />
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-          {stats.achievements.map((ach) => (
-            <div
-              key={ach.id}
-              className={`p-4 rounded-2xl border transition flex items-center gap-3 ${
-                ach.unlocked
-                  ? 'bg-amber-50/60 dark:bg-zinc-950/80 border-amber-500/40 shadow-lg'
-                  : 'bg-slate-50 dark:bg-zinc-950/30 border-slate-200 dark:border-zinc-800/60 opacity-65'
-              }`}
-            >
-              <span className="text-2xl p-2.5 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 flex-shrink-0">
-                {ach.icon}
-              </span>
-              <div>
-                <h4 className="text-xs font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-1.5">
-                  <span>{ach.title}</span>
-                  {ach.unlocked && <span className="text-emerald-600 dark:text-emerald-400 text-[10px]">✓ مكتمل</span>}
-                </h4>
-                <p className="text-[10px] text-zinc-600 dark:text-zinc-400 mt-0.5 line-clamp-2">{ach.description}</p>
-                {ach.unlockedAt && (
-                  <span className="text-[9px] text-amber-700 dark:text-amber-400/80 mt-1 block">حصلت عليه: {ach.unlockedAt}</span>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
+      {onOpenSubscriptions && (
+        <TrialCountdownBanner
+          currentUser={currentUser}
+          onOpenSubscriptionModal={onOpenSubscriptions}
+          variant="card"
+        />
+      )}
 
       {/* ------------------------------------------------------------------- */}
       {/* MODAL: DOWNLOADED BOOKS LIST */}

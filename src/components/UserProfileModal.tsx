@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { User, BookmarkItem } from '../types';
 import { 
   X, 
@@ -60,6 +60,16 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   const [uploadError, setUploadError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setName(user.name);
+      setStage(user.academicStage || 'الصف الثالث الثانوي');
+      setAvatar(user.avatar || PRESET_AVATARS[0].url);
+      setNewPassword('');
+      setUploadError(null);
+    }
+  }, [isOpen, user.id, user.name, user.academicStage, user.avatar]);
 
   if (!isOpen) return null;
 

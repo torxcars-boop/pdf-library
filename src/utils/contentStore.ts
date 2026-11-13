@@ -2,6 +2,7 @@
 // Ensures admin additions, edits, deletions, and student downloads are immediately synchronized across all views
 
 import { Book, Summary, Video, Article, DownloadedBookItem } from '../types';
+import { syncBookDownloadProgress } from './gamificationStore';
 
 interface DeletedStore {
   books: number[];
@@ -133,6 +134,54 @@ export const removeCustomItem = (type: 'book' | 'summary' | 'video' | 'article',
   }
 };
 
+export const syncDeletedStoreFromServer = (serverDeleted?: Partial<DeletedStore> | null) => {
+  if (!serverDeleted) return;
+  try {
+    const books = Array.isArray(serverDeleted.books) ? serverDeleted.books.map(Number) : [];
+    const summaries = Array.isArray(serverDeleted.summaries) ? serverDeleted.summaries.map(Number) : [];
+    const videos = Array.isArray(serverDeleted.videos) ? serverDeleted.videos.map(Number) : [];
+    const articles = Array.isArray(serverDeleted.articles) ? serverDeleted.articles.map(Number) : [];
+    const users = Array.isArray(serverDeleted.users) ? serverDeleted.users.map(String) : [];
+
+    const next: DeletedStore = { books, summaries, videos, articles, users };
+    localStorage.setItem(DELETED_KEY, JSON.stringify(next));
+
+    books.forEach(id => removeCustomItem('book', id));
+    summaries.forEach(id => removeCustomItem('summary', id));
+    videos.forEach(id => removeCustomItem('video', id));
+    articles.forEach(id => removeCustomItem('article', id));
+  } catch (e) {
+    console.error('Error syncing deleted store from server', e);
+  }
+};
+
+export const reconcileCustomItemsWithServer = <T extends { id: number | string }>(
+  type: 'book' | 'summary' | 'video' | 'article',
+  serverItems: T[]
+) => {
+  try {
+    const key = type === 'book' ? CUSTOM_BOOKS_KEY :
+                type === 'summary' ? CUSTOM_SUMMARIES_KEY :
+                type === 'video' ? CUSTOM_VIDEOS_KEY : CUSTOM_ARTICLES_KEY;
+    const current = getCustomItems<T>(key);
+    if (current.length === 0) return;
+
+    const deleted = getDeletedStore();
+    const deletedList = type === 'book' ? deleted.books :
+                        type === 'summary' ? deleted.summaries :
+                        type === 'video' ? deleted.videos : deleted.articles;
+    const deletedSet = new Set(deletedList.map(String));
+    const serverSet = new Set(serverItems.map(i => String(i.id)));
+
+    const remaining = current.filter(i => !deletedSet.has(String(i.id)) && !serverSet.has(String(i.id)));
+    if (remaining.length !== current.length) {
+      localStorage.setItem(key, JSON.stringify(remaining));
+    }
+  } catch (e) {
+    // ignore
+  }
+};
+
 // ---------------------------------------------------------------------------
 // EDITED ITEMS (Overrides original fields)
 // ---------------------------------------------------------------------------
@@ -169,15 +218,18 @@ export const applyEditedOverrides = <T extends { id: number | string }>(type: st
 // ---------------------------------------------------------------------------
 // DOWNLOADED BOOKS TRACKER (For Student Dashboard)
 // ---------------------------------------------------------------------------
-export const recordBookDownload = (book: {
-  id: number | string;
-  title: string;
-  category?: string;
-  filepath: string;
-  coverpath?: string;
-  grade?: string;
-  fileSize?: string;
-}) => {
+export const recordBookDownload = (
+  book: {
+    id: number | string;
+    title: string;
+    category?: string;
+    filepath: string;
+    coverpath?: string;
+    grade?: string;
+    fileSize?: string;
+  },
+  userId?: string
+) => {
   try {
     const raw = localStorage.getItem(DOWNLOADED_BOOKS_KEY);
     let list: DownloadedBookItem[] = raw ? JSON.parse(raw) : [];
@@ -199,7 +251,9 @@ export const recordBookDownload = (book: {
     list.unshift(newItem);
     localStorage.setItem(DOWNLOADED_BOOKS_KEY, JSON.stringify(list));
 
-    // Also update student stats booksReadCount / downloadedBooksCount
+    // Synchronize real book download milestone with student badges & level progress
+    syncBookDownloadProgress(list.length, list, userId);
+
     dispatchContentChanged();
   } catch (e) {
     console.error('Error recording book download', e);
@@ -245,20 +299,20 @@ export const getRealViewsMap = (): Record<string, number> => {
 export const getRealDownloads = (bookId: number | string, baseCount = 0): number => {
   const map = getRealDownloadsMap();
   const recorded = map[String(bookId)];
-  return typeof recorded === 'number' ? recorded : baseCount;
+  return Math.max(baseCount || 0, typeof recorded === 'number' ? recorded : 0);
 };
 
-export const incrementRealDownload = (bookId: number | string): number => {
+export const incrementRealDownload = (bookId: number | string, baseCount = 0): number => {
   try {
     const map = getRealDownloadsMap();
     const key = String(bookId);
-    const updated = (map[key] || 0) + 1;
+    const updated = Math.max(map[key] || 0, baseCount || 0) + 1;
     map[key] = updated;
     localStorage.setItem(REAL_DOWNLOADS_MAP_KEY, JSON.stringify(map));
     dispatchContentChanged();
     return updated;
   } catch (e) {
-    return 1;
+    return (baseCount || 0) + 1;
   }
 };
 
@@ -266,28 +320,28 @@ export const getRealViews = (type: string, id: number | string, baseCount = 0): 
   const map = getRealViewsMap();
   const key = `${type}_${id}`;
   const recorded = map[key];
-  return typeof recorded === 'number' ? recorded : baseCount;
+  return Math.max(baseCount || 0, typeof recorded === 'number' ? recorded : 0);
 };
 
-export const incrementRealView = (type: string, id: number | string): number => {
+export const incrementRealView = (type: string, id: number | string, baseCount = 0): number => {
   try {
     const map = getRealViewsMap();
     const key = `${type}_${id}`;
-    const updated = (map[key] || 0) + 1;
+    const updated = Math.max(map[key] || 0, baseCount || 0) + 1;
     map[key] = updated;
     localStorage.setItem(REAL_VIEWS_MAP_KEY, JSON.stringify(map));
     dispatchContentChanged();
     return updated;
   } catch (e) {
-    return 1;
+    return (baseCount || 0) + 1;
   }
 };
 
 export const getTotalRealDownloads = (books: { id: number | string; downloads?: number }[]): number => {
   const map = getRealDownloadsMap();
   return books.reduce((acc, b) => {
-    const count = typeof map[String(b.id)] === 'number' ? map[String(b.id)] : (b.downloads || 0);
-    return acc + count;
+    const recorded = typeof map[String(b.id)] === 'number' ? map[String(b.id)] : 0;
+    return acc + Math.max(b.downloads || 0, recorded);
   }, 0);
 };
 
@@ -299,10 +353,22 @@ export const getTotalRealViews = (
 ): number => {
   const map = getRealViewsMap();
   let total = 0;
-  books.forEach(b => { total += (typeof map[`book_${b.id}`] === 'number' ? map[`book_${b.id}`] : (b.views || 0)); });
-  summaries.forEach(s => { total += (typeof map[`summary_${s.id}`] === 'number' ? map[`summary_${s.id}`] : (s.views || 0)); });
-  videos.forEach(v => { total += (typeof map[`video_${v.id}`] === 'number' ? map[`video_${v.id}`] : (v.views || 0)); });
-  articles.forEach(a => { total += (typeof map[`article_${a.id}`] === 'number' ? map[`article_${a.id}`] : (a.views || 0)); });
+  books.forEach(b => {
+    const rec = typeof map[`book_${b.id}`] === 'number' ? map[`book_${b.id}`] : 0;
+    total += Math.max(b.views || 0, rec);
+  });
+  summaries.forEach(s => {
+    const rec = typeof map[`summary_${s.id}`] === 'number' ? map[`summary_${s.id}`] : 0;
+    total += Math.max(s.views || 0, rec);
+  });
+  videos.forEach(v => {
+    const rec = typeof map[`video_${v.id}`] === 'number' ? map[`video_${v.id}`] : 0;
+    total += Math.max(v.views || 0, rec);
+  });
+  articles.forEach(a => {
+    const rec = typeof map[`article_${a.id}`] === 'number' ? map[`article_${a.id}`] : 0;
+    total += Math.max(a.views || 0, rec);
+  });
   return total;
 };
 

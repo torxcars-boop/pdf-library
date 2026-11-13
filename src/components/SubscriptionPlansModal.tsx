@@ -2,26 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { User, SubscriptionPlan, UserSubscription } from '../types';
 import { 
   Check, 
-  Crown, 
+  Heart, 
   Sparkles, 
-  Zap, 
-  ShieldCheck, 
-  GraduationCap, 
-  BookOpen, 
-  Volume2, 
   X, 
-  CreditCard, 
-  PhoneCall, 
   CheckCircle2, 
   ArrowRight,
   Copy,
-  Clock,
-  HelpCircle,
   Upload,
-  Image as ImageIcon,
   MessageCircle,
-  Lock,
-  Calendar,
   AlertTriangle
 } from 'lucide-react';
 import { 
@@ -41,7 +29,8 @@ interface SubscriptionPlansModalProps {
   onSubscriptionUpdated: (subscription: UserSubscription) => void;
 }
 
-// Compress receipt image using HTML5 Canvas to prevent LocalStorage Quota Exceeded error
+const SUPPORT_AMOUNTS = [25, 50, 100, 200];
+
 const compressReceiptFile = (file: File, maxDim = 500, quality = 0.65): Promise<string> => {
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -87,6 +76,7 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
 }) => {
   const [plans, setPlans] = useState<SubscriptionPlan[]>(getAdminPlansConfig);
   const [selectedPlan, setSelectedPlan] = useState<SubscriptionPlan | null>(null);
+  const [supportAmount, setSupportAmount] = useState<number>(50);
   const [paymentMethod, setPaymentMethod] = useState<'vodafone' | 'etisalat' | 'instapay'>('vodafone');
   const [senderPhone, setSenderPhone] = useState<string>('');
   const [transactionRef, setTransactionRef] = useState<string>('');
@@ -113,18 +103,18 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
     setTimeout(() => setCopiedText(null), 2500);
   };
 
-  const handleInitiateSubscribe = (plan: SubscriptionPlan) => {
+  const handleInitiateSupport = (plan: SubscriptionPlan) => {
     if (!currentUser) {
       onClose();
       onOpenAuth();
       return;
     }
+    setSupportAmount(plan.priceEGP || 50);
     setSelectedPlan(plan);
     setSuccessMessage(null);
     setPaymentError(null);
   };
 
-  // Image Upload for Receipt with HTML5 Canvas Auto-Compression
   const handleReceiptUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -133,7 +123,6 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
         const compressedBase64 = await compressReceiptFile(file, 500, 0.65);
         setReceiptImage(compressedBase64);
       } catch (err) {
-        console.warn('Receipt compression fallback', err);
         const reader = new FileReader();
         reader.onload = () => setReceiptImage(reader.result as string);
         reader.readAsDataURL(file);
@@ -141,11 +130,10 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
     }
   };
 
-  // Build WhatsApp URL to notify developer
   const getWhatsAppNotifyUrl = (plan: SubscriptionPlan) => {
     const studentInfo = currentUser 
-      ? `الطالب: ${currentUser.name} (${currentUser.email}) - ${currentUser.academicStage || 'ثانوية عامة'}`
-      : 'طالب في المنصة';
+      ? `الطالب: ${currentUser.name} (${currentUser.email})`
+      : 'طالب داعم للمنصة';
     
     const paymentName = paymentMethod === 'vodafone' 
       ? 'فودافون كاش' 
@@ -153,24 +141,24 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
       ? 'اتصالات كاش' 
       : 'انستاباي';
 
-    const text = `مرحباً يا بشمهندس أحمد، أرسل لك إشعار تحويل للاشتراك في المنصة:
-📌 الباقة: ${plan.name} (${plan.priceEGP} ج.م / شهرياً)
+    const text = `مرحباً يا بشمهندس، أرسل لك إشعار مساهمة لدعم استمرار المنصة المجانية:
+❤️ المساهمة: ${plan.name} (${supportAmount} ج.م)
 👤 ${studentInfo}
-💳 وسيلة الدفع: ${paymentName}
+💳 وسيلة التحويل: ${paymentName}
 📱 رقم الهاتف المحول منه: ${senderPhone || 'مرفق'}
 🔢 كود التحويل / المرجع: ${transactionRef || 'تم الإرسال'}
-يرجى تأكيد التفعيل لحسابي، شكراً جزيلاً!`;
+شكراً لجهودكم في إبقاء المنصة مجانية للجميع!`;
 
     return `https://wa.me/${DEVELOPER_WHATSAPP}?text=${encodeURIComponent(text)}`;
   };
 
-  const handleConfirmPayment = () => {
+  const handleConfirmSupport = () => {
     if (!selectedPlan || !currentUser) return;
 
     setPaymentError(null);
 
     if (!senderPhone.trim()) {
-      setPaymentError('يرجى إدخال رقم الهاتف المحول منه (أو رقم الحساب) لإتمام المراجعة والتفعيل الفوري.');
+      setPaymentError('يرجى إدخال رقم الهاتف المحول منه لتوثيق مساهمتك ومنحك شارة داعم للمنصة ❤️');
       return;
     }
 
@@ -179,52 +167,48 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
     setTimeout(() => {
       try {
         const now = new Date();
-        const expiry = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 days Monthly
+        const expiry = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
 
-        const newSubscription: UserSubscription = {
+        const supporterBadge: UserSubscription = {
           planId: selectedPlan.id,
-          planName: selectedPlan.name,
+          planName: 'داعم للمنصة المجانية ❤️',
           status: 'active',
           billingPeriod: 'monthly',
-          examsRemainingThisWeek: selectedPlan.examsPerWeek === -1 ? 9999 : selectedPlan.examsPerWeek,
-          maxExamsPerWeek: selectedPlan.examsPerWeek,
+          examsRemainingThisWeek: -1,
+          maxExamsPerWeek: -1,
           startDate: now.toISOString(),
           endDate: expiry.toISOString(),
           isTrial: false,
-          pricePaid: selectedPlan.priceEGP,
+          pricePaid: supportAmount,
           paymentMethod: paymentMethod === 'vodafone' ? 'فودافون كاش' : paymentMethod === 'etisalat' ? 'اتصالات كاش' : 'انستاباي',
           paymentSenderPhone: senderPhone.trim(),
           transactionRef: transactionRef.trim() || undefined,
           approvedByAdmin: true
         };
 
-        // 1. Submit payment request record for admin audit & approval tracking
         submitPaymentRequest({
           userId: currentUser.id,
           userName: currentUser.name,
           userEmail: currentUser.email,
           planId: selectedPlan.id,
-          planName: selectedPlan.name,
-          amountEGP: selectedPlan.priceEGP,
+          planName: `دعم المنصة المجانية (${supportAmount} ج.م)`,
+          amountEGP: supportAmount,
           paymentMethod,
           senderPhone: senderPhone.trim(),
           transactionRef: transactionRef.trim(),
           receiptImage: receiptImage || undefined,
-          notes: `تم التفعيل الفوري للطالب ${currentUser.name}`
+          notes: `مساهمة تطوعية لدعم المنصة من ${currentUser.name}`
         });
 
-        // 2. Save into per-student subscription storage
-        saveStudentSubscription(currentUser.id, newSubscription);
-
-        // 3. Ensure student is saved in registered students directory for admin
+        saveStudentSubscription(currentUser.id, supporterBadge);
         saveRegisteredStudent({
           ...currentUser,
-          subscription: newSubscription
+          subscription: supporterBadge
         });
         
-        onSubscriptionUpdated(newSubscription);
+        onSubscriptionUpdated(supporterBadge);
         setIsProcessing(false);
-        setSuccessMessage(`تم استلام طلب الدفع وتفعيل ${selectedPlan.name} بنجاح! مبروك يا ${currentUser.name} 🎉`);
+        setSuccessMessage(`شكراً من القلب يا ${currentUser.name}! تم تسجيل دعمك للمنصة بنجاح ❤️`);
 
         setTimeout(() => {
           setSelectedPlan(null);
@@ -236,25 +220,22 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
           onClose();
         }, 2500);
       } catch (err: any) {
-        console.error('Error confirming payment:', err);
         setIsProcessing(false);
-        setSuccessMessage('تم استلام بيانات التحويل بنجاح! يرجى إرسال الإشعار للمطور عبر واتساب للتأكيد.');
+        setSuccessMessage('تم تسجيل مساهمتك بنجاح! شكراً لدعمك استمرار المنصة المجانية ❤️');
         setTimeout(() => {
           setSelectedPlan(null);
           setSuccessMessage(null);
           onClose();
         }, 3000);
       }
-    }, 600);
+    }, 500);
   };
 
-  const activeSub = currentUser?.subscription;
-  const isTrial = activeSub?.isTrial;
-  const trialDaysLeft = activeSub?.trialDaysLeft ?? 0;
+  const isSupporter = Boolean(currentUser?.subscription?.approvedByAdmin || currentUser?.subscription?.pricePaid);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/75 dark:bg-black/85 backdrop-blur-md overflow-y-auto animate-in fade-in duration-200">
-      <div className="bg-white dark:bg-zinc-950 border border-amber-500/30 rounded-3xl max-w-5xl w-full p-5 sm:p-8 my-auto relative shadow-2xl text-right">
+      <div className="bg-white dark:bg-zinc-950 border border-amber-500/30 rounded-3xl max-w-4xl w-full p-5 sm:p-8 my-auto relative shadow-2xl text-right">
         
         {/* Close Button */}
         <button
@@ -267,171 +248,100 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
 
         {/* Header */}
         <div className="text-center max-w-2xl mx-auto mb-6">
-          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-400 text-xs font-black mb-3">
+          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-400 text-xs font-black mb-3">
             <Sparkles className="w-4 h-4" />
-            <span>باقة التفوق الشاملة الاختيارية لطلاب الثانوية 2026</span>
+            <span>منصة تعليمية مجانية 100% لجميع الطلاب</span>
           </div>
-          <h2 className="text-2xl sm:text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-amber-700 via-amber-500 to-amber-600 dark:from-amber-100 dark:via-amber-300 dark:to-amber-500 mb-2">
-            باقة واحدة موحدة شاملة لكافة المميزات بـ 50 ج.م فقط (اختيارية)
+          <h2 className="text-2xl sm:text-3xl font-black text-zinc-900 dark:text-zinc-100 mb-2">
+            ادعم استمرار وتطوير <span className="text-amber-600 dark:text-amber-400">المكتبة المجانية</span> ❤️
           </h2>
           <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-400 leading-relaxed">
-            احصل على وصول كامل غير محدود لجميع الامتحانات، الكتب الدراسية والمذكرات، تدريب الإنجليزية بالذكاء الاصطناعي، والشهادات المعتمدة.
+            لا توجد أي اشتراكات إجبارية أو قيود على الكتب والامتحانات — كل شيء متاح مجاناً للجميع للأبد. دعمك الاختياري يساعدنا في تغطية تكاليف التشغيل وإضافة محتوى جديد باستمرار.
           </p>
         </div>
 
-        {/* 10-Day Free Trial Notice Banner */}
+        {/* Free Forever Status Banner */}
         {currentUser && (
-          <div className={`mb-6 p-4 rounded-2xl border flex flex-col sm:flex-row items-center justify-between gap-3 text-right ${
-            isTrial && trialDaysLeft > 0
-              ? 'bg-amber-50 dark:bg-amber-500/10 border-amber-500/30 text-amber-800 dark:text-amber-300'
-              : activeSub?.status === 'active' && !isTrial
-              ? 'bg-emerald-50 dark:bg-emerald-500/10 border-emerald-500/30 text-emerald-800 dark:text-emerald-300'
-              : 'bg-rose-50 dark:bg-rose-500/10 border-rose-500/30 text-rose-800 dark:text-rose-300'
-          }`}>
+          <div className="mb-6 p-4 rounded-2xl border bg-emerald-50/70 dark:bg-emerald-500/10 border-emerald-500/30 text-emerald-800 dark:text-emerald-300 flex flex-col sm:flex-row items-center justify-between gap-3 text-right">
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 flex items-center justify-center shrink-0">
-                {isTrial && trialDaysLeft > 0 ? (
-                  <Clock className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-                ) : activeSub?.status === 'active' && !isTrial ? (
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                ) : (
-                  <AlertTriangle className="w-4 h-4 text-rose-600 dark:text-rose-400" />
-                )}
+              <div className="w-9 h-9 rounded-xl bg-white dark:bg-zinc-900 border border-emerald-500/30 flex items-center justify-center shrink-0">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
               </div>
               <div>
                 <span className="text-xs font-bold block">
-                  {isTrial && trialDaysLeft > 0 ? (
-                    <>أنت حالياً في <strong className="text-amber-700 dark:text-amber-400">الفترة التجريبية المجانية (10 أيام)</strong> — متبقي لك: <span className="underline">{trialDaysLeft} أيام</span> (جميع المميزات متاحة لك مجاناً)</>
-                  ) : activeSub?.status === 'active' && !isTrial ? (
-                    <>باقتك الشهرية النشطة: <strong className="text-emerald-700 dark:text-emerald-400">{activeSub.planName}</strong> (تنتهي في {new Date(activeSub.endDate).toLocaleDateString('ar-EG')})</>
-                  ) : (
-                    <>فترتك التجريبية المجانية انتهت. يمكنك ترقية حسابك للباقة الشاملة (50 ج.م فقط) لمتابعة تدريبك.</>
-                  )}
+                  {isSupporter
+                    ? 'أنت مسجل كـ "داعم للمنصة المجانية ❤️" — شكراً لعطائك الكريم!'
+                    : 'حسابك يملك وصولاً مجانياً كاملاً 100% لجميع الكتب والامتحانات بلا حدود.'}
                 </span>
                 <span className="text-[11px] text-zinc-600 dark:text-zinc-400 block mt-0.5">
                   حساب الطالب: {currentUser.name} ({currentUser.email})
                 </span>
               </div>
             </div>
-
-            <div className="shrink-0 text-xs font-bold">
-              {isTrial && (
-                <span className="px-3 py-1 rounded-full bg-amber-500/15 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/40">
-                  تجربة مجانية نشطة
-                </span>
-              )}
-            </div>
           </div>
         )}
 
-        {/* ----------------------------------------------------------------- */}
-        {/* STEP 1: PLANS DIRECTORY VIEW */}
-        {/* ----------------------------------------------------------------- */}
+        {/* STEP 1: VOLUNTARY SUPPORT CARD */}
         {!selectedPlan && (
           <div className="max-w-xl mx-auto w-full">
-            {plans.map((plan) => {
-              const isCurrent = activeSub?.status === 'active' && activeSub?.planId === plan.id;
-              const isClosed = plan.isActive === false;
-
-              return (
-                <div
-                  key={plan.id}
-                  className={`rounded-3xl p-6 sm:p-8 border transition-all duration-300 flex flex-col justify-between relative ${
-                    isCurrent
-                      ? 'bg-emerald-50/40 dark:bg-zinc-900/90 border-emerald-500/50 shadow-xl shadow-emerald-500/10'
-                      : 'bg-gradient-to-b from-amber-50/70 via-white to-slate-50 dark:from-zinc-900/90 dark:via-zinc-950 dark:to-zinc-950 border-amber-500/50 shadow-2xl shadow-amber-500/15'
-                  }`}
-                >
-                  {/* Badge */}
-                  {plan.badge && (
-                    <div className="absolute -top-3 right-6 px-3 py-1 rounded-full text-[11px] font-black shadow-md bg-amber-500 text-zinc-950">
-                      {plan.badge}
-                    </div>
-                  )}
-
+            {plans.map((plan) => (
+              <div
+                key={plan.id}
+                className="rounded-3xl p-6 sm:p-8 border bg-gradient-to-b from-amber-50/70 via-white to-slate-50 dark:from-zinc-900/90 dark:via-zinc-950 dark:to-zinc-950 border-amber-500/40 shadow-xl flex flex-col justify-between relative"
+              >
+                <div className="mb-4 flex items-center justify-between">
                   <div>
-                    {/* Header: Name & Tagline */}
-                    <div className="mb-4">
-                      <h3 className="text-xl font-black text-zinc-900 dark:text-zinc-100 mb-1 flex items-center justify-between">
-                        <span>{plan.name}</span>
-                        <Crown className="w-6 h-6 text-amber-600 dark:text-amber-400" />
-                      </h3>
-                      <p className="text-[11px] text-zinc-600 dark:text-zinc-400 leading-relaxed min-h-[32px]">
-                        {plan.tagline}
-                      </p>
-                    </div>
-
-                    {/* Price Tag */}
-                    <div className="p-4 rounded-2xl bg-white dark:bg-zinc-950/80 border border-slate-200 dark:border-zinc-800/80 mb-5 text-center shadow-sm">
-                      <div className="flex items-baseline justify-center gap-1.5">
-                        <span className="text-3xl sm:text-4xl font-black text-amber-600 dark:text-amber-400 font-mono">
-                          {plan.priceEGP}
-                        </span>
-                        <span className="text-xs font-bold text-zinc-700 dark:text-zinc-300">جنيه مصري</span>
-                        <span className="text-[10px] text-zinc-500">/ شهرياً</span>
-                      </div>
-                      
-                      <div className="mt-2 pt-2 border-t border-slate-200 dark:border-zinc-800/60 flex items-center justify-center gap-1 text-[11px] font-bold text-amber-700 dark:text-amber-300">
-                        <Clock className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
-                        <span>
-                          {plan.examsPerWeek === -1 ? 'امتحانات غير محدودة أسبوعياً' : `${plan.examsPerWeek} امتحان أسبوعياً (${plan.examsPerWeek * 4} شهرياً)`}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Features List */}
-                    <ul className="space-y-2.5 mb-6 text-xs text-zinc-700 dark:text-zinc-300">
-                      {plan.features.map((feature, idx) => (
-                        <li key={idx} className="flex items-start gap-2.5 leading-relaxed">
-                          <div className="w-4 h-4 rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center flex-shrink-0 mt-0.5">
-                            <Check className="w-3 h-3 stroke-[3]" />
-                          </div>
-                          <span>{feature}</span>
-                        </li>
-                      ))}
-                    </ul>
+                    <h3 className="text-xl font-black text-zinc-900 dark:text-zinc-100 mb-1">
+                      {plan.name}
+                    </h3>
+                    <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">
+                      {plan.tagline}
+                    </p>
                   </div>
-
-                  {/* Action Button */}
-                  <div className="pt-2">
-                    {isCurrent ? (
-                      <button
-                        disabled
-                        className="w-full py-3 rounded-2xl bg-emerald-500/15 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-xs font-bold border border-emerald-500/40 cursor-default"
-                      >
-                        باقتك الحالية المفعلة ✅
-                      </button>
-                    ) : isClosed ? (
-                      <button
-                        disabled
-                        className="w-full py-3 rounded-2xl bg-slate-200 dark:bg-zinc-800 text-zinc-500 text-xs font-bold border border-slate-300 dark:border-zinc-700 cursor-not-allowed flex items-center justify-center gap-2"
-                      >
-                        <Lock className="w-4 h-4" />
-                        <span>مغلقة مؤقتاً للتسجيل</span>
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => handleInitiateSubscribe(plan)}
-                        className={`w-full py-3 rounded-2xl text-xs font-black shadow-lg transition duration-200 flex items-center justify-center gap-2 ${
-                          plan.isPopular
-                            ? 'bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400 text-zinc-950 hover:brightness-110 active:scale-95 shadow-amber-500/20'
-                            : 'bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-amber-800 dark:text-amber-300 border border-slate-200 dark:border-zinc-700 active:scale-95'
-                        }`}
-                      >
-                        <Zap className="w-4 h-4" />
-                        <span>{plan.ctaText}</span>
-                      </button>
-                    )}
+                  <div className="w-11 h-11 rounded-2xl bg-rose-500/15 text-rose-600 dark:text-rose-400 flex items-center justify-center flex-shrink-0">
+                    <Heart className="w-6 h-6 fill-current" />
                   </div>
                 </div>
-              );
-            })}
+
+                {/* Free Guarantee Highlight */}
+                <div className="p-4 rounded-2xl bg-white dark:bg-zinc-950/80 border border-slate-200 dark:border-zinc-800/80 mb-5 text-center shadow-sm">
+                  <div className="flex items-baseline justify-center gap-1.5">
+                    <span className="text-2xl sm:text-3xl font-black text-emerald-600 dark:text-emerald-400">
+                      كل شيء مجاني 100%
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-zinc-600 dark:text-zinc-400 mt-1.5">
+                    يمكنك المساهمة طوعياً بأي مبلغ (مثل <strong className="text-amber-700 dark:text-amber-300 font-mono">50 ج.م</strong> أو أكثر) لدعم استمرار المشروع
+                  </p>
+                </div>
+
+                {/* Why support / What remains free */}
+                <ul className="space-y-2.5 mb-6 text-xs text-zinc-700 dark:text-zinc-300">
+                  {plan.features.map((feature, idx) => (
+                    <li key={idx} className="flex items-start gap-2.5 leading-relaxed">
+                      <div className="w-4 h-4 rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center flex-shrink-0 mt-0.5">
+                        <Check className="w-3 h-3 stroke-[3]" />
+                      </div>
+                      <span>{feature}</span>
+                    </li>
+                  ))}
+                </ul>
+
+                <div className="pt-2">
+                  <button
+                    onClick={() => handleInitiateSupport(plan)}
+                    className="w-full py-3.5 rounded-2xl text-xs font-black shadow-lg transition duration-200 flex items-center justify-center gap-2 bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400 text-zinc-950 hover:brightness-110 active:scale-95 shadow-amber-500/20"
+                  >
+                    <Heart className="w-4 h-4" />
+                    <span>ساهم الآن في دعم المنصة (اختياري)</span>
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         )}
 
-        {/* ----------------------------------------------------------------- */}
-        {/* STEP 2: PAYMENT, PROOF ATTACHMENT & WHATSAPP NOTIFICATION */}
-        {/* ----------------------------------------------------------------- */}
+        {/* STEP 2: VOLUNTARY SUPPORT TRANSFER & OPTIONAL RECEIPT */}
         {selectedPlan && (
           <div className="max-w-2xl mx-auto animate-in fade-in">
             <button
@@ -441,17 +351,17 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
               }}
               className="mb-4 inline-flex items-center gap-2 text-xs font-bold text-amber-700 dark:text-amber-400 hover:underline"
             >
-              <span>← العودة إلى تفاصيل الباقة</span>
+              <span>← العودة لصفحة الدعم</span>
             </button>
 
             {successMessage ? (
               <div className="p-8 rounded-3xl bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-500/40 text-center space-y-4">
                 <div className="w-16 h-16 rounded-full bg-emerald-500 text-zinc-950 flex items-center justify-center mx-auto shadow-lg shadow-emerald-500/30">
-                  <CheckCircle2 className="w-9 h-9" />
+                  <Heart className="w-8 h-8 fill-current" />
                 </div>
                 <h3 className="text-xl font-black text-emerald-700 dark:text-emerald-300">{successMessage}</h3>
                 <p className="text-xs text-zinc-700 dark:text-zinc-300 leading-relaxed">
-                  تم حفظ إثبات التحويل وتفعيل الباقة الشهرية لحسابك بنجاح! تم تجديد حصتك من الامتحانات لتتمكن من التدريب فوراً.
+                  مساهمتك تساعد في استمرار المكتبة مجانية لجميع الطلاب. تم منحك شارة داعم للمنصة ❤️.
                 </p>
                 <div className="pt-2">
                   <a
@@ -461,35 +371,49 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
                     className="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white dark:text-zinc-950 font-bold text-xs shadow-md transition"
                   >
                     <MessageCircle className="w-4 h-4" />
-                    <span>إرسال إشعار التفعيل للمطور عبر واتساب</span>
+                    <span>إرسال رسالة شكر وإيصال عبر واتساب</span>
                   </a>
                 </div>
               </div>
             ) : (
               <div className="bg-slate-50 dark:bg-zinc-900 border border-amber-500/30 rounded-3xl p-6 sm:p-8 space-y-6 shadow-2xl">
                 
-                {/* Plan Summary Card */}
-                <div className="p-4 rounded-2xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 flex items-center justify-between">
-                  <div>
-                    <span className="text-[10px] text-amber-700 dark:text-amber-400 font-bold block mb-1">الباقة الشهرية المختارة:</span>
-                    <h4 className="text-sm sm:text-base font-black text-zinc-900 dark:text-zinc-100">{selectedPlan.name}</h4>
-                    <span className="text-xs text-zinc-600 dark:text-zinc-400">
-                      {selectedPlan.examsPerWeek === -1 ? 'امتحانات غير محدودة طوال الشهر' : `${selectedPlan.examsPerWeek} امتحان أسبوعياً`}
+                {/* Support Amount Selector */}
+                <div className="p-4 rounded-2xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] text-amber-700 dark:text-amber-400 font-bold block mb-0.5">قيمة الدعم الاختياري:</span>
+                      <h4 className="text-sm font-black text-zinc-900 dark:text-zinc-100">اختر مبلغ المساهمة المناسب لك</h4>
+                    </div>
+                    <span className="text-2xl font-black font-mono tabular-nums text-amber-600 dark:text-amber-400">
+                      {supportAmount} ج.م
                     </span>
                   </div>
-                  <div className="text-left">
-                    <span className="text-2xl font-black text-amber-600 dark:text-amber-400">{selectedPlan.priceEGP} ج.م</span>
-                    <span className="text-[10px] text-zinc-500 block">اشتراك شهري كامل</span>
+
+                  <div className="grid grid-cols-4 gap-2">
+                    {SUPPORT_AMOUNTS.map((amt) => (
+                      <button
+                        key={amt}
+                        type="button"
+                        onClick={() => setSupportAmount(amt)}
+                        className={`py-2 rounded-xl text-xs font-black font-mono border transition ${
+                          supportAmount === amt
+                            ? 'bg-amber-500 text-zinc-950 border-amber-400 shadow-sm'
+                            : 'bg-slate-50 dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 border-slate-200 dark:border-zinc-800 hover:border-amber-500/40'
+                        }`}
+                      >
+                        {amt} ج.م
+                      </button>
+                    ))}
                   </div>
                 </div>
 
-                {/* Payment Method Selector (Vodafone Cash, Etisalat Cash, InstaPay) */}
+                {/* Payment Method Selector */}
                 <div>
                   <label className="block text-xs font-bold text-zinc-800 dark:text-zinc-300 mb-2">
-                    اختر وسيلة الدفع والتحويل:
+                    اختر وسيلة التحويل لدعم المنصة:
                   </label>
                   <div className="grid grid-cols-3 gap-3">
-                    {/* Vodafone Cash */}
                     <button
                       type="button"
                       onClick={() => setPaymentMethod('vodafone')}
@@ -503,7 +427,6 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
                       <span>فودافون كاش</span>
                     </button>
 
-                    {/* Etisalat Cash */}
                     <button
                       type="button"
                       onClick={() => setPaymentMethod('etisalat')}
@@ -517,7 +440,6 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
                       <span>اتصالات كاش</span>
                     </button>
 
-                    {/* InstaPay */}
                     <button
                       type="button"
                       onClick={() => setPaymentMethod('instapay')}
@@ -533,7 +455,7 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
                   </div>
                 </div>
 
-                {/* Payment Instructions Details */}
+                {/* Account Copy Card */}
                 <div className="p-4 rounded-2xl bg-white dark:bg-zinc-950/80 border border-slate-200 dark:border-zinc-800 space-y-3">
                   <div className="text-xs font-bold text-zinc-800 dark:text-zinc-200">
                     {paymentMethod === 'vodafone' && 'بيانات التحويل عبر فودافون كاش:'}
@@ -541,7 +463,6 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
                     {paymentMethod === 'instapay' && 'بيانات التحويل الفوري عبر انستاباي (InstaPay):'}
                   </div>
 
-                  {/* Vodafone Box */}
                   {paymentMethod === 'vodafone' && (
                     <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800">
                       <div>
@@ -559,7 +480,6 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
                     </div>
                   )}
 
-                  {/* Etisalat Box */}
                   {paymentMethod === 'etisalat' && (
                     <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800">
                       <div>
@@ -577,7 +497,6 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
                     </div>
                   )}
 
-                  {/* InstaPay Box */}
                   {paymentMethod === 'instapay' && (
                     <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800">
                       <div>
@@ -596,11 +515,11 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
                   )}
 
                   <p className="text-[11px] text-zinc-600 dark:text-zinc-400 leading-relaxed">
-                    قم بتحويل مبلغ <strong className="text-amber-700 dark:text-amber-300">{selectedPlan.priceEGP} جنيه مصري</strong>، ثم أرفق إثبات التحويل أدناه واضغط لتأكيد التفعيل الفوري.
+                    بعد تحويل مبلغ الدعم (<strong className="text-amber-700 dark:text-amber-300">{supportAmount} ج.م</strong>)، أدخل رقمك لتسجيل المساهمة في لوحة الداعمين.
                   </p>
                 </div>
 
-                {/* Verification Fields: Sender Phone & Transaction Reference */}
+                {/* Verification Fields */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-bold text-zinc-800 dark:text-zinc-300 mb-1">
@@ -622,23 +541,22 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
 
                   <div>
                     <label className="block text-xs font-bold text-zinc-800 dark:text-zinc-300 mb-1">
-                      كود التحويل / الرقم المرجعي (اختياري):
+                      رقم المرجع / ملاحظة (اختياري):
                     </label>
                     <input
                       type="text"
                       value={transactionRef}
                       onChange={(e) => setTransactionRef(e.target.value)}
-                      placeholder="رقم العملية في رسالة التحويل"
+                      placeholder="رقم العملية أو كلمة تشجيعية"
                       className="w-full py-2.5 px-3.5 bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500 font-mono"
                     />
                   </div>
                 </div>
 
-                {/* Proof Attachment (إرفاق إثبات التحويل / إيصال الدفع) */}
+                {/* Receipt Upload */}
                 <div className="p-4 rounded-2xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800">
                   <label className="block text-xs font-bold text-zinc-800 dark:text-zinc-200 mb-2 flex items-center justify-between">
-                    <span>إرفاق إثبات التحويل (لقطة شاشة أو إيصال الدفع):</span>
-                    <span className="text-[11px] text-amber-700 dark:text-amber-400 font-normal">اختياري ومفضل للتأكيد السريع</span>
+                    <span>إرفاق صورة إيصال التحويل (اختياري):</span>
                   </label>
 
                   {receiptImage ? (
@@ -650,7 +568,7 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
                       />
                       <div className="flex-1">
                         <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 block">تم إرفاق صورة الإيصال بنجاح ✓</span>
-                        <span className="text-[10px] text-zinc-500 dark:text-zinc-400 block truncate max-w-xs">{receiptFileName || 'receipt_proof.jpg'}</span>
+                        <span className="text-[10px] text-zinc-500 dark:text-zinc-400 block truncate max-w-xs">{receiptFileName || 'receipt.jpg'}</span>
                       </div>
                       <button
                         type="button"
@@ -666,10 +584,9 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
                   ) : (
                     <label className="flex flex-col items-center justify-center p-4 rounded-xl border border-dashed border-slate-300 dark:border-zinc-700 hover:border-amber-500/60 bg-slate-50 dark:bg-zinc-900/60 cursor-pointer transition group">
                       <Upload className="w-6 h-6 text-zinc-400 dark:text-zinc-500 group-hover:text-amber-600 dark:group-hover:text-amber-400 mb-1 transition" />
-                      <span className="text-xs font-bold text-zinc-700 dark:text-zinc-300 group-hover:text-zinc-950 dark:group-hover:text-zinc-100">
-                        اضغط لرفع لقطة شاشة لإشعار التحويل من هاتفك
+                      <span className="text-xs font-bold text-zinc-700 dark:text-zinc-300">
+                        اضغط لرفع صورة إشعار التحويل (اختياري)
                       </span>
-                      <span className="text-[10px] text-zinc-500 mt-1">يدعم الصور JPG, PNG (حد أقصى 5MB)</span>
                       <input
                         type="file"
                         accept="image/*"
@@ -680,16 +597,16 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
                   )}
                 </div>
 
-                {/* Direct Contact With Developer Button (واتساب لإبلاغه وتفعيل الباقة) */}
+                {/* Developer WhatsApp */}
                 <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-500/30 flex flex-col sm:flex-row items-center justify-between gap-3">
                   <div className="flex items-center gap-2.5">
                     <MessageCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
                     <div>
                       <span className="text-xs font-bold text-emerald-800 dark:text-emerald-300 block">
-                        إبلاغ المطور بالدفع وتأكيد التفعيل عبر واتساب:
+                        إرسال إشعار الدعم عبر واتساب للمطور:
                       </span>
                       <span className="text-[10px] text-zinc-600 dark:text-zinc-400">
-                        تواصل مباشر مع البشمهندس على {PAYMENT_ACCOUNTS.vodafone.number}
+                        {PAYMENT_ACCOUNTS.vodafone.number}
                       </span>
                     </div>
                   </div>
@@ -712,19 +629,18 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
                   </div>
                 )}
 
-                {/* Submit Confirmation Button */}
                 <button
                   type="button"
-                  onClick={handleConfirmPayment}
+                  onClick={handleConfirmSupport}
                   disabled={isProcessing}
                   className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400 text-zinc-950 font-black text-sm shadow-xl hover:brightness-110 active:scale-95 transition flex items-center justify-center gap-2 disabled:opacity-50"
                 >
                   {isProcessing ? (
-                    <span>جاري تسجيل إثبات الدفع وتفعيل الباقة...</span>
+                    <span>جاري تسجيل دعمك للمنصة...</span>
                   ) : (
                     <>
-                      <CheckCircle2 className="w-5 h-5" />
-                      <span>تأكيد الاشتراك وتفعيل الباقة فوراً ({selectedPlan.priceEGP} ج.م)</span>
+                      <Heart className="w-5 h-5" />
+                      <span>تأكيد المساهمة لدعم المنصة ({supportAmount} ج.م) ❤️</span>
                     </>
                   )}
                 </button>

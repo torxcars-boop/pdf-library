@@ -85,6 +85,45 @@ export interface AuditLog {
   timestamp: string;
 }
 
+export interface ServerReview {
+  id: string;
+  itemId: string | number;
+  itemType: 'book' | 'video' | 'article' | 'summary';
+  userId: string;
+  userName: string;
+  userAvatar?: string;
+  academicStage?: string;
+  rating: number;
+  comment: string;
+  createdAt: string;
+  isApproved: boolean;
+  likesCount?: number;
+}
+
+export interface ServerComment {
+  id: string;
+  itemId: string;
+  itemType: 'book' | 'video' | 'article' | 'summary';
+  authorId: string;
+  authorName: string;
+  authorAvatar?: string;
+  authorRole?: 'admin' | 'moderator' | 'user';
+  academicStage?: string;
+  content: string;
+  createdAt: string;
+  likesCount: number;
+  likedBy: string[];
+  isAdminLiked?: boolean;
+}
+
+export interface DeletedIdsStore {
+  books: number[];
+  summaries: number[];
+  videos: number[];
+  articles: number[];
+  users: string[];
+}
+
 export interface DatabaseSchema {
   adminConfig: {
     username: string;
@@ -97,6 +136,15 @@ export interface DatabaseSchema {
   videos: Video[];
   articles: Article[];
   auditLogs: AuditLog[];
+  deletedIds?: DeletedIdsStore;
+  reviews?: ServerReview[];
+  comments?: ServerComment[];
+  customExams?: any[];
+  deletedExamIds?: string[];
+  supportRequests?: any[];
+  studentSubscriptions?: Record<string, any>;
+  supportConfig?: Record<string, boolean>;
+  studentStatsMap?: Record<string, any>;
 }
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
@@ -459,17 +507,58 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       status: 'success',
       timestamp: '2026-09-01T08:05:00.000Z',
     }
-  ]
+  ],
+  deletedIds: { books: [], summaries: [], videos: [], articles: [], users: [] },
+  reviews: [],
+  comments: [],
+  customExams: [],
+  deletedExamIds: [],
+  supportRequests: [],
+  studentSubscriptions: {},
+  supportConfig: { basic_50: true },
+  studentStatsMap: {}
 };
 
 // Database Access Layer with Fallback & Postgres Integration
 class DatabaseManager {
   private pool: Pool | null = null;
   private memoryData: DatabaseSchema;
+  private pgSyncQueued = false;
+  private pgSyncRunning = false;
 
   constructor() {
-    this.memoryData = this.loadFromFile();
+    this.memoryData = this.normalizeSchema(this.loadFromFile());
     this.initPostgres();
+  }
+
+  private normalizeSchema(data: Partial<DatabaseSchema>): DatabaseSchema {
+    const fallback = JSON.parse(JSON.stringify(EGYPT_THANAWEYA_DATA)) as DatabaseSchema;
+    return {
+      ...fallback,
+      ...data,
+      adminConfig: data.adminConfig || fallback.adminConfig,
+      users: Array.isArray(data.users) ? data.users : [],
+      pdfs: Array.isArray(data.pdfs) ? data.pdfs : fallback.pdfs,
+      summaries: Array.isArray(data.summaries) ? data.summaries : fallback.summaries,
+      videos: Array.isArray(data.videos) ? data.videos : fallback.videos,
+      articles: Array.isArray(data.articles) ? data.articles : fallback.articles,
+      auditLogs: Array.isArray(data.auditLogs) ? data.auditLogs : fallback.auditLogs,
+      deletedIds: {
+        books: Array.isArray(data.deletedIds?.books) ? data.deletedIds!.books : [],
+        summaries: Array.isArray(data.deletedIds?.summaries) ? data.deletedIds!.summaries : [],
+        videos: Array.isArray(data.deletedIds?.videos) ? data.deletedIds!.videos : [],
+        articles: Array.isArray(data.deletedIds?.articles) ? data.deletedIds!.articles : [],
+        users: Array.isArray(data.deletedIds?.users) ? data.deletedIds!.users : [],
+      },
+      reviews: Array.isArray(data.reviews) ? data.reviews : [],
+      comments: Array.isArray(data.comments) ? data.comments : [],
+      customExams: Array.isArray(data.customExams) ? data.customExams : [],
+      deletedExamIds: Array.isArray(data.deletedExamIds) ? data.deletedExamIds : [],
+      supportRequests: Array.isArray(data.supportRequests) ? data.supportRequests : [],
+      studentSubscriptions: data.studentSubscriptions && typeof data.studentSubscriptions === 'object' ? data.studentSubscriptions : {},
+      supportConfig: data.supportConfig && typeof data.supportConfig === 'object' ? data.supportConfig : { basic_50: true },
+      studentStatsMap: data.studentStatsMap && typeof data.studentStatsMap === 'object' ? data.studentStatsMap : {},
+    };
   }
 
   private loadFromFile(): DatabaseSchema {
@@ -482,14 +571,15 @@ class DatabaseManager {
         const parsed = JSON.parse(raw);
         // Accept the existing database state as authoritative without resetting when items are deleted
         if (parsed && Array.isArray(parsed.pdfs)) {
-          return parsed;
+          return this.normalizeSchema(parsed);
         }
       }
     } catch (e) {
       console.error('Error loading db file, using seed:', e);
     }
-    this.saveToFile(EGYPT_THANAWEYA_DATA);
-    return JSON.parse(JSON.stringify(EGYPT_THANAWEYA_DATA));
+    const seed = this.normalizeSchema(EGYPT_THANAWEYA_DATA);
+    this.saveToFile(seed);
+    return seed;
   }
 
   public saveToFile(data: DatabaseSchema) {
@@ -575,12 +665,51 @@ class DatabaseManager {
             status VARCHAR(50),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           );
+          CREATE TABLE IF NOT EXISTS app_sync_state (
+            id TEXT PRIMARY KEY,
+            payload JSONB NOT NULL,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+          );
         `);
-        console.log('PostgreSQL connected & initialized successfully.');
+        const res = await this.pool.query('SELECT payload FROM app_sync_state WHERE id = $1 LIMIT 1', ['main']);
+        if (res.rows.length > 0 && res.rows[0].payload) {
+          this.memoryData = this.normalizeSchema(res.rows[0].payload);
+          this.saveToFile(this.memoryData);
+        } else {
+          await this.pool.query(
+            `INSERT INTO app_sync_state (id, payload, updated_at) VALUES ($1, $2::jsonb, CURRENT_TIMESTAMP)
+             ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload, updated_at = CURRENT_TIMESTAMP`,
+            ['main', JSON.stringify(this.memoryData)]
+          );
+        }
+        console.log('PostgreSQL connected & synchronized successfully.');
       } catch (err: any) {
         console.warn('Postgres connection failed, continuing with robust Local Engine:', err.message);
         this.pool = null;
       }
+    }
+  }
+
+  private async syncToPostgres() {
+    if (!this.pool) return;
+    if (this.pgSyncRunning) {
+      this.pgSyncQueued = true;
+      return;
+    }
+    this.pgSyncRunning = true;
+    try {
+      do {
+        this.pgSyncQueued = false;
+        await this.pool.query(
+          `INSERT INTO app_sync_state (id, payload, updated_at) VALUES ($1, $2::jsonb, CURRENT_TIMESTAMP)
+           ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload, updated_at = CURRENT_TIMESTAMP`,
+          ['main', JSON.stringify(this.memoryData)]
+        );
+      } while (this.pgSyncQueued);
+    } catch (err: any) {
+      console.warn('Postgres sync warning:', err.message);
+    } finally {
+      this.pgSyncRunning = false;
     }
   }
 
@@ -594,10 +723,11 @@ class DatabaseManager {
 
   public async commit() {
     this.saveToFile(this.memoryData);
+    void this.syncToPostgres();
   }
 
   public resetToEgyptianThanaweya() {
-    this.memoryData = JSON.parse(JSON.stringify(EGYPT_THANAWEYA_DATA));
+    this.memoryData = this.normalizeSchema(EGYPT_THANAWEYA_DATA);
     this.commit();
   }
 
@@ -847,8 +977,276 @@ class DatabaseManager {
     return { rating: newRating, ratingCount: newCount };
   }
 
+  // Deleted IDs Registry
+  public getDeletedIds(): DeletedIdsStore {
+    if (!this.memoryData.deletedIds) {
+      this.memoryData.deletedIds = { books: [], summaries: [], videos: [], articles: [], users: [] };
+    }
+    return this.memoryData.deletedIds;
+  }
+
+  public mergeDeletedIds(payload: Partial<DeletedIdsStore>): DeletedIdsStore {
+    const store = this.getDeletedIds();
+    if (Array.isArray(payload.books)) {
+      payload.books.forEach(id => {
+        const n = Number(id);
+        if (!store.books.includes(n)) store.books.push(n);
+      });
+      this.memoryData.pdfs = this.memoryData.pdfs.filter(b => !store.books.includes(Number(b.id)));
+    }
+    if (Array.isArray(payload.summaries)) {
+      payload.summaries.forEach(id => {
+        const n = Number(id);
+        if (!store.summaries.includes(n)) store.summaries.push(n);
+      });
+      this.memoryData.summaries = this.memoryData.summaries.filter(s => !store.summaries.includes(Number(s.id)));
+    }
+    if (Array.isArray(payload.videos)) {
+      payload.videos.forEach(id => {
+        const n = Number(id);
+        if (!store.videos.includes(n)) store.videos.push(n);
+      });
+      this.memoryData.videos = this.memoryData.videos.filter(v => !store.videos.includes(Number(v.id)));
+    }
+    if (Array.isArray(payload.articles)) {
+      payload.articles.forEach(id => {
+        const n = Number(id);
+        if (!store.articles.includes(n)) store.articles.push(n);
+      });
+      this.memoryData.articles = this.memoryData.articles.filter(a => !store.articles.includes(Number(a.id)));
+    }
+    if (Array.isArray(payload.users)) {
+      payload.users.forEach(id => {
+        const s = String(id);
+        if (!store.users.includes(s)) store.users.push(s);
+      });
+    }
+    this.commit();
+    return store;
+  }
+
+  // Reviews
+  public getReviews(): ServerReview[] {
+    if (!this.memoryData.reviews) this.memoryData.reviews = [];
+    return this.memoryData.reviews;
+  }
+
+  public addReview(rev: Omit<ServerReview, 'id' | 'createdAt' | 'isApproved'> & { id?: string }): ServerReview {
+    const list = this.getReviews();
+    const created: ServerReview = {
+      ...rev,
+      id: rev.id || 'rev_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      createdAt: new Date().toISOString(),
+      isApproved: true,
+      likesCount: 0,
+    };
+    list.unshift(created);
+    this.commit();
+    return created;
+  }
+
+  public toggleApproveReview(reviewId: string): ServerReview | null {
+    const list = this.getReviews();
+    const target = list.find(r => r.id === reviewId);
+    if (!target) return null;
+    target.isApproved = !target.isApproved;
+    this.commit();
+    return target;
+  }
+
+  public deleteReview(reviewId: string): boolean {
+    const list = this.getReviews();
+    const idx = list.findIndex(r => r.id === reviewId);
+    if (idx === -1) return false;
+    list.splice(idx, 1);
+    this.commit();
+    return true;
+  }
+
+  // Comments
+  public getComments(): ServerComment[] {
+    if (!this.memoryData.comments) this.memoryData.comments = [];
+    return this.memoryData.comments;
+  }
+
+  public addComment(cmt: Omit<ServerComment, 'id' | 'createdAt' | 'likesCount' | 'likedBy'> & { id?: string }): ServerComment {
+    const list = this.getComments();
+    const created: ServerComment = {
+      ...cmt,
+      id: cmt.id || 'cmt_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      createdAt: new Date().toISOString(),
+      likesCount: 0,
+      likedBy: [],
+      isAdminLiked: cmt.authorRole === 'admin' || cmt.authorRole === 'moderator',
+    };
+    list.unshift(created);
+    this.commit();
+    return created;
+  }
+
+  public toggleLikeComment(commentId: string, actorId: string): { comment: ServerComment; hasLiked: boolean } | null {
+    const list = this.getComments();
+    const c = list.find(item => item.id === commentId);
+    if (!c) return null;
+    if (!Array.isArray(c.likedBy)) c.likedBy = [];
+    const idx = c.likedBy.indexOf(actorId);
+    let hasLiked = false;
+    if (idx >= 0) {
+      c.likedBy.splice(idx, 1);
+      c.likesCount = Math.max(0, (c.likesCount || 0) - 1);
+      hasLiked = false;
+    } else {
+      c.likedBy.push(actorId);
+      c.likesCount = (c.likesCount || 0) + 1;
+      hasLiked = true;
+    }
+    this.commit();
+    return { comment: c, hasLiked };
+  }
+
+  public toggleAdminLikeComment(commentId: string): ServerComment | null {
+    const list = this.getComments();
+    const c = list.find(item => item.id === commentId);
+    if (!c) return null;
+    c.isAdminLiked = !c.isAdminLiked;
+    this.commit();
+    return c;
+  }
+
+  public deleteComment(commentId: string): boolean {
+    const list = this.getComments();
+    const idx = list.findIndex(c => c.id === commentId);
+    if (idx === -1) return false;
+    list.splice(idx, 1);
+    this.commit();
+    return true;
+  }
+
+  // Exams
+  public getCustomExams(): any[] {
+    if (!this.memoryData.customExams) this.memoryData.customExams = [];
+    return this.memoryData.customExams;
+  }
+
+  public getDeletedExamIds(): string[] {
+    if (!this.memoryData.deletedExamIds) this.memoryData.deletedExamIds = [];
+    return this.memoryData.deletedExamIds;
+  }
+
+  public addCustomExam(exam: any): any {
+    const list = this.getCustomExams();
+    const clean = [exam, ...list.filter(e => String(e.id) !== String(exam.id))];
+    this.memoryData.customExams = clean;
+    this.commit();
+    return exam;
+  }
+
+  public deleteExam(examId: string): boolean {
+    const deleted = this.getDeletedExamIds();
+    if (!deleted.includes(examId)) {
+      deleted.push(examId);
+    }
+    this.memoryData.customExams = this.getCustomExams().filter(e => String(e.id) !== String(examId));
+    this.commit();
+    return true;
+  }
+
+  // Voluntary Support & Supporter Badges
+  public getSupportConfig(): Record<string, boolean> {
+    if (!this.memoryData.supportConfig) this.memoryData.supportConfig = { basic_50: true };
+    return this.memoryData.supportConfig;
+  }
+
+  public setSupportPlanStatus(planId: string, isActive: boolean): Record<string, boolean> {
+    const cfg = this.getSupportConfig();
+    cfg[planId] = isActive;
+    this.commit();
+    return cfg;
+  }
+
+  public getSupportRequests(): any[] {
+    if (!this.memoryData.supportRequests) this.memoryData.supportRequests = [];
+    return this.memoryData.supportRequests;
+  }
+
+  public addSupportRequest(req: any): any {
+    const list = this.getSupportRequests();
+    const newReq = {
+      ...req,
+      id: req.id || 'req_' + Date.now(),
+      submittedAt: req.submittedAt || new Date().toISOString(),
+      status: req.status || 'pending',
+    };
+    list.unshift(newReq);
+    if (list.length > 100) {
+      this.memoryData.supportRequests = list.slice(0, 100);
+    }
+    this.commit();
+    return newReq;
+  }
+
+  public updateSupportRequestStatus(requestId: string, newStatus: 'approved' | 'rejected'): any | null {
+    const list = this.getSupportRequests();
+    const target = list.find(r => r.id === requestId);
+    if (!target) return null;
+    target.status = newStatus;
+    if (newStatus === 'approved' && target.userId) {
+      const now = new Date();
+      const expiry = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
+      this.setStudentSubscription(target.userId, {
+        planId: target.planId || 'basic_50',
+        planName: 'داعم للمنصة المجانية ❤️',
+        status: 'active',
+        billingPeriod: 'monthly',
+        examsRemainingThisWeek: -1,
+        maxExamsPerWeek: -1,
+        startDate: now.toISOString(),
+        endDate: expiry.toISOString(),
+        isTrial: false,
+        pricePaid: target.amountEGP,
+        paymentMethod: target.paymentMethod,
+        paymentSenderPhone: target.senderPhone,
+        transactionRef: target.transactionRef,
+        approvedByAdmin: true,
+      });
+    }
+    this.commit();
+    return target;
+  }
+
+  public getStudentSubscriptions(): Record<string, any> {
+    if (!this.memoryData.studentSubscriptions) this.memoryData.studentSubscriptions = {};
+    return this.memoryData.studentSubscriptions;
+  }
+
+  public setStudentSubscription(userId: string, sub: any): Record<string, any> {
+    const map = this.getStudentSubscriptions();
+    map[userId] = {
+      ...sub,
+      status: 'active',
+      examsRemainingThisWeek: -1,
+      maxExamsPerWeek: -1,
+      isTrial: false,
+    };
+    this.commit();
+    return map[userId];
+  }
+
+  // Per-Student Progress Stats (XP, Badges, Passed Exams, Downloads)
+  public getStudentStatsForUser(userId: string): any | null {
+    if (!this.memoryData.studentStatsMap) this.memoryData.studentStatsMap = {};
+    return this.memoryData.studentStatsMap[userId] || null;
+  }
+
+  public setStudentStatsForUser(userId: string, stats: any): any {
+    if (!this.memoryData.studentStatsMap) this.memoryData.studentStatsMap = {};
+    this.memoryData.studentStatsMap[userId] = stats;
+    this.commit();
+    return stats;
+  }
+
   public restore(data: DatabaseSchema) {
-    this.memoryData = data;
+    this.memoryData = this.normalizeSchema(data);
     this.commit();
   }
 }

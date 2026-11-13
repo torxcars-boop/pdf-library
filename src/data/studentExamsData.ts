@@ -1,5 +1,6 @@
 import { Exam, StudentAchievement, StudentStats } from '../types';
 import { getDownloadedBooks, getDownloadedBooksCount } from '../utils/contentStore';
+import { evaluateAndNotifyProgress, getDefaultBadgesList } from '../utils/gamificationStore';
 
 export const EGYPT_STUDENT_EXAMS: Exam[] = [
   // =========================================================================
@@ -979,61 +980,7 @@ export const EGYPT_STUDENT_EXAMS: Exam[] = [
   }
 ];
 
-export const DEFAULT_STUDENT_ACHIEVEMENTS: StudentAchievement[] = [
-  {
-    id: 'ach-first-exam',
-    title: 'أول خطوة في التفوق',
-    description: 'أكملت أول اختبار تدريبي لك في المنصة بنجاح.',
-    icon: '🎯',
-    unlocked: true,
-    unlockedAt: 'منذ يومين',
-    progress: 100
-  },
-  {
-    id: 'ach-chem-pro',
-    title: 'فارس الكيمياء المصرية',
-    description: 'حققت نسبة 85% أو أكثر في امتحانات الكيمياء.',
-    icon: '⚗️',
-    unlocked: true,
-    unlockedAt: 'أمس',
-    progress: 100
-  },
-  {
-    id: 'ach-phys-genius',
-    title: 'بطل الفيزياء والمسائل',
-    description: 'أكملت اختبار الفيزياء المتقدم بنتيجة ممتازة.',
-    icon: '⚡',
-    unlocked: false,
-    progress: 75
-  },
-  {
-    id: 'ach-streak-3',
-    title: 'شعلة الالتزام المستمر',
-    description: 'حققت 3 أيام دراسية متتالية من التحصيل وحل النماذج.',
-    icon: '🔥',
-    unlocked: true,
-    unlockedAt: 'اليوم',
-    progress: 100
-  },
-  {
-    id: 'ach-book-master',
-    title: 'قارئ المناهج المعتمد',
-    description: 'قمت بتحميل واستعراض المناهج الدراسية الرسمية.',
-    icon: '📚',
-    unlocked: true,
-    unlockedAt: 'هذا الأسبوع',
-    progress: 100
-  },
-  {
-    id: 'ach-english-speaker',
-    title: 'متحدث الإنجليزية الماهر',
-    description: 'تدربت على النطق الإنجليزي الذكي وأتقنت مخارج الكلمات.',
-    icon: '🗣️',
-    unlocked: true,
-    unlockedAt: 'اليوم',
-    progress: 100
-  }
-];
+export const DEFAULT_STUDENT_ACHIEVEMENTS: StudentAchievement[] = getDefaultBadgesList();
 
 const LOCAL_STORAGE_STATS_KEY = 'arm_student_stats_v2';
 
@@ -1047,23 +994,25 @@ export const getInitialStudentStats = (userId?: string): StudentStats => {
     const saved = localStorage.getItem(storageKey);
     if (saved) {
       const parsed = JSON.parse(saved);
-      return {
+      const merged: StudentStats = {
         ...parsed,
         downloadedBooksCount: Math.max(parsed.downloadedBooksCount || 0, downloadedCount),
+        booksReadCount: Math.max(parsed.booksReadCount || 0, parsed.downloadedBooksCount || 0, downloadedCount),
         downloadedBooksList: downloadedList.length > 0 ? downloadedList : (parsed.downloadedBooksList || []),
       };
+      return evaluateAndNotifyProgress(merged, userId, 'progress', false);
     }
   } catch (e) {
     console.error('Failed to parse student stats from localStorage', e);
   }
 
   // 100% Real authentic zero-based statistics for real students
-  return {
+  const fresh: StudentStats = {
     totalExamsTaken: 0,
     passedExams: 0,
     averageScore: 0,
     totalStudyMinutes: 0,
-    booksReadCount: 0,
+    booksReadCount: downloadedCount,
     downloadedBooksCount: downloadedCount,
     downloadedBooksList: downloadedList,
     summariesReviewedCount: 0,
@@ -1072,17 +1021,81 @@ export const getInitialStudentStats = (userId?: string): StudentStats => {
     lastActiveDate: new Date().toISOString(),
     subjectPerformance: {},
     recentExams: [],
-    achievements: DEFAULT_STUDENT_ACHIEVEMENTS.map(ach => ({
-      ...ach,
-      unlocked: false,
-      unlockedAt: undefined,
-      progress: 0
-    }))
+    achievements: getDefaultBadgesList()
   };
+
+  return evaluateAndNotifyProgress(fresh, userId, 'progress', false);
 };
 
 export const getStudentStats = (userId?: string): StudentStats => {
   return getInitialStudentStats(userId);
+};
+
+export const EXAMS_UPDATED_EVENT = 'arm_exams_updated';
+
+function dispatchExamsUpdated() {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(EXAMS_UPDATED_EVENT, { detail: { timestamp: Date.now() } }));
+  }
+}
+
+export const pushUserStatsToServer = async (stats: StudentStats, tokenOverride?: string): Promise<void> => {
+  if (typeof window === 'undefined') return;
+  const token = tokenOverride || localStorage.getItem('arm_user_token') || '';
+  if (!token) return;
+  try {
+    await fetch('/api/user/stats', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ stats }),
+    });
+  } catch {
+    // offline fallback
+  }
+};
+
+export const syncUserStatsFromServer = async (userId: string, token: string): Promise<StudentStats> => {
+  const localStats = getInitialStudentStats(userId);
+  if (!token) return localStats;
+  try {
+    const res = await fetch('/api/user/stats', {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const serverStats = data.stats as StudentStats | null;
+      if (serverStats) {
+        const merged: StudentStats = {
+          ...(serverStats.totalExamsTaken >= localStats.totalExamsTaken ? serverStats : localStats),
+          totalExamsTaken: Math.max(serverStats.totalExamsTaken || 0, localStats.totalExamsTaken || 0),
+          passedExams: Math.max(serverStats.passedExams || 0, localStats.passedExams || 0),
+          totalStudyMinutes: Math.max(serverStats.totalStudyMinutes || 0, localStats.totalStudyMinutes || 0),
+          downloadedBooksCount: Math.max(serverStats.downloadedBooksCount || 0, localStats.downloadedBooksCount || 0),
+          booksReadCount: Math.max(serverStats.booksReadCount || 0, localStats.booksReadCount || 0),
+          downloadedBooksList:
+            (serverStats.downloadedBooksList?.length || 0) >= (localStats.downloadedBooksList?.length || 0)
+              ? (serverStats.downloadedBooksList || [])
+              : (localStats.downloadedBooksList || []),
+          recentExams:
+            (serverStats.recentExams?.length || 0) >= (localStats.recentExams?.length || 0)
+              ? (serverStats.recentExams || [])
+              : (localStats.recentExams || []),
+        };
+        const evaluated = evaluateAndNotifyProgress(merged, userId, 'progress', false);
+        saveStudentStats(evaluated, userId);
+        return evaluated;
+      } else if (localStats.totalExamsTaken > 0 || (localStats.downloadedBooksCount || 0) > 0 || localStats.totalStudyMinutes > 0) {
+        pushUserStatsToServer(localStats, token).catch(() => {});
+      }
+    }
+  } catch {
+    // offline fallback
+  }
+  return localStats;
 };
 
 export const saveStudentStats = (stats: StudentStats, userId?: string): void => {
@@ -1160,23 +1173,7 @@ export const recordExamSubmission = (
 
   const newRecentExams = [newSubmission, ...currentStats.recentExams.slice(0, 9)];
 
-  const updatedAchievements = currentStats.achievements.map(ach => {
-    if (ach.id === 'ach-first-exam') {
-      return { ...ach, unlocked: true, unlockedAt: 'تم الإنجاز', progress: 100 };
-    }
-    if (ach.id === 'ach-streak-3') {
-      return { ...ach, unlocked: true, unlockedAt: 'تم الإنجاز', progress: 100 };
-    }
-    if (ach.id === 'ach-chem-pro' && subjectKey === 'كيمياء' && submission.percentage >= 85) {
-      return { ...ach, unlocked: true, unlockedAt: 'اليوم', progress: 100 };
-    }
-    if (ach.id === 'ach-phys-genius' && subjectKey === 'فيزياء' && submission.percentage >= 80) {
-      return { ...ach, unlocked: true, unlockedAt: 'اليوم', progress: 100 };
-    }
-    return ach;
-  });
-
-  const updatedStats: StudentStats = {
+  const candidateStats: StudentStats = {
     ...currentStats,
     totalExamsTaken: newTotalExams,
     passedExams: newPassedExams,
@@ -1186,10 +1183,13 @@ export const recordExamSubmission = (
     lastActiveDate: new Date().toISOString(),
     recentExams: newRecentExams,
     subjectPerformance: updatedSubjectPerformance,
-    achievements: updatedAchievements
+    achievements: currentStats.achievements
   };
 
+  const updatedStats = evaluateAndNotifyProgress(candidateStats, userId, 'exam', true);
+
   saveStudentStats(updatedStats, userId);
+  pushUserStatsToServer(updatedStats).catch(() => {});
   return updatedStats;
 };
 
@@ -1217,6 +1217,33 @@ export const getCustomStudentExams = (): Exam[] => {
   return [];
 };
 
+export const syncExamsFromServer = (customExams?: Exam[] | null, deletedExamIds?: string[] | null) => {
+  try {
+    if (Array.isArray(deletedExamIds)) {
+      localStorage.setItem(LOCAL_STORAGE_DELETED_EXAMS, JSON.stringify(deletedExamIds));
+    }
+    if (Array.isArray(customExams)) {
+      localStorage.setItem(LOCAL_STORAGE_CUSTOM_EXAMS, JSON.stringify(customExams));
+    }
+    dispatchExamsUpdated();
+  } catch (e) {
+    console.error('Error syncing exams from server', e);
+  }
+};
+
+export const fetchExamsFromServer = async (): Promise<Exam[]> => {
+  try {
+    const res = await fetch('/api/exams', { cache: 'no-store' });
+    if (res.ok) {
+      const data = await res.json();
+      syncExamsFromServer(data.customExams, data.deletedExamIds);
+    }
+  } catch {
+    // offline fallback
+  }
+  return getAllStudentExams();
+};
+
 export const getAllStudentExams = (): Exam[] => {
   const deletedIds = new Set(getDeletedExamIds());
   const customExams = getCustomStudentExams();
@@ -1234,18 +1261,35 @@ export const getAllStudentExams = (): Exam[] => {
   return Array.from(uniqueMap.values());
 };
 
-export const addCustomStudentExam = (exam: Exam): Exam[] => {
+export const addCustomStudentExam = (exam: Exam, adminTokenOverride?: string): Exam[] => {
   try {
     const currentCustom = getCustomStudentExams();
     const updated = [exam, ...currentCustom.filter(e => e.id !== exam.id)];
     localStorage.setItem(LOCAL_STORAGE_CUSTOM_EXAMS, JSON.stringify(updated));
+    const deleted = getDeletedExamIds().filter(id => id !== exam.id);
+    localStorage.setItem(LOCAL_STORAGE_DELETED_EXAMS, JSON.stringify(deleted));
+    dispatchExamsUpdated();
+
+    if (typeof window !== 'undefined') {
+      const token = adminTokenOverride || localStorage.getItem('arm_admin_token') || '';
+      if (token) {
+        fetch('/api/exams', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(exam),
+        }).catch(() => {});
+      }
+    }
   } catch (e) {
     console.error('Failed to add custom exam', e);
   }
   return getAllStudentExams();
 };
 
-export const deleteStudentExam = (examId: string): Exam[] => {
+export const deleteStudentExam = (examId: string, adminTokenOverride?: string): Exam[] => {
   try {
     const deleted = getDeletedExamIds();
     if (!deleted.includes(examId)) {
@@ -1255,6 +1299,17 @@ export const deleteStudentExam = (examId: string): Exam[] => {
     const currentCustom = getCustomStudentExams();
     const filtered = currentCustom.filter(e => e.id !== examId);
     localStorage.setItem(LOCAL_STORAGE_CUSTOM_EXAMS, JSON.stringify(filtered));
+    dispatchExamsUpdated();
+
+    if (typeof window !== 'undefined') {
+      const token = adminTokenOverride || localStorage.getItem('arm_admin_token') || '';
+      if (token) {
+        fetch(`/api/exams/${encodeURIComponent(examId)}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        }).catch(() => {});
+      }
+    }
   } catch (e) {
     console.error('Failed to delete student exam', e);
   }

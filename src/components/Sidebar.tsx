@@ -13,7 +13,7 @@ import {
   X, 
   ChevronLeft,
   User as UserIcon,
-  Zap,
+  Heart,
   Sun,
   Moon
 } from 'lucide-react';
@@ -56,7 +56,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const navigationItems = [
     { id: 'all', label: 'الرئيسية (كافة المحتويات)', icon: Home, badge: null },
     { id: 'dashboard', label: 'لوحة تحكم وإحصائيات الطالب', icon: BarChart3, badge: 'إحصائياتك' },
-    { id: 'pricing', label: 'الاشتراك الاختياري (50 ج.م)', icon: Zap, badge: 'مميزات كاملة 🔥' },
+    { id: 'pricing', label: 'دعم المنصة (اختياري)', icon: Heart, badge: 'مجانية 100% ❤️' },
     { id: 'student-books', label: 'كتب ومناهج الطلاب', icon: BookOpen, badge: '3 إعدادي - 3 ثانوي' },
     { id: 'exams', label: 'بنك الامتحانات والاختبارات', icon: GraduationCap, badge: `${stats.totalExamsTaken} منجز` },
     { id: 'english-ai', label: 'معلم نطق الإنجليزية بالذكاء الاصطناعي', icon: Volume2, badge: 'AI جديد ✨' },

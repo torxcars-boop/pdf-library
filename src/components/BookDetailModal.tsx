@@ -11,11 +11,11 @@ import { RatingStars } from './RatingStars';
 import { 
   recordBookDownload, 
   getRealDownloads, 
+  getRealViews,
   incrementRealDownload, 
   incrementRealView 
 } from '../utils/contentStore';
 import { getItemRatingStats } from '../utils/reviewsStore';
-import { isEducationalFeatureLocked } from '../utils/subscriptionStore';
 import { resolveBookPdfUrl, triggerPdfDownload } from '../utils/pdfStorage';
 import { CommentsSection } from './CommentsSection';
 import { ReviewsSection } from './ReviewsSection';
@@ -49,17 +49,33 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
   const [resolvedReaderUrl, setResolvedReaderUrl] = useState<string>('');
   const [readerError, setReaderError] = useState<string | null>(null);
 
+  const [ratingTick, setRatingTick] = useState(0);
+
   useEffect(() => {
     if (book?.id) {
-      const views = incrementRealView('book', book.id);
+      const views = incrementRealView('book', book.id, book.views || 0);
       setViewCount(views);
-      setDownloadCount(getRealDownloads(book.id, 0));
+      setDownloadCount(getRealDownloads(book.id, book.downloads || 0));
       setShowReader(false);
       setResolvedReaderUrl('');
       setReaderError(null);
       fetch(`/api/items/book/${book.id}/view`, { method: 'POST' }).catch(() => {});
     }
   }, [book?.id]);
+
+  // Keep view/download counts in sync when real-time server sync updates book props
+  useEffect(() => {
+    if (book?.id) {
+      setViewCount((prev) => Math.max(prev, getRealViews('book', book.id, book.views || 0), book.views || 0));
+      setDownloadCount((prev) => Math.max(prev, getRealDownloads(book.id, book.downloads || 0), book.downloads || 0));
+    }
+  }, [book?.id, book?.views, book?.downloads]);
+
+  useEffect(() => {
+    const onRev = () => setRatingTick((t) => t + 1);
+    window.addEventListener('arm_reviews_updated', onRev);
+    return () => window.removeEventListener('arm_reviews_updated', onRev);
+  }, []);
 
   // Resolve PDF URL for inline reader when opened and clean up created blob URLs
   useEffect(() => {
@@ -72,6 +88,10 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
         .then(({ url, isObjectUrl }) => {
           if (!active) {
             if (isObjectUrl && url) URL.revokeObjectURL(url);
+            return;
+          }
+          if (!url) {
+            setReaderError('ملف الكتاب غير متوفر للمعاينة المباشرة على هذا الجهاز. يرجى إعادة رفع الكتاب من لوحة الإدارة برابط أو ملف PDF صالح.');
             return;
           }
           if (isObjectUrl && url) {
@@ -96,21 +116,22 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
 
   if (!book) return null;
 
-  const realRating = getItemRatingStats(book.id, 'book');
-  const isLocked = isEducationalFeatureLocked(user);
+  void ratingTick;
+  const reviewStats = getItemRatingStats(book.id, 'book');
+  const serverCount = book.ratingCount || 0;
+  const serverRating = book.rating || 0;
+  const effectiveRatingCount = Math.max(reviewStats.totalReviews, serverCount);
+  const effectiveAverageRating =
+    reviewStats.totalReviews > 0 && serverCount > reviewStats.totalReviews
+      ? Math.round((((reviewStats.averageRating * reviewStats.totalReviews) + (serverRating * (serverCount - reviewStats.totalReviews))) / serverCount) * 10) / 10
+      : serverCount > 0
+        ? serverRating
+        : reviewStats.averageRating;
 
   const handleDownload = async () => {
-    if (isLocked) {
-      if (onOpenSubscriptions) {
-        onClose();
-        onOpenSubscriptions();
-      }
-      return;
-    }
-
     setDownloading(true);
-    recordBookDownload(book);
-    const newCount = incrementRealDownload(book.id);
+    recordBookDownload(book, user?.id);
+    const newCount = incrementRealDownload(book.id, book.downloads || 0);
     setDownloadCount(newCount);
     void fetch(`/api/books/${book.id}/download`, { method: 'POST' }).catch(() => {});
     try {
@@ -180,18 +201,18 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
             <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-zinc-950/60 border border-zinc-200 dark:border-zinc-800 rounded-2xl">
               <div>
                 <span className="text-xs font-bold text-amber-700 dark:text-amber-300 block mb-1">
-                  ⭐ تقييم الكتاب: {realRating.totalReviews > 0 ? `(${realRating.averageRating} من 5)` : '(لم يُقيّم بعد)'}
+                  ⭐ تقييم الكتاب: {effectiveRatingCount > 0 ? `(${effectiveAverageRating} من 5)` : '(لم يُقيّم بعد)'}
                 </span>
                 <RatingStars
-                  rating={realRating.averageRating}
-                  ratingCount={realRating.totalReviews}
+                  rating={effectiveAverageRating}
+                  ratingCount={effectiveRatingCount}
                   size="md"
                   interactive={true}
                   onRate={onRate}
                 />
               </div>
               <span className="text-[11px] text-zinc-500">
-                {realRating.totalReviews > 0 ? `${realRating.totalReviews} تقييم حقيقي` : 'كن أول طالب يقيّم هذا الكتاب'}
+                {effectiveRatingCount > 0 ? `${effectiveRatingCount} تقييم حقيقي` : 'كن أول طالب يقيّم هذا الكتاب'}
               </span>
             </div>
 
@@ -222,16 +243,7 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
               </button>
 
               <button
-                onClick={() => {
-                  if (isLocked) {
-                    if (onOpenSubscriptions) {
-                      onClose();
-                      onOpenSubscriptions();
-                    }
-                    return;
-                  }
-                  setShowReader(!showReader);
-                }}
+                onClick={() => setShowReader(!showReader)}
                 className="py-2.5 px-4 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-amber-700 dark:text-amber-300 font-bold text-xs rounded-xl border border-zinc-200 dark:border-zinc-700 transition flex items-center gap-1.5"
               >
                 <BookOpen className="w-4 h-4" />

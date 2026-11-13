@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Exam, ExamQuestion, ExamSubmission, StudentStats, User, UserSubscription } from '../types';
-import { getAllStudentExams, recordExamSubmission } from '../data/studentExamsData';
-import { isEducationalFeatureLocked } from '../utils/subscriptionStore';
-import { TrialCountdownBanner } from './TrialCountdownBanner';
+import { getAllStudentExams, recordExamSubmission, EXAMS_UPDATED_EVENT, fetchExamsFromServer } from '../data/studentExamsData';
+import { REALTIME_SYNC_EVENT } from '../utils/realtimeSync';
 import { 
   GraduationCap, 
   Clock, 
@@ -24,8 +23,7 @@ import {
   Play,
   BarChart3,
   Timer,
-  Zap,
-  CreditCard
+  Heart
 } from 'lucide-react';
 
 interface StudentExamsViewProps {
@@ -49,11 +47,30 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
   const [selectedGrade, setSelectedGrade] = useState<string>('الكل');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [examsList, setExamsList] = useState<Exam[]>(getAllStudentExams);
-  const [showQuotaModal, setShowQuotaModal] = useState<boolean>(false);
   const [examAccessNotice, setExamAccessNotice] = useState<string | null>(null);
 
   useEffect(() => {
     setExamsList(getAllStudentExams());
+    void fetchExamsFromServer();
+
+    const handleExamsSync = () => {
+      setExamsList(getAllStudentExams());
+    };
+    const handleRealtime = (e: Event) => {
+      const detail = (e as CustomEvent<{ scope?: string }>).detail;
+      if (!detail?.scope || detail.scope === 'exams' || detail.scope === 'all') {
+        void fetchExamsFromServer().then(() => setExamsList(getAllStudentExams()));
+      }
+    };
+
+    window.addEventListener(EXAMS_UPDATED_EVENT, handleExamsSync);
+    window.addEventListener('arm_content_sync', handleExamsSync);
+    window.addEventListener(REALTIME_SYNC_EVENT, handleRealtime);
+    return () => {
+      window.removeEventListener(EXAMS_UPDATED_EVENT, handleExamsSync);
+      window.removeEventListener('arm_content_sync', handleExamsSync);
+      window.removeEventListener(REALTIME_SYNC_EVENT, handleRealtime);
+    };
   }, []);
 
   // Active taking exam state
@@ -75,46 +92,16 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
   const grades = ['الكل', 'الصف الثالث الإعدادي', 'الصف الأول الثانوي', 'الصف الثاني الثانوي', 'الصف الثالث الثانوي'];
   const subjects = ['الكل', 'كيمياء', 'فيزياء', 'أحياء', 'علوم', 'لغة عربية', 'رياضيات', 'لغة إنجليزية', 'جيولوجيا', 'دراسات'];
 
-  // Start Exam handler with subscription quota and access check
+  // Start Exam handler (100% free access for all students; honors optional student-specific targeting)
   const handleStartExam = (exam: Exam) => {
-    // Check if 10-Day Free Trial expired or features locked
-    if (isEducationalFeatureLocked(currentUser)) {
-      setShowQuotaModal(true);
-      return;
-    }
-
     setExamAccessNotice(null);
 
-    // Check if exam is assigned to specific students
+    // Check if exam is assigned to specific students by email
     if (exam.assignedStudentEmails && exam.assignedStudentEmails.length > 0) {
       const studentEmail = currentUser?.email?.toLowerCase();
       const isAllowed = studentEmail && exam.assignedStudentEmails.some(e => e.toLowerCase() === studentEmail);
       if (!isAllowed) {
         setExamAccessNotice('هذا الامتحان مخصص لطلاب محددين بالاسم من قبل المشرف.');
-        return;
-      }
-    }
-
-    // Check if exam is locked to specific subscription packages
-    if (exam.allowedPlans && exam.allowedPlans.length > 0 && !exam.allowedPlans.includes('all')) {
-      const studentPlan = currentUser?.subscription?.planId || 'free_trial';
-      if (!exam.allowedPlans.includes(studentPlan as any)) {
-        setExamAccessNotice('هذا الامتحان التدريبي متاح لمشتركي باقة التفوق الشاملة (50 ج.م). يمكنك الترقية الآن للاستفادة منه.');
-        onOpenSubscriptions?.();
-        return;
-      }
-    }
-
-    // Check if 10-Day Free Trial expired
-    if (currentUser?.subscription?.isTrial && (currentUser.subscription.trialDaysLeft ?? 0) <= 0) {
-      setShowQuotaModal(true);
-      return;
-    }
-
-    // If student is subscribed to a limited weekly package (e.g. 50 EGP with 2 exams/week or Trial with 2 exams/week)
-    if (currentUser?.subscription?.status === 'active' && currentUser.subscription.maxExamsPerWeek > 0) {
-      if (currentUser.subscription.examsRemainingThisWeek <= 0) {
-        setShowQuotaModal(true);
         return;
       }
     }
@@ -215,23 +202,13 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
       feedback
     };
 
-    // Record submission into stats scoped per student ID
+    // Record submission into stats scoped per student ID (automatically updates badges & levels)
     const updatedStats = recordExamSubmission(stats, {
       ...submission,
       totalQuestions: questions.length,
       correctQuestions: correctCount
     }, currentUser?.id);
     onUpdateStats(updatedStats);
-
-    // Deduct from weekly exam quota if on a limited plan
-    if (currentUser?.subscription?.status === 'active' && currentUser.subscription.maxExamsPerWeek > 0) {
-      const nextRemaining = Math.max(0, (currentUser.subscription.examsRemainingThisWeek ?? currentUser.subscription.maxExamsPerWeek) - 1);
-      const updatedSub: UserSubscription = {
-        ...currentUser.subscription,
-        examsRemainingThisWeek: nextRemaining
-      };
-      onUpdateUserSubscription?.(updatedSub);
-    }
 
     setExamResult(submission);
     setViewingResultForExam(activeExam);
@@ -848,57 +825,33 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
         </div>
       </div>
 
-      {/* Subscription Status & Quota Banner */}
+      {/* 100% Free Exams Banner + Optional Support */}
       <div className="p-4 sm:p-5 rounded-3xl bg-white dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 flex flex-col sm:flex-row items-center justify-between gap-4 text-right shadow-sm dark:shadow-none">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-600 dark:text-amber-400 shrink-0">
-            <Zap className="w-5 h-5" />
+          <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-600 dark:text-emerald-400 shrink-0">
+            <CheckCircle2 className="w-5 h-5" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs font-bold text-zinc-900 dark:text-zinc-200">
-                {currentUser?.subscription?.isTrial ? (
-                  (currentUser.subscription.trialDaysLeft ?? 0) > 0 ? (
-                    <>أنت في <strong className="text-amber-600 dark:text-amber-400">الفترة التجريبية المجانية (10 أيام)</strong> — متبقي: {currentUser.subscription.trialDaysLeft} أيام</>
-                  ) : (
-                    <span className="text-rose-600 dark:text-rose-400 font-bold">انتهت الفترة التجريبية المجانية (10 أيام)</span>
-                  )
-                ) : currentUser?.subscription?.status === 'active' ? (
-                  `باقة الاشتراك الشهرية: ${currentUser.subscription.planName}`
-                ) : (
-                  'باقة التفوق الشاملة الاختيارية (50 ج.م شهرياً)'
-                )}
+                جميع الامتحانات والنماذج الوزارية متاحة مجاناً 100% وبلا حدود 🌟
               </span>
-              {currentUser?.subscription?.status === 'active' && (
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
-                  {currentUser.subscription.isTrial ? 'فترة تجريبية' : 'اشتراك شهري نشط'}
-                </span>
-              )}
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                مجانية للجميع
+              </span>
             </div>
             <p className="text-[11px] text-zinc-600 dark:text-zinc-400 mt-0.5">
-              {currentUser?.subscription?.status === 'active' ? (
-                currentUser.subscription.maxExamsPerWeek > 0 ? (
-                  <span>
-                    الرصيد المتاح لهذا الأسبوع: <strong className="text-amber-700 dark:text-amber-400">{currentUser.subscription.examsRemainingThisWeek}</strong> من أصل <strong className="text-zinc-900 dark:text-zinc-200">{currentUser.subscription.maxExamsPerWeek}</strong> امتحانات أسبوعياً (تتجدد أسبوعياً).
-                  </span>
-                ) : (
-                  <span className="text-emerald-700 dark:text-emerald-400 font-bold">
-                    رصيد امتحانات واختبارات غير محدود طوال مدة اشتراكك 🌟
-                  </span>
-                )
-              ) : (
-                <span>يمكنك الاستمرار بالتجربة المجانية أو الاشتراك اختيارياً في باقة التفوق الشاملة بـ 50 ج.م فقط لامتحانات مفتوحة.</span>
-              )}
+              عند اجتياز أي امتحان بنجاح تحصل على نقاط خبرة (XP) وتفتح شارات التفوق وترتقي لمستويات جديدة تلقائياً!
             </p>
           </div>
         </div>
 
         <button
           onClick={onOpenSubscriptions}
-          className="shrink-0 flex items-center gap-2 px-4 py-2 rounded-2xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs shadow-md shadow-amber-500/20 transition active:scale-95"
+          className="shrink-0 flex items-center gap-2 px-4 py-2 rounded-2xl bg-amber-500/15 hover:bg-amber-500 hover:text-zinc-950 text-amber-800 dark:text-amber-300 border border-amber-500/35 font-bold text-xs transition active:scale-95"
         >
-          <CreditCard className="w-4 h-4" />
-          <span>{currentUser?.subscription?.isTrial ? 'اشترك بـ 50 ج.م (اختياري)' : 'إدارة الباقة (50 ج.م)'}</span>
+          <Heart className="w-4 h-4 text-rose-500 dark:text-rose-400" />
+          <span>ادعم المنصة (اختياري)</span>
         </button>
       </div>
 
@@ -1051,45 +1004,6 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
           <GraduationCap className="w-12 h-12 text-zinc-400 dark:text-zinc-600 mx-auto mb-3" />
           <h3 className="text-base font-bold text-zinc-700 dark:text-zinc-300 mb-1">لم يتم العثور على امتحانات مطابقة</h3>
           <p className="text-xs text-zinc-500">جرب البحث بكلمات أخرى أو تغيير تصنيف المادة.</p>
-        </div>
-      )}
-
-      {/* Quota Exhausted Modal */}
-      {showQuotaModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
-          <div className="bg-white dark:bg-zinc-950 border border-amber-500/40 rounded-3xl max-w-md w-full p-6 text-right shadow-2xl relative">
-            <div className="w-12 h-12 rounded-2xl bg-amber-500/15 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center mx-auto mb-4">
-              <Zap className="w-6 h-6" />
-            </div>
-
-            <h3 className="text-lg font-black text-zinc-900 dark:text-zinc-100 text-center mb-2">
-              {isEducationalFeatureLocked(currentUser) ? 'انتهت الفترة التجريبية المجانية!' : 'لقد استهلكت رصيد امتحاناتك لهذا الأسبوع!'}
-            </h3>
-            
-            <p className="text-xs text-zinc-600 dark:text-zinc-400 text-center leading-relaxed mb-6">
-              اشترك الآن اختيارياً في <strong className="text-amber-700 dark:text-amber-400">باقة التفوق الشاملة (50 ج.م فقط / شهر)</strong> للحصول على امتحانات مفتوحة بلا حدود طوال الشهر وتنزيل جميع الكتب والملخصات!
-            </p>
-
-            <div className="space-y-3">
-              <button
-                onClick={() => {
-                  setShowQuotaModal(false);
-                  onOpenSubscriptions?.();
-                }}
-                className="w-full py-3 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-400 hover:brightness-110 text-zinc-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition active:scale-95 flex items-center justify-center gap-2"
-              >
-                <CreditCard className="w-4 h-4" />
-                <span>تفعيل باقة التفوق الشاملة (50 ج.م)</span>
-              </button>
-
-              <button
-                onClick={() => setShowQuotaModal(false)}
-                className="w-full py-2.5 rounded-2xl bg-zinc-100 dark:bg-zinc-900 hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-400 font-bold text-xs border border-zinc-200 dark:border-zinc-800 transition"
-              >
-                إغلاق
-              </button>
-            </div>
-          </div>
         </div>
       )}
 

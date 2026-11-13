@@ -5,8 +5,11 @@ import {
   addReview, 
   toggleApproveReview, 
   deleteReview,
-  getItemRatingStats
+  getItemRatingStats,
+  syncReviewsFromServer,
+  REVIEWS_UPDATED_EVENT
 } from '../utils/reviewsStore';
+import { REALTIME_SYNC_EVENT } from '../utils/realtimeSync';
 import { 
   Star, 
   Send, 
@@ -60,10 +63,22 @@ export const ReviewsSection: React.FC<ReviewsSectionProps> = ({
 
   useEffect(() => {
     refreshReviews();
+    void syncReviewsFromServer(itemId, itemType);
 
     const handleSync = () => refreshReviews();
-    window.addEventListener('arm_reviews_updated', handleSync);
-    return () => window.removeEventListener('arm_reviews_updated', handleSync);
+    const handleRealtime = (e: Event) => {
+      const detail = (e as CustomEvent<{ scope?: string }>).detail;
+      if (!detail?.scope || detail.scope === 'reviews' || detail.scope === 'all') {
+        void syncReviewsFromServer(itemId, itemType);
+      }
+    };
+
+    window.addEventListener(REVIEWS_UPDATED_EVENT, handleSync);
+    window.addEventListener(REALTIME_SYNC_EVENT, handleRealtime);
+    return () => {
+      window.removeEventListener(REVIEWS_UPDATED_EVENT, handleSync);
+      window.removeEventListener(REALTIME_SYNC_EVENT, handleRealtime);
+    };
   }, [itemId, itemType]);
 
   const handleSubmitReview = (e: React.FormEvent) => {

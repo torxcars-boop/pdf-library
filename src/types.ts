@@ -1,5 +1,5 @@
 export interface UserSubscription {
-  planId: 'free_trial' | 'free' | 'basic_50' | 'pro_100' | 'vip_200';
+  planId: 'free_trial' | 'free' | 'supporter' | 'basic_50' | 'pro_100' | 'vip_200';
   planName: string;
   status: 'active' | 'expired' | 'suspended' | 'none';
   billingPeriod?: 'monthly' | 'trial';
