@@ -604,6 +604,9 @@ app.post('/api/admin/security/change-password', requireAdminAuth, (req: Request,
   }
 
   db.setAdminPassword(newPassword);
+  activeAdminTokens.clear();
+  const nextToken = signAdminToken(adminConfig.username, newPassword);
+  activeAdminTokens.add(nextToken);
 
   db.addAuditLog({
     type: 'password_change',
@@ -615,6 +618,7 @@ app.post('/api/admin/security/change-password', requireAdminAuth, (req: Request,
 
   res.json({
     success: true,
+    token: nextToken,
     message: 'تم تغيير كلمة مرور الأدمن بنجاح! تم تسجيل العملية في سجل الأمان.',
   });
 });
@@ -648,7 +652,10 @@ app.post('/api/admin/security/clear-logs', requireAdminAuth, (req: Request, res:
 
 // Admin: Manage Users (عرض، تعديل، حظر المستخدمين)
 app.get('/api/admin/users', requireAdminAuth, (req: Request, res: Response) => {
-  const users = db.getUsers().map(sanitizeUserForClient);
+  const deletedUsers = new Set(db.getDeletedIds().users.map(String));
+  const users = db.getUsers()
+    .filter(u => !deletedUsers.has(String(u.id)))
+    .map(sanitizeUserForClient);
   res.json({ users });
 });
 
@@ -686,14 +693,13 @@ app.delete('/api/admin/users/:id', requireAdminAuth, (req: Request, res: Respons
   const adminConfig = db.getAdminConfig();
 
   const user = db.getUserById(id);
-  if (!user) return res.status(404).json({ error: 'المستخدم غير موجود' });
-
   db.deleteUser(id);
+  db.mergeDeletedIds({ users: [String(id)] });
 
   db.addAuditLog({
     type: 'item_deleted',
     user: adminConfig.username,
-    details: `حذف حساب المستخدم ${user.name} (${user.email}) بشكل نهائي`,
+    details: `حذف حساب المستخدم ${user?.name || id} (${user?.email || 'حساب محلي'}) بشكل نهائي`,
     ip,
     status: 'danger',
   });
@@ -705,11 +711,12 @@ app.delete('/api/admin/users/:id', requireAdminAuth, (req: Request, res: Respons
 
 // Admin Stats Overview
 app.get('/api/admin/stats', requireAdminAuth, (req: Request, res: Response) => {
-  const books = db.getBooks();
-  const summaries = db.getSummaries();
-  const videos = db.getVideos();
-  const articles = db.getArticles();
-  const users = db.getUsers();
+  const deletedIds = db.getDeletedIds();
+  const books = db.getBooks().filter(b => !deletedIds.books.includes(Number(b.id)));
+  const summaries = db.getSummaries().filter(s => !deletedIds.summaries.includes(Number(s.id)));
+  const videos = db.getVideos().filter(v => !deletedIds.videos.includes(Number(v.id)));
+  const articles = db.getArticles().filter(a => !deletedIds.articles.includes(Number(a.id)));
+  const users = db.getUsers().filter(u => !deletedIds.users.includes(String(u.id)));
   const logs = db.getAuditLogs();
 
   const totalDownloads = books.reduce((acc, b) => acc + (b.downloads || 0), 0);
@@ -784,7 +791,8 @@ app.post('/api/admin/upload-pdf', requireAdminAuth, (req: Request, res: Response
 // BOOKS (PDFs)
 app.get('/api/books', (req: Request, res: Response) => {
   const { category, search, student } = req.query;
-  let books = db.getBooks();
+  const deletedBooks = db.getDeletedIds().books;
+  let books = db.getBooks().filter(b => !deletedBooks.includes(Number(b.id)));
 
   if (student === '1') {
     books = books.filter(b => b.is_student === 1);
@@ -978,7 +986,8 @@ app.post('/api/items/:type/:id/view', (req: Request, res: Response) => {
 // SUMMARIES
 app.get('/api/summaries', (req: Request, res: Response) => {
   const { search } = req.query;
-  let summaries = db.getSummaries();
+  const deletedSummaries = db.getDeletedIds().summaries;
+  let summaries = db.getSummaries().filter(s => !deletedSummaries.includes(Number(s.id)));
   if (search && typeof search === 'string') {
     const q = search.toLowerCase();
     summaries = summaries.filter(s => s.title.toLowerCase().includes(q));
@@ -1043,7 +1052,8 @@ app.delete('/api/summaries/:id', requireAdminAuth, (req: Request, res: Response)
 // VIDEOS
 app.get('/api/videos', (req: Request, res: Response) => {
   const { search } = req.query;
-  let videos = db.getVideos();
+  const deletedVideos = db.getDeletedIds().videos;
+  let videos = db.getVideos().filter(v => !deletedVideos.includes(Number(v.id)));
   if (search && typeof search === 'string') {
     const q = search.toLowerCase();
     videos = videos.filter(v => v.title.toLowerCase().includes(q));
@@ -1110,7 +1120,8 @@ app.delete('/api/videos/:id', requireAdminAuth, (req: Request, res: Response) =>
 // ARTICLES
 app.get('/api/articles', (req: Request, res: Response) => {
   const { search } = req.query;
-  let articles = db.getArticles();
+  const deletedArticles = db.getDeletedIds().articles;
+  let articles = db.getArticles().filter(a => !deletedArticles.includes(Number(a.id)));
   if (search && typeof search === 'string') {
     const q = search.toLowerCase();
     articles = articles.filter(a => 

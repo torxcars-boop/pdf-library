@@ -1220,10 +1220,16 @@ export const getCustomStudentExams = (): Exam[] => {
 export const syncExamsFromServer = (customExams?: Exam[] | null, deletedExamIds?: string[] | null) => {
   try {
     if (Array.isArray(deletedExamIds)) {
-      localStorage.setItem(LOCAL_STORAGE_DELETED_EXAMS, JSON.stringify(deletedExamIds));
+      const mergedDeleted = Array.from(new Set([
+        ...getDeletedExamIds(),
+        ...deletedExamIds.map(String),
+      ]));
+      localStorage.setItem(LOCAL_STORAGE_DELETED_EXAMS, JSON.stringify(mergedDeleted));
     }
     if (Array.isArray(customExams)) {
-      localStorage.setItem(LOCAL_STORAGE_CUSTOM_EXAMS, JSON.stringify(customExams));
+      const deletedSet = new Set(getDeletedExamIds());
+      const cleanCustom = customExams.filter(e => !deletedSet.has(e.id));
+      localStorage.setItem(LOCAL_STORAGE_CUSTOM_EXAMS, JSON.stringify(cleanCustom));
     }
     dispatchExamsUpdated();
   } catch (e) {
@@ -1261,35 +1267,46 @@ export const getAllStudentExams = (): Exam[] => {
   return Array.from(uniqueMap.values());
 };
 
-export const addCustomStudentExam = (exam: Exam, adminTokenOverride?: string): Exam[] => {
+export const addCustomStudentExam = async (
+  exam: Exam,
+  adminTokenOverride?: string
+): Promise<{ exams: Exam[]; unauthorized?: boolean }> => {
+  let unauthorized = false;
   try {
     const currentCustom = getCustomStudentExams();
     const updated = [exam, ...currentCustom.filter(e => e.id !== exam.id)];
     localStorage.setItem(LOCAL_STORAGE_CUSTOM_EXAMS, JSON.stringify(updated));
     const deleted = getDeletedExamIds().filter(id => id !== exam.id);
     localStorage.setItem(LOCAL_STORAGE_DELETED_EXAMS, JSON.stringify(deleted));
-    dispatchExamsUpdated();
 
     if (typeof window !== 'undefined') {
       const token = adminTokenOverride || localStorage.getItem('arm_admin_token') || '';
       if (token) {
-        fetch('/api/exams', {
+        const res = await fetch('/api/exams', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify(exam),
-        }).catch(() => {});
+        }).catch(() => null);
+        if (res && res.status === 401) {
+          unauthorized = true;
+        }
       }
     }
+    dispatchExamsUpdated();
   } catch (e) {
     console.error('Failed to add custom exam', e);
   }
-  return getAllStudentExams();
+  return { exams: getAllStudentExams(), unauthorized };
 };
 
-export const deleteStudentExam = (examId: string, adminTokenOverride?: string): Exam[] => {
+export const deleteStudentExam = async (
+  examId: string,
+  adminTokenOverride?: string
+): Promise<{ exams: Exam[]; unauthorized?: boolean }> => {
+  let unauthorized = false;
   try {
     const deleted = getDeletedExamIds();
     if (!deleted.includes(examId)) {
@@ -1299,19 +1316,22 @@ export const deleteStudentExam = (examId: string, adminTokenOverride?: string): 
     const currentCustom = getCustomStudentExams();
     const filtered = currentCustom.filter(e => e.id !== examId);
     localStorage.setItem(LOCAL_STORAGE_CUSTOM_EXAMS, JSON.stringify(filtered));
-    dispatchExamsUpdated();
 
     if (typeof window !== 'undefined') {
       const token = adminTokenOverride || localStorage.getItem('arm_admin_token') || '';
       if (token) {
-        fetch(`/api/exams/${encodeURIComponent(examId)}`, {
+        const res = await fetch(`/api/exams/${encodeURIComponent(examId)}`, {
           method: 'DELETE',
           headers: { Authorization: `Bearer ${token}` },
-        }).catch(() => {});
+        }).catch(() => null);
+        if (res && res.status === 401) {
+          unauthorized = true;
+        }
       }
     }
+    dispatchExamsUpdated();
   } catch (e) {
     console.error('Failed to delete student exam', e);
   }
-  return getAllStudentExams();
+  return { exams: getAllStudentExams(), unauthorized };
 };

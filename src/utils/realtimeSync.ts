@@ -63,11 +63,19 @@ function dispatchSyncEvent(scope: string, ts?: number, onlineCount?: number) {
   }
 }
 
-export async function syncBootstrapFromServer(): Promise<RealtimeBootstrapPayload | null> {
-  if (typeof window === 'undefined') return null;
-  if (inFlightBootstrap) return inFlightBootstrap;
+let bootstrapVersion = 0;
 
-  inFlightBootstrap = (async () => {
+export function invalidateBootstrapCache() {
+  bootstrapVersion += 1;
+  inFlightBootstrap = null;
+}
+
+export async function syncBootstrapFromServer(force = false): Promise<RealtimeBootstrapPayload | null> {
+  if (typeof window === 'undefined') return null;
+  if (!force && inFlightBootstrap) return inFlightBootstrap;
+
+  const requestVersion = ++bootstrapVersion;
+  const promise = (async () => {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 6000);
@@ -78,6 +86,9 @@ export async function syncBootstrapFromServer(): Promise<RealtimeBootstrapPayloa
       clearTimeout(timeout);
       if (!res.ok) return null;
       const data = (await res.json()) as RealtimeBootstrapPayload;
+      if (requestVersion !== bootstrapVersion) {
+        return null;
+      }
       if (typeof data.onlineCount === 'number') {
         dispatchPresence(data.onlineCount, lastPresenceState.connected);
       }
@@ -85,11 +96,14 @@ export async function syncBootstrapFromServer(): Promise<RealtimeBootstrapPayloa
     } catch {
       return null;
     } finally {
-      inFlightBootstrap = null;
+      if (requestVersion === bootstrapVersion) {
+        inFlightBootstrap = null;
+      }
     }
   })();
 
-  return inFlightBootstrap;
+  inFlightBootstrap = promise;
+  return promise;
 }
 
 function clearTimers() {

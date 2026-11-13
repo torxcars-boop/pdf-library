@@ -57,6 +57,13 @@ function isValidAdminToken(token) {
   return false;
 }
 
+function requireAdminAuth(req, res, next) {
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.replace('Bearer ', '') || req.query.auth;
+  if (isValidAdminToken(token)) return next();
+  return res.status(401).json({ error: 'غير مصرح: مطلوب صلاحية الأدمن' });
+}
+
 function getPool() {
   const dbUrl = process.env.DATABASE_URL || '';
   if (dbUrl && dbUrl.startsWith('postgres') && !dbUrl.includes('[YOUR-PASSWORD]')) {
@@ -444,23 +451,29 @@ app.post(['/api/admin/login', '/admin/login'], (req, res) => {
   return res.status(401).json({ error: 'بيانات غير صحيحة' });
 });
 
-app.get(['/api/admin/stats', '/admin/stats'], (req, res) => {
-  const totalDownloads = memoryStore.books.reduce((acc, b) => acc + (b.downloads || 0), 0);
-  const totalBookViews = memoryStore.books.reduce((acc, b) => acc + (b.views || 0), 0);
-  const totalVideoViews = memoryStore.videos.reduce((acc, v) => acc + (v.views || 0), 0);
-  const totalSummaryViews = memoryStore.summaries.reduce((acc, s) => acc + (s.views || 0), 0);
-  const totalArticleViews = memoryStore.articles.reduce((acc, a) => acc + (a.views || 0), 0);
+app.get(['/api/admin/stats', '/admin/stats'], requireAdminAuth, (req, res) => {
+  const visibleBooks = memoryStore.books.filter(b => !deletedContentIds.books.has(Number(b.id)));
+  const visibleVideos = memoryStore.videos.filter(v => !deletedContentIds.videos.has(Number(v.id)));
+  const visibleSummaries = memoryStore.summaries.filter(s => !deletedContentIds.summaries.has(Number(s.id)));
+  const visibleArticles = memoryStore.articles.filter(a => !deletedContentIds.articles.has(Number(a.id)));
+  const visibleUsers = memoryStore.users.filter(u => !deletedContentIds.users.has(String(u.id)));
+
+  const totalDownloads = visibleBooks.reduce((acc, b) => acc + (b.downloads || 0), 0);
+  const totalBookViews = visibleBooks.reduce((acc, b) => acc + (b.views || 0), 0);
+  const totalVideoViews = visibleVideos.reduce((acc, v) => acc + (v.views || 0), 0);
+  const totalSummaryViews = visibleSummaries.reduce((acc, s) => acc + (s.views || 0), 0);
+  const totalArticleViews = visibleArticles.reduce((acc, a) => acc + (a.views || 0), 0);
   const totalViews = totalBookViews + totalVideoViews + totalSummaryViews + totalArticleViews;
 
   res.json({
     counts: {
-      books: memoryStore.books.length,
-      studentBooks: memoryStore.books.filter(b => b.is_student === 1).length,
-      videos: memoryStore.videos.length,
-      summaries: memoryStore.summaries.length,
-      articles: memoryStore.articles.length,
-      users: memoryStore.users.length,
-      activeUsers: memoryStore.users.filter(u => u.status === 'active').length,
+      books: visibleBooks.length,
+      studentBooks: visibleBooks.filter(b => b.is_student === 1).length,
+      videos: visibleVideos.length,
+      summaries: visibleSummaries.length,
+      articles: visibleArticles.length,
+      users: visibleUsers.length,
+      activeUsers: visibleUsers.filter(u => u.status === 'active').length,
       logsCount: memoryStore.auditLogs.length
     },
     analytics: {
@@ -471,6 +484,21 @@ app.get(['/api/admin/stats', '/admin/stats'], (req, res) => {
       securityStatus: 'نشط'
     }
   });
+});
+
+app.get(['/api/admin/backup', '/admin/backup'], requireAdminAuth, (req, res) => {
+  res.setHeader('Content-Disposition', `attachment; filename="luxury_library_backup_${Date.now()}.json"`);
+  res.setHeader('Content-Type', 'application/json');
+  res.send(JSON.stringify({
+    ...memoryStore,
+    deletedIds: {
+      books: Array.from(deletedContentIds.books),
+      summaries: Array.from(deletedContentIds.summaries),
+      videos: Array.from(deletedContentIds.videos),
+      articles: Array.from(deletedContentIds.articles),
+      users: Array.from(deletedContentIds.users),
+    },
+  }, null, 2));
 });
 
 app.post(['/api/books/:id/download', '/books/:id/download'], (req, res) => {
@@ -680,12 +708,13 @@ app.put(['/api/user/stats', '/user/stats'], (req, res) => {
 });
 
 // BOOKS CRUD
-app.post(['/api/books', '/books'], (req, res) => {
+app.post(['/api/books', '/books'], requireAdminAuth, (req, res) => {
   const { title, category, filepath, coverpath, is_student, grade, description } = req.body;
   if (!title || !filepath) {
     return res.status(400).json({ error: 'العنوان ورابط الملف مطلوبان' });
   }
-  const newId = memoryStore.books.length > 0 ? Math.max(...memoryStore.books.map(b => b.id)) + 1 : 1;
+  const newId = Math.max(0, ...memoryStore.books.map(b => Number(b.id) || 0), ...Array.from(deletedContentIds.books).map(Number)) + 1;
+  deletedContentIds.books.delete(newId);
   const newBook = {
     id: newId,
     title: title.trim(),
@@ -705,7 +734,7 @@ app.post(['/api/books', '/books'], (req, res) => {
   res.status(201).json({ book: newBook, message: 'تمت إضافة الكتاب بنجاح' });
 });
 
-app.put(['/api/books/:id', '/books/:id'], (req, res) => {
+app.put(['/api/books/:id', '/books/:id'], requireAdminAuth, (req, res) => {
   const id = Number(req.params.id);
   const idx = memoryStore.books.findIndex(b => b.id === id);
   if (idx === -1) return res.status(404).json({ error: 'الكتاب غير موجود' });
@@ -713,7 +742,7 @@ app.put(['/api/books/:id', '/books/:id'], (req, res) => {
   res.json({ book: memoryStore.books[idx], message: 'تم تحديث بيانات الكتاب بنجاح' });
 });
 
-app.delete(['/api/books/:id', '/books/:id'], (req, res) => {
+app.delete(['/api/books/:id', '/books/:id'], requireAdminAuth, (req, res) => {
   const id = Number(req.params.id);
   deletedContentIds.books.add(id);
   memoryStore.books = memoryStore.books.filter(b => b.id !== id);
@@ -721,12 +750,13 @@ app.delete(['/api/books/:id', '/books/:id'], (req, res) => {
 });
 
 // SUMMARIES CRUD
-app.post(['/api/summaries', '/summaries'], (req, res) => {
+app.post(['/api/summaries', '/summaries'], requireAdminAuth, (req, res) => {
   const { title, imagepath, category } = req.body;
   if (!title || !imagepath) {
     return res.status(400).json({ error: 'العنوان ورابط صورة الملخص مطلوبان' });
   }
-  const newId = memoryStore.summaries.length > 0 ? Math.max(...memoryStore.summaries.map(s => s.id)) + 1 : 1;
+  const newId = Math.max(0, ...memoryStore.summaries.map(s => Number(s.id) || 0), ...Array.from(deletedContentIds.summaries).map(Number)) + 1;
+  deletedContentIds.summaries.delete(newId);
   const newSum = {
     id: newId,
     title: title.trim(),
@@ -741,7 +771,7 @@ app.post(['/api/summaries', '/summaries'], (req, res) => {
   res.status(201).json({ summary: newSum, message: 'تمت إضافة الملخص بنجاح' });
 });
 
-app.put(['/api/summaries/:id', '/summaries/:id'], (req, res) => {
+app.put(['/api/summaries/:id', '/summaries/:id'], requireAdminAuth, (req, res) => {
   const id = Number(req.params.id);
   const idx = memoryStore.summaries.findIndex(s => s.id === id);
   if (idx === -1) return res.status(404).json({ error: 'الملخص غير موجود' });
@@ -749,7 +779,7 @@ app.put(['/api/summaries/:id', '/summaries/:id'], (req, res) => {
   res.json({ summary: memoryStore.summaries[idx], message: 'تم تعديل الملخص بنجاح' });
 });
 
-app.delete(['/api/summaries/:id', '/summaries/:id'], (req, res) => {
+app.delete(['/api/summaries/:id', '/summaries/:id'], requireAdminAuth, (req, res) => {
   const id = Number(req.params.id);
   deletedContentIds.summaries.add(id);
   memoryStore.summaries = memoryStore.summaries.filter(s => s.id !== id);
@@ -757,12 +787,13 @@ app.delete(['/api/summaries/:id', '/summaries/:id'], (req, res) => {
 });
 
 // VIDEOS CRUD
-app.post(['/api/videos', '/videos'], (req, res) => {
+app.post(['/api/videos', '/videos'], requireAdminAuth, (req, res) => {
   const { title, videourl, category, channel, duration } = req.body;
   if (!title || !videourl) {
     return res.status(400).json({ error: 'العنوان ورابط الفيديو مطلوبان' });
   }
-  const newId = memoryStore.videos.length > 0 ? Math.max(...memoryStore.videos.map(v => v.id)) + 1 : 1;
+  const newId = Math.max(0, ...memoryStore.videos.map(v => Number(v.id) || 0), ...Array.from(deletedContentIds.videos).map(Number)) + 1;
+  deletedContentIds.videos.delete(newId);
   const newVid = {
     id: newId,
     title: title.trim(),
@@ -779,7 +810,7 @@ app.post(['/api/videos', '/videos'], (req, res) => {
   res.status(201).json({ video: newVid, message: 'تمت إضافة الفيديو بنجاح' });
 });
 
-app.put(['/api/videos/:id', '/videos/:id'], (req, res) => {
+app.put(['/api/videos/:id', '/videos/:id'], requireAdminAuth, (req, res) => {
   const id = Number(req.params.id);
   const idx = memoryStore.videos.findIndex(v => v.id === id);
   if (idx === -1) return res.status(404).json({ error: 'الفيديو غير موجود' });
@@ -787,7 +818,7 @@ app.put(['/api/videos/:id', '/videos/:id'], (req, res) => {
   res.json({ video: memoryStore.videos[idx], message: 'تم تعديل الفيديو بنجاح' });
 });
 
-app.delete(['/api/videos/:id', '/videos/:id'], (req, res) => {
+app.delete(['/api/videos/:id', '/videos/:id'], requireAdminAuth, (req, res) => {
   const id = Number(req.params.id);
   deletedContentIds.videos.add(id);
   memoryStore.videos = memoryStore.videos.filter(v => v.id !== id);
@@ -795,12 +826,13 @@ app.delete(['/api/videos/:id', '/videos/:id'], (req, res) => {
 });
 
 // ARTICLES CRUD
-app.post(['/api/articles', '/articles'], (req, res) => {
+app.post(['/api/articles', '/articles'], requireAdminAuth, (req, res) => {
   const { title, content, imagepath, author, readTime } = req.body;
   if (!title || !content) {
     return res.status(400).json({ error: 'العنوان والمحتوى مطلوبان' });
   }
-  const newId = memoryStore.articles.length > 0 ? Math.max(...memoryStore.articles.map(a => a.id)) + 1 : 1;
+  const newId = Math.max(0, ...memoryStore.articles.map(a => Number(a.id) || 0), ...Array.from(deletedContentIds.articles).map(Number)) + 1;
+  deletedContentIds.articles.delete(newId);
   const newArt = {
     id: newId,
     title: title.trim(),
@@ -817,7 +849,7 @@ app.post(['/api/articles', '/articles'], (req, res) => {
   res.status(201).json({ article: newArt, message: 'تمت إضافة المقالة بنجاح' });
 });
 
-app.put(['/api/articles/:id', '/articles/:id'], (req, res) => {
+app.put(['/api/articles/:id', '/articles/:id'], requireAdminAuth, (req, res) => {
   const id = Number(req.params.id);
   const idx = memoryStore.articles.findIndex(a => a.id === id);
   if (idx === -1) return res.status(404).json({ error: 'المقالة غير موجودة' });
@@ -825,7 +857,7 @@ app.put(['/api/articles/:id', '/articles/:id'], (req, res) => {
   res.json({ article: memoryStore.articles[idx], message: 'تم تعديل المقالة بنجاح' });
 });
 
-app.delete(['/api/articles/:id', '/articles/:id'], (req, res) => {
+app.delete(['/api/articles/:id', '/articles/:id'], requireAdminAuth, (req, res) => {
   const id = Number(req.params.id);
   deletedContentIds.articles.add(id);
   memoryStore.articles = memoryStore.articles.filter(a => a.id !== id);
@@ -1063,11 +1095,15 @@ app.put(['/api/support/supporters/:userId', '/support/supporters/:userId'], (req
   res.json({ subscription: memoryStore.studentSubscriptions[req.params.userId] });
 });
 
-app.get(['/api/admin/users', '/admin/users'], (req, res) => {
-  res.json({ users: memoryStore.users.map(sanitizeUser) });
+app.get(['/api/admin/users', '/admin/users'], requireAdminAuth, (req, res) => {
+  res.json({
+    users: memoryStore.users
+      .filter(u => !deletedContentIds.users.has(String(u.id)))
+      .map(sanitizeUser)
+  });
 });
 
-app.put(['/api/admin/users/:id/status', '/admin/users/:id/status'], (req, res) => {
+app.put(['/api/admin/users/:id/status', '/admin/users/:id/status'], requireAdminAuth, (req, res) => {
   const { id } = req.params;
   const { status, role } = req.body;
   const user = memoryStore.users.find(u => u.id === id);
@@ -1077,23 +1113,23 @@ app.put(['/api/admin/users/:id/status', '/admin/users/:id/status'], (req, res) =
   res.json({ message: 'تم تحديث حالة المستخدم بنجاح', user: sanitizeUser(user) });
 });
 
-app.delete(['/api/admin/users/:id', '/admin/users/:id'], (req, res) => {
+app.delete(['/api/admin/users/:id', '/admin/users/:id'], requireAdminAuth, (req, res) => {
   const { id } = req.params;
   deletedContentIds.users.add(String(id));
   memoryStore.users = memoryStore.users.filter(u => u.id !== id);
   res.json({ message: 'تم حذف حساب المستخدم بنجاح' });
 });
 
-app.get(['/api/admin/security/logs', '/admin/security/logs'], (req, res) => {
+app.get(['/api/admin/security/logs', '/admin/security/logs'], requireAdminAuth, (req, res) => {
   res.json({ logs: memoryStore.auditLogs });
 });
 
-app.post(['/api/admin/security/clear-logs', '/admin/security/clear-logs'], (req, res) => {
+app.post(['/api/admin/security/clear-logs', '/admin/security/clear-logs'], requireAdminAuth, (req, res) => {
   memoryStore.auditLogs = [];
   res.json({ message: 'تم مسح السجلات بنجاح' });
 });
 
-app.post(['/api/admin/security/change-password', '/admin/security/change-password'], (req, res) => {
+app.post(['/api/admin/security/change-password', '/admin/security/change-password'], requireAdminAuth, (req, res) => {
   const { currentPassword, newPassword, confirmPassword } = req.body;
   if (currentPassword !== adminPassword) {
     return res.status(400).json({ error: 'كلمة المرور الحالية غير صحيحة' });
@@ -1105,7 +1141,8 @@ app.post(['/api/admin/security/change-password', '/admin/security/change-passwor
     return res.status(400).json({ error: 'كلمتا المرور غير متطابقتين' });
   }
   adminPassword = newPassword;
-  res.json({ success: true, message: 'تم تغيير كلمة مرور المدير بنجاح!' });
+  const token = signAdminToken(ADMIN_USERNAME, adminPassword);
+  res.json({ success: true, token, message: 'تم تغيير كلمة مرور المدير بنجاح!' });
 });
 
 export default app;

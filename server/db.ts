@@ -811,9 +811,8 @@ class DatabaseManager {
   }
 
   public addBook(book: Omit<Book, 'id' | 'downloads' | 'views' | 'created_at'>): Book {
-    const nextId = this.memoryData.pdfs.length > 0 
-      ? Math.max(...this.memoryData.pdfs.map(b => b.id)) + 1 
-      : 1;
+    const deleted = this.getDeletedIds().books;
+    const nextId = Math.max(0, ...this.memoryData.pdfs.map(b => Number(b.id) || 0), ...deleted.map(Number)) + 1;
     const newBook: Book = {
       id: nextId,
       downloads: 0,
@@ -821,6 +820,7 @@ class DatabaseManager {
       created_at: new Date().toISOString(),
       ...book,
     };
+    this.getDeletedIds().books = deleted.filter(id => Number(id) !== nextId);
     this.memoryData.pdfs.unshift(newBook);
     this.commit();
     return newBook;
@@ -829,14 +829,21 @@ class DatabaseManager {
   public updateBook(id: number, updates: Partial<Book>): Book | null {
     const idx = this.memoryData.pdfs.findIndex(b => b.id === id);
     if (idx === -1) return null;
-    this.memoryData.pdfs[idx] = { ...this.memoryData.pdfs[idx], ...updates };
+    this.memoryData.pdfs[idx] = { ...this.memoryData.pdfs[idx], ...updates, id };
     this.commit();
     return this.memoryData.pdfs[idx];
   }
 
   public deleteBook(id: number): boolean {
     const idx = this.memoryData.pdfs.findIndex(b => b.id === id);
-    if (idx === -1) return false;
+    const deleted = this.getDeletedIds();
+    if (!deleted.books.includes(Number(id))) {
+      deleted.books.push(Number(id));
+    }
+    if (idx === -1) {
+      this.commit();
+      return false;
+    }
     this.memoryData.pdfs.splice(idx, 1);
     this.commit();
     return true;
@@ -848,15 +855,15 @@ class DatabaseManager {
   }
 
   public addSummary(summary: Omit<Summary, 'id' | 'views' | 'created_at'>): Summary {
-    const nextId = this.memoryData.summaries.length > 0 
-      ? Math.max(...this.memoryData.summaries.map(s => s.id)) + 1 
-      : 1;
+    const deleted = this.getDeletedIds().summaries;
+    const nextId = Math.max(0, ...this.memoryData.summaries.map(s => Number(s.id) || 0), ...deleted.map(Number)) + 1;
     const newSum: Summary = {
       id: nextId,
       views: 0,
       created_at: new Date().toISOString(),
       ...summary,
     };
+    this.getDeletedIds().summaries = deleted.filter(id => Number(id) !== nextId);
     this.memoryData.summaries.unshift(newSum);
     this.commit();
     return newSum;
@@ -865,14 +872,21 @@ class DatabaseManager {
   public updateSummary(id: number, updates: Partial<Summary>): Summary | null {
     const idx = this.memoryData.summaries.findIndex(s => s.id === id);
     if (idx === -1) return null;
-    this.memoryData.summaries[idx] = { ...this.memoryData.summaries[idx], ...updates };
+    this.memoryData.summaries[idx] = { ...this.memoryData.summaries[idx], ...updates, id };
     this.commit();
     return this.memoryData.summaries[idx];
   }
 
   public deleteSummary(id: number): boolean {
     const idx = this.memoryData.summaries.findIndex(s => s.id === id);
-    if (idx === -1) return false;
+    const deleted = this.getDeletedIds();
+    if (!deleted.summaries.includes(Number(id))) {
+      deleted.summaries.push(Number(id));
+    }
+    if (idx === -1) {
+      this.commit();
+      return false;
+    }
     this.memoryData.summaries.splice(idx, 1);
     this.commit();
     return true;
@@ -884,15 +898,15 @@ class DatabaseManager {
   }
 
   public addVideo(video: Omit<Video, 'id' | 'views' | 'created_at'>): Video {
-    const nextId = this.memoryData.videos.length > 0 
-      ? Math.max(...this.memoryData.videos.map(v => v.id)) + 1 
-      : 1;
+    const deleted = this.getDeletedIds().videos;
+    const nextId = Math.max(0, ...this.memoryData.videos.map(v => Number(v.id) || 0), ...deleted.map(Number)) + 1;
     const newVid: Video = {
       id: nextId,
       views: 0,
       created_at: new Date().toISOString(),
       ...video,
     };
+    this.getDeletedIds().videos = deleted.filter(id => Number(id) !== nextId);
     this.memoryData.videos.unshift(newVid);
     this.commit();
     return newVid;
@@ -901,14 +915,21 @@ class DatabaseManager {
   public updateVideo(id: number, updates: Partial<Video>): Video | null {
     const idx = this.memoryData.videos.findIndex(v => v.id === id);
     if (idx === -1) return null;
-    this.memoryData.videos[idx] = { ...this.memoryData.videos[idx], ...updates };
+    this.memoryData.videos[idx] = { ...this.memoryData.videos[idx], ...updates, id };
     this.commit();
     return this.memoryData.videos[idx];
   }
 
   public deleteVideo(id: number): boolean {
     const idx = this.memoryData.videos.findIndex(v => v.id === id);
-    if (idx === -1) return false;
+    const deleted = this.getDeletedIds();
+    if (!deleted.videos.includes(Number(id))) {
+      deleted.videos.push(Number(id));
+    }
+    if (idx === -1) {
+      this.commit();
+      return false;
+    }
     this.memoryData.videos.splice(idx, 1);
     this.commit();
     return true;
@@ -924,15 +945,15 @@ class DatabaseManager {
   }
 
   public addArticle(art: Omit<Article, 'id' | 'views' | 'created_at'>): Article {
-    const nextId = this.memoryData.articles.length > 0 
-      ? Math.max(...this.memoryData.articles.map(a => a.id)) + 1 
-      : 1;
+    const deleted = this.getDeletedIds().articles;
+    const nextId = Math.max(0, ...this.memoryData.articles.map(a => Number(a.id) || 0), ...deleted.map(Number)) + 1;
     const newArt: Article = {
       id: nextId,
       views: 0,
       created_at: new Date().toISOString(),
       ...art,
     };
+    this.getDeletedIds().articles = deleted.filter(id => Number(id) !== nextId);
     this.memoryData.articles.unshift(newArt);
     this.commit();
     return newArt;
@@ -941,14 +962,21 @@ class DatabaseManager {
   public updateArticle(id: number, updates: Partial<Article>): Article | null {
     const idx = this.memoryData.articles.findIndex(a => a.id === id);
     if (idx === -1) return null;
-    this.memoryData.articles[idx] = { ...this.memoryData.articles[idx], ...updates };
+    this.memoryData.articles[idx] = { ...this.memoryData.articles[idx], ...updates, id };
     this.commit();
     return this.memoryData.articles[idx];
   }
 
   public deleteArticle(id: number): boolean {
     const idx = this.memoryData.articles.findIndex(a => a.id === id);
-    if (idx === -1) return false;
+    const deleted = this.getDeletedIds();
+    if (!deleted.articles.includes(Number(id))) {
+      deleted.articles.push(Number(id));
+    }
+    if (idx === -1) {
+      this.commit();
+      return false;
+    }
     this.memoryData.articles.splice(idx, 1);
     this.commit();
     return true;

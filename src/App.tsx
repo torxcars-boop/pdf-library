@@ -198,7 +198,7 @@ export default function App() {
     try {
       if (!silent) setLoading(true);
 
-      const bootstrap = await syncBootstrapFromServer();
+      const bootstrap = await syncBootstrapFromServer(silent);
 
       let serverBooks: Book[] = [];
       let serverSums: Summary[] = [];

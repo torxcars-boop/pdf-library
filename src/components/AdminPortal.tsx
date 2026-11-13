@@ -11,13 +11,17 @@ import {
   markItemAsDeleted, 
   saveCustomItem, 
   saveEditedItem, 
+  clearEditedItem,
   dispatchContentChanged,
   filterOutDeleted,
   applyEditedOverrides,
   getCustomItems,
-  removeCustomItem,
   syncDeletedStoreFromServer,
-  reconcileCustomItemsWithServer
+  reconcileCustomItemsWithServer,
+  getRealDownloads,
+  getRealViews,
+  getTotalRealDownloads,
+  getTotalRealViews
 } from '../utils/contentStore';
 import { 
   getAdminPlansConfig, 
@@ -93,11 +97,7 @@ import {
   REVIEWS_UPDATED_EVENT 
 } from '../utils/reviewsStore';
 import { syncCommentsFromServer } from '../utils/commentsStore';
-import { REALTIME_SYNC_EVENT, syncBootstrapFromServer } from '../utils/realtimeSync';
-import { 
-  getTotalRealDownloads, 
-  getTotalRealViews 
-} from '../utils/contentStore';
+import { REALTIME_SYNC_EVENT, syncBootstrapFromServer, invalidateBootstrapCache } from '../utils/realtimeSync';
 import { ItemReview } from '../types';
 import { savePdfToIdb, resolveBookPdfUrl } from '../utils/pdfStorage';
 import { getStoredTheme, toggleThemeMode, THEME_CHANGED_EVENT, ThemeMode } from '../utils/themeStore';
@@ -207,6 +207,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
   // Form States - Video
   const [showVideoModal, setShowVideoModal] = useState(false);
+  const [editingVideoId, setEditingVideoId] = useState<number | null>(null);
   const [videoTitle, setVideoTitle] = useState('');
   const [videoUrl, setVideoUrl] = useState('');
   const [videoCategory, setVideoCategory] = useState('شروحات');
@@ -222,6 +223,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   const [articleImageFilePreview, setArticleImageFilePreview] = useState('');
   const [articleAuthor, setArticleAuthor] = useState('ARM');
   const [articleReadTime, setArticleReadTime] = useState('5 دقائق');
+  const [isSavingContent, setIsSavingContent] = useState(false);
 
   // Security - Password Change State
   const [currentPassword, setCurrentPassword] = useState('');
@@ -282,6 +284,18 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     };
   }, []);
 
+  const handleAdminAuthExpired = () => {
+    localStorage.removeItem('arm_admin_token');
+    setIsAdminLoggedIn(false);
+    setAdminToken('');
+    setShowBookModal(false);
+    setShowSummaryModal(false);
+    setShowVideoModal(false);
+    setShowArticleModal(false);
+    setShowExamModal(false);
+    setLoginError('انتهت صلاحية جلسة الأدمن، يرجى إعادة تسجيل الدخول لتنفيذ التعديلات.');
+  };
+
   const verifyAdminToken = async (token: string) => {
     try {
       const res = await fetch('/api/admin/verify', {
@@ -290,12 +304,12 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       if (res.ok) {
         setIsAdminLoggedIn(true);
         setAdminToken(token);
-        fetchAdminData(token);
-      } else {
+        void fetchAdminData(token, true);
+      } else if (res.status === 401 || res.status === 403) {
         localStorage.removeItem('arm_admin_token');
       }
-    } catch (e) {
-      localStorage.removeItem('arm_admin_token');
+    } catch {
+      // keep token on transient network error
     }
   };
 
@@ -322,8 +336,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       setIsAdminLoggedIn(true);
       setAdminToken(data.token);
       setAdminUser(data.username);
+      setAdminPassInput('');
       localStorage.setItem('arm_admin_token', data.token);
-      fetchAdminData(data.token);
+      void fetchAdminData(data.token, true);
     } catch (err: any) {
       setLoginError(err.message);
     } finally {
@@ -337,20 +352,56 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     setAdminToken('');
   };
 
-  const fetchAdminData = async (token = adminToken) => {
+  const handleDownloadBackup = async () => {
+    if (!adminToken) {
+      handleAdminAuthExpired();
+      return;
+    }
+    try {
+      const res = await fetch('/api/admin/backup', {
+        headers: { 'Authorization': `Bearer ${adminToken}` },
+      });
+      if (res.status === 401) {
+        handleAdminAuthExpired();
+        return;
+      }
+      if (!res.ok) {
+        throw new Error('تعذر تحميل النسخة الاحتياطية');
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `luxury_library_backup_${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setAdminToastMessage({ title: 'تم تنزيل النسخة الاحتياطية بنجاح' });
+    } catch (err: any) {
+      setAdminToastMessage({ title: err?.message || 'فشل تحميل النسخة الاحتياطية', isError: true });
+    }
+  };
+
+  const fetchAdminData = async (token = adminToken, forceBootstrap = false) => {
     if (!token) return;
     setLoadingData(true);
     try {
       const headers = { 'Authorization': `Bearer ${token}` };
 
       const [statsRes, usersRes, logsRes, bootstrap] = await Promise.all([
-        fetch('/api/admin/stats', { headers }).catch(() => null),
-        fetch('/api/admin/users', { headers }).catch(() => null),
-        fetch('/api/admin/security/logs', { headers }).catch(() => null),
-        syncBootstrapFromServer(),
+        fetch('/api/admin/stats', { headers, cache: 'no-store' }).catch(() => null),
+        fetch('/api/admin/users', { headers, cache: 'no-store' }).catch(() => null),
+        fetch('/api/admin/security/logs', { headers, cache: 'no-store' }).catch(() => null),
+        syncBootstrapFromServer(forceBootstrap),
         fetchAdminSupportFromServer(token),
         syncCommentsFromServer(),
       ]);
+
+      if (statsRes?.status === 401 || usersRes?.status === 401 || logsRes?.status === 401) {
+        handleAdminAuthExpired();
+        return;
+      }
 
       if (statsRes && statsRes.ok) setStats(await statsRes.json());
 
@@ -611,6 +662,10 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           body: JSON.stringify(payload),
           signal: controller.signal,
         });
+        if (res.status === 401) {
+          handleAdminAuthExpired();
+          return;
+        }
         if (res.ok) {
           const data = await res.json();
           if (data.book) {
@@ -634,7 +689,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           views: books.find(b => b.id === editingBookId)?.views || 0,
           created_at: books.find(b => b.id === editingBookId)?.created_at || new Date().toISOString(),
         };
-        if (!savedBookFromServer) {
+        if (savedBookFromServer) {
+          clearEditedItem('book', editingBookId);
+        } else {
           saveEditedItem('book', editingBookId, updatedBook);
         }
         setBooks(prev => prev.map(b => (b.id === editingBookId ? updatedBook : b)));
@@ -652,11 +709,11 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         setBooks(prev => [createdBook, ...prev.filter(b => b.id !== createdBook.id)]);
       }
 
+      invalidateBootstrapCache();
       setBookPublishProgress(100);
       setBookPublishStage('تم نشر الكتاب وإتاحته للطلاب بنجاح!');
-      dispatchContentChanged();
 
-      // Immediately close modal, show confirmation banner, and sync in background
+      // Immediately close modal, show confirmation banner, and sync cleanly
       setShowBookModal(false);
       resetBookForm();
       setIsPublishingBook(false);
@@ -668,7 +725,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           : `تم نشر الكتاب "${publishedTitle}" وإتاحته لجميع الطلاب بنجاح`,
         subtitle: 'أصبح الكتاب ظاهراً الآن في المكتبة ومتاحاً للقراءة والتحميل الفوري.'
       });
-      void fetchAdminData();
+      await fetchAdminData(adminToken, true);
+      dispatchContentChanged();
       onDataChanged();
     } catch (err: any) {
       setIsPublishingBook(false);
@@ -722,15 +780,33 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       message: 'هل أنت متأكد من حذف هذا الكتاب نهائياً من المكتبة؟',
       onConfirm: async () => {
         try {
-          markItemAsDeleted('book', id);
-          setBooks(prev => prev.filter(b => b.id !== id));
-          await fetch(`/api/books/${id}`, {
+          markItemAsDeleted('book', id, { notify: false, syncServer: false });
+          setBooks(prev => prev.filter(b => Number(b.id) !== Number(id)));
+          invalidateBootstrapCache();
+
+          const res = await fetch(`/api/books/${id}`, {
             method: 'DELETE',
             headers: { 'Authorization': `Bearer ${adminToken}` },
-          }).catch(() => {});
-          fetchAdminData();
+          }).catch(() => null);
+
+          if (res && res.status === 401) {
+            handleAdminAuthExpired();
+            return;
+          }
+          if (!res || !res.ok) {
+            // Fallback for serverless cold starts: still register deleted ID
+            await fetch('/api/deleted-ids', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ books: [Number(id)] }),
+            }).catch(() => {});
+          }
+
+          invalidateBootstrapCache();
+          await fetchAdminData(adminToken, true);
+          dispatchContentChanged();
           onDataChanged();
-          setAdminToastMessage({ title: 'تم حذف الكتاب من المكتبة بنجاح' });
+          setAdminToastMessage({ title: 'تم حذف الكتاب نهائياً من المكتبة بنجاح' });
         } catch {
           setAdminToastMessage({ title: 'تعذر حذف الكتاب، يرجى المحاولة مرة أخرى', isError: true });
         }
@@ -790,20 +866,37 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     setConfirmDialog({
       title: 'حذف الامتحان',
       message: 'هل أنت متأكد من حذف هذا الامتحان بالكامل من المنصة؟',
-      onConfirm: () => {
-        const updated = deleteStudentExam(id, adminToken);
-        setStudentExams(updated);
+      onConfirm: async () => {
+        invalidateBootstrapCache();
+        const { exams, unauthorized } = await deleteStudentExam(id, adminToken);
+        if (unauthorized) {
+          handleAdminAuthExpired();
+          return;
+        }
+        setStudentExams(exams);
+        invalidateBootstrapCache();
+        await fetchAdminData(adminToken, true);
         onDataChanged();
         setAdminToastMessage({ title: 'تم حذف الامتحان بنجاح' });
       },
     });
   };
 
-  const handleSaveExam = (e: React.FormEvent) => {
+  const handleSaveExam = async (e: React.FormEvent) => {
     e.preventDefault();
     setExamFormError(null);
     if (!examTitle.trim()) {
       setExamFormError('يرجى إدخال عنوان الامتحان.');
+      return;
+    }
+    const totalMarksNum = Number(examTotalMarks);
+    const passMarksNum = Number(examPassMarks);
+    if (!Number.isFinite(totalMarksNum) || totalMarksNum <= 0) {
+      setExamFormError('يجب أن تكون الدرجة الكلية أكبر من صفر.');
+      return;
+    }
+    if (!Number.isFinite(passMarksNum) || passMarksNum < 0 || passMarksNum > totalMarksNum) {
+      setExamFormError('يجب أن تكون درجة النجاح بين 0 والدرجة الكلية للامتحان.');
       return;
     }
     if (examQuestions.length === 0) {
@@ -827,15 +920,20 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       .map(s => s.trim().toLowerCase())
       .filter(Boolean);
 
+    if (examTargetScope === 'specific_students' && studentEmailsList.length === 0) {
+      setExamFormError('يرجى إدخال بريد إلكتروني واحد على الأقل للطلاب المحددين.');
+      return;
+    }
+
     const newExam: Exam = {
       id: 'exam_' + Date.now(),
       title: examTitle.trim(),
       subject: examSubject,
       grade: examGrade,
-      durationMinutes: Number(examDuration),
+      durationMinutes: Number(examDuration) || 25,
       difficulty: examDifficulty,
-      totalMarks: Number(examTotalMarks),
-      passMarks: Number(examPassMarks),
+      totalMarks: totalMarksNum,
+      passMarks: passMarksNum,
       questionsCount: examQuestions.length,
       badge: examBadge || 'امتحان مدرسي',
       description: examDescription || `امتحان تدريبي في مادة ${examSubject} لطلاب ${examGrade}`,
@@ -845,15 +943,28 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       questions: examQuestions.map((q, idx) => ({ ...q, id: idx + 1 }))
     };
 
-    const updated = addCustomStudentExam(newExam, adminToken);
-    setStudentExams(updated);
-    setShowExamModal(false);
-    resetExamForm();
-    onDataChanged();
-    setAdminToastMessage({
-      title: `تمت إضافة ونشر الامتحان "${newExam.title}" بنجاح! 🎉`,
-      subtitle: 'أصبح الامتحان متاحاً للطلاب في بنك الامتحانات فوراً.'
-    });
+    if (isSavingContent) return;
+    setIsSavingContent(true);
+    try {
+      invalidateBootstrapCache();
+      const { exams, unauthorized } = await addCustomStudentExam(newExam, adminToken);
+      if (unauthorized) {
+        handleAdminAuthExpired();
+        return;
+      }
+      setStudentExams(exams);
+      setShowExamModal(false);
+      resetExamForm();
+      invalidateBootstrapCache();
+      await fetchAdminData(adminToken, true);
+      onDataChanged();
+      setAdminToastMessage({
+        title: `تمت إضافة ونشر الامتحان "${newExam.title}" بنجاح! 🎉`,
+        subtitle: 'أصبح الامتحان متاحاً للطلاب في بنك الامتحانات فوراً.'
+      });
+    } finally {
+      setIsSavingContent(false);
+    }
   };
 
   const resetExamForm = () => {
@@ -998,6 +1109,33 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     }
   };
 
+  const resetSummaryForm = () => {
+    setEditingSummaryId(null);
+    setSummaryTitle('');
+    setSummaryImagePath('');
+    setSummaryImageFilePreview('');
+    setSummaryCategory('عام');
+  };
+
+  const resetVideoForm = () => {
+    setEditingVideoId(null);
+    setVideoTitle('');
+    setVideoUrl('');
+    setVideoCategory('شروحات');
+    setVideoChannel('المكتبة الرقمية');
+    setVideoDuration('20:00');
+  };
+
+  const resetArticleForm = () => {
+    setEditingArticleId(null);
+    setArticleTitle('');
+    setArticleContent('');
+    setArticleImagePath('');
+    setArticleImageFilePreview('');
+    setArticleAuthor('ARM');
+    setArticleReadTime('5 دقائق');
+  };
+
   const openEditSummary = (s: Summary) => {
     setEditingSummaryId(s.id);
     setSummaryTitle(s.title);
@@ -1009,11 +1147,19 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
   const handleSaveSummary = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSavingContent) return;
+    const cleanTitle = summaryTitle.trim();
+    const cleanImage = summaryImagePath.trim();
+    if (!cleanTitle || !cleanImage) {
+      setAdminToastMessage({ title: 'يرجى إدخال عنوان الملخص ورابط أو صورة الملخص', isError: true });
+      return;
+    }
+    setIsSavingContent(true);
     try {
       const payload = {
-        title: summaryTitle,
-        imagepath: summaryImagePath,
-        category: summaryCategory,
+        title: cleanTitle,
+        imagepath: cleanImage,
+        category: summaryCategory.trim() || 'عام',
       };
 
       const url = editingSummaryId ? `/api/summaries/${editingSummaryId}` : '/api/summaries';
@@ -1029,6 +1175,10 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           },
           body: JSON.stringify(payload),
         });
+        if (res.status === 401) {
+          handleAdminAuthExpired();
+          return;
+        }
         if (res.ok) {
           const data = await res.json();
           if (data.summary) savedSumFromServer = data.summary;
@@ -1042,7 +1192,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           ...(summaries.find(s => s.id === editingSummaryId) || { id: editingSummaryId, views: 0, created_at: new Date().toISOString() }),
           ...payload,
         };
-        if (!savedSumFromServer) {
+        if (savedSumFromServer) {
+          clearEditedItem('summary', editingSummaryId);
+        } else {
           saveEditedItem('summary', editingSummaryId, updatedSum);
         }
         setSummaries(prev => prev.map(s => (s.id === editingSummaryId ? updatedSum : s)));
@@ -1058,20 +1210,20 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         }
         setSummaries(prev => [newSum, ...prev.filter(s => s.id !== newSum.id)]);
       }
-      dispatchContentChanged();
 
+      invalidateBootstrapCache();
       setAdminToastMessage({
-        title: editingSummaryId ? `تم تحديث الملخص "${summaryTitle}" بنجاح` : `تم نشر الملخص "${summaryTitle}" وإتاحته للطلاب فوراً`,
+        title: editingSummaryId ? `تم تحديث الملخص "${cleanTitle}" بنجاح` : `تم نشر الملخص "${cleanTitle}" وإتاحته للطلاب فوراً`,
       });
       setShowSummaryModal(false);
-      setEditingSummaryId(null);
-      setSummaryTitle('');
-      setSummaryImagePath('');
-      setSummaryImageFilePreview('');
-      fetchAdminData();
+      resetSummaryForm();
+      await fetchAdminData(adminToken, true);
+      dispatchContentChanged();
       onDataChanged();
     } catch (err: any) {
       setAdminToastMessage({ title: err?.message || 'حدث خطأ أثناء حفظ الملخص', isError: true });
+    } finally {
+      setIsSavingContent(false);
     }
   };
 
@@ -1081,26 +1233,38 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       message: 'هل أنت متأكد من حذف صورة الملخص نهائياً؟',
       onConfirm: async () => {
         try {
-          markItemAsDeleted('summary', id);
-          setSummaries(prev => prev.filter(s => s.id !== id));
-          dispatchContentChanged();
+          markItemAsDeleted('summary', id, { notify: false, syncServer: false });
+          setSummaries(prev => prev.filter(s => Number(s.id) !== Number(id)));
+          invalidateBootstrapCache();
 
-          await fetch(`/api/summaries/${id}`, {
+          const res = await fetch(`/api/summaries/${id}`, {
             method: 'DELETE',
             headers: { 'Authorization': `Bearer ${adminToken}` },
-          }).catch(() => {});
-          fetchAdminData();
+          }).catch(() => null);
+
+          if (res && res.status === 401) {
+            handleAdminAuthExpired();
+            return;
+          }
+          if (!res || !res.ok) {
+            await fetch('/api/deleted-ids', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ summaries: [Number(id)] }),
+            }).catch(() => {});
+          }
+
+          invalidateBootstrapCache();
+          await fetchAdminData(adminToken, true);
+          dispatchContentChanged();
           onDataChanged();
-          setAdminToastMessage({ title: 'تم حذف الملخص بنجاح' });
+          setAdminToastMessage({ title: 'تم حذف الملخص نهائياً بنجاح' });
         } catch {
-          // handled
+          setAdminToastMessage({ title: 'تعذر حذف الملخص، يرجى المحاولة مرة أخرى', isError: true });
         }
       },
     });
   };
-
-  // VIDEO ACTIONS
-  const [editingVideoId, setEditingVideoId] = useState<number | null>(null);
 
   const openEditVideo = (v: Video) => {
     setEditingVideoId(v.id);
@@ -1114,13 +1278,21 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
   const handleSaveVideo = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSavingContent) return;
+    const cleanTitle = videoTitle.trim();
+    const cleanUrl = videoUrl.trim();
+    if (!cleanTitle || !cleanUrl) {
+      setAdminToastMessage({ title: 'يرجى إدخال عنوان الفيديو ورابطه', isError: true });
+      return;
+    }
+    setIsSavingContent(true);
     try {
       const payload = {
-        title: videoTitle,
-        videourl: videoUrl,
-        category: videoCategory,
-        channel: videoChannel,
-        duration: videoDuration,
+        title: cleanTitle,
+        videourl: cleanUrl,
+        category: videoCategory.trim() || 'شروحات',
+        channel: videoChannel.trim() || 'المكتبة الرقمية',
+        duration: videoDuration.trim() || '20:00',
       };
 
       const url = editingVideoId ? `/api/videos/${editingVideoId}` : '/api/videos';
@@ -1136,6 +1308,10 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           },
           body: JSON.stringify(payload),
         });
+        if (res.status === 401) {
+          handleAdminAuthExpired();
+          return;
+        }
         if (res.ok) {
           const data = await res.json();
           if (data.video) savedVidFromServer = data.video;
@@ -1149,7 +1325,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           ...(videos.find(v => v.id === editingVideoId) || { id: editingVideoId, views: 0, created_at: new Date().toISOString() }),
           ...payload,
         };
-        if (!savedVidFromServer) {
+        if (savedVidFromServer) {
+          clearEditedItem('video', editingVideoId);
+        } else {
           saveEditedItem('video', editingVideoId, updatedVid);
         }
         setVideos(prev => prev.map(v => (v.id === editingVideoId ? updatedVid : v)));
@@ -1165,19 +1343,20 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         }
         setVideos(prev => [newVid, ...prev.filter(v => v.id !== newVid.id)]);
       }
-      dispatchContentChanged();
 
+      invalidateBootstrapCache();
       setAdminToastMessage({
-        title: editingVideoId ? `تم تحديث الفيديو "${videoTitle}" بنجاح` : `تم نشر الفيديو "${videoTitle}" وإتاحته للطلاب فوراً`,
+        title: editingVideoId ? `تم تحديث الفيديو "${cleanTitle}" بنجاح` : `تم نشر الفيديو "${cleanTitle}" وإتاحته للطلاب فوراً`,
       });
       setShowVideoModal(false);
-      setEditingVideoId(null);
-      setVideoTitle('');
-      setVideoUrl('');
-      fetchAdminData();
+      resetVideoForm();
+      await fetchAdminData(adminToken, true);
+      dispatchContentChanged();
       onDataChanged();
     } catch (err: any) {
       setAdminToastMessage({ title: err?.message || 'حدث خطأ أثناء حفظ الفيديو', isError: true });
+    } finally {
+      setIsSavingContent(false);
     }
   };
 
@@ -1187,19 +1366,34 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       message: 'هل أنت متأكد من حذف مقطع الفيديو نهائياً؟',
       onConfirm: async () => {
         try {
-          markItemAsDeleted('video', id);
-          setVideos(prev => prev.filter(v => v.id !== id));
-          dispatchContentChanged();
+          markItemAsDeleted('video', id, { notify: false, syncServer: false });
+          setVideos(prev => prev.filter(v => Number(v.id) !== Number(id)));
+          invalidateBootstrapCache();
 
-          await fetch(`/api/videos/${id}`, {
+          const res = await fetch(`/api/videos/${id}`, {
             method: 'DELETE',
             headers: { 'Authorization': `Bearer ${adminToken}` },
-          }).catch(() => {});
-          fetchAdminData();
+          }).catch(() => null);
+
+          if (res && res.status === 401) {
+            handleAdminAuthExpired();
+            return;
+          }
+          if (!res || !res.ok) {
+            await fetch('/api/deleted-ids', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ videos: [Number(id)] }),
+            }).catch(() => {});
+          }
+
+          invalidateBootstrapCache();
+          await fetchAdminData(adminToken, true);
+          dispatchContentChanged();
           onDataChanged();
-          setAdminToastMessage({ title: 'تم حذف الفيديو بنجاح' });
+          setAdminToastMessage({ title: 'تم حذف الفيديو نهائياً بنجاح' });
         } catch {
-          // handled
+          setAdminToastMessage({ title: 'تعذر حذف الفيديو، يرجى المحاولة مرة أخرى', isError: true });
         }
       },
     });
@@ -1208,13 +1402,21 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   // ARTICLE ACTIONS
   const handleSaveArticle = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSavingContent) return;
+    const cleanTitle = articleTitle.trim();
+    const cleanContent = articleContent.trim();
+    if (!cleanTitle || !cleanContent) {
+      setAdminToastMessage({ title: 'يرجى إدخال عنوان المقال ومحتواه بالكامل', isError: true });
+      return;
+    }
+    setIsSavingContent(true);
     try {
       const payload = {
-        title: articleTitle,
-        content: articleContent,
-        imagepath: articleImagePath || 'https://images.unsplash.com/photo-1456513080510-7bf3a84b82f8?w=600&auto=format&fit=crop&q=80',
-        author: articleAuthor,
-        readTime: articleReadTime,
+        title: cleanTitle,
+        content: cleanContent,
+        imagepath: articleImagePath.trim() || 'https://images.unsplash.com/photo-1456513080510-7bf3a84b82f8?w=600&auto=format&fit=crop&q=80',
+        author: articleAuthor.trim() || 'ARM',
+        readTime: articleReadTime.trim() || '5 دقائق',
       };
 
       const url = editingArticleId ? `/api/articles/${editingArticleId}` : '/api/articles';
@@ -1230,6 +1432,10 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           },
           body: JSON.stringify(payload),
         });
+        if (res.status === 401) {
+          handleAdminAuthExpired();
+          return;
+        }
         if (res.ok) {
           const data = await res.json();
           if (data.article) savedArtFromServer = data.article;
@@ -1243,7 +1449,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           ...(articles.find(a => a.id === editingArticleId) || { id: editingArticleId, views: 0, created_at: new Date().toISOString() }),
           ...payload,
         };
-        if (!savedArtFromServer) {
+        if (savedArtFromServer) {
+          clearEditedItem('article', editingArticleId);
+        } else {
           saveEditedItem('article', editingArticleId, updatedArt);
         }
         setArticles(prev => prev.map(a => (a.id === editingArticleId ? updatedArt : a)));
@@ -1259,21 +1467,20 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         }
         setArticles(prev => [newArt, ...prev.filter(a => a.id !== newArt.id)]);
       }
-      dispatchContentChanged();
 
+      invalidateBootstrapCache();
       setAdminToastMessage({
-        title: editingArticleId ? `تم تحديث المقال "${articleTitle}" بنجاح` : `تم نشر المقال "${articleTitle}" وإتاحته للطلاب فوراً`,
+        title: editingArticleId ? `تم تحديث المقال "${cleanTitle}" بنجاح` : `تم نشر المقال "${cleanTitle}" وإتاحته للطلاب فوراً`,
       });
       setShowArticleModal(false);
-      setEditingArticleId(null);
-      setArticleTitle('');
-      setArticleContent('');
-      setArticleImagePath('');
-      setArticleImageFilePreview('');
-      fetchAdminData();
+      resetArticleForm();
+      await fetchAdminData(adminToken, true);
+      dispatchContentChanged();
       onDataChanged();
     } catch (err: any) {
       setAdminToastMessage({ title: err?.message || 'حدث خطأ أثناء حفظ المقال', isError: true });
+    } finally {
+      setIsSavingContent(false);
     }
   };
 
@@ -1283,19 +1490,34 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       message: 'هل أنت متأكد من حذف هذا المقال نهائياً؟',
       onConfirm: async () => {
         try {
-          markItemAsDeleted('article', id);
-          setArticles(prev => prev.filter(a => a.id !== id));
-          dispatchContentChanged();
+          markItemAsDeleted('article', id, { notify: false, syncServer: false });
+          setArticles(prev => prev.filter(a => Number(a.id) !== Number(id)));
+          invalidateBootstrapCache();
 
-          await fetch(`/api/articles/${id}`, {
+          const res = await fetch(`/api/articles/${id}`, {
             method: 'DELETE',
             headers: { 'Authorization': `Bearer ${adminToken}` },
-          }).catch(() => {});
-          fetchAdminData();
+          }).catch(() => null);
+
+          if (res && res.status === 401) {
+            handleAdminAuthExpired();
+            return;
+          }
+          if (!res || !res.ok) {
+            await fetch('/api/deleted-ids', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ articles: [Number(id)] }),
+            }).catch(() => {});
+          }
+
+          invalidateBootstrapCache();
+          await fetchAdminData(adminToken, true);
+          dispatchContentChanged();
           onDataChanged();
-          setAdminToastMessage({ title: 'تم حذف المقال بنجاح' });
+          setAdminToastMessage({ title: 'تم حذف المقال نهائياً بنجاح' });
         } catch {
-          // handled
+          setAdminToastMessage({ title: 'تعذر حذف المقال، يرجى المحاولة مرة أخرى', isError: true });
         }
       },
     });
@@ -1320,14 +1542,23 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           confirmPassword,
         }),
       });
+      if (res.status === 401) {
+        handleAdminAuthExpired();
+        return;
+      }
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'فشل تحديث كلمة المرور');
+
+      if (data.token) {
+        setAdminToken(data.token);
+        localStorage.setItem('arm_admin_token', data.token);
+      }
 
       setPwdMsg({ text: data.message, type: 'success' });
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
-      fetchAdminData();
+      await fetchAdminData(data.token || adminToken, true);
     } catch (err: any) {
       setPwdMsg({ text: err.message, type: 'error' });
     } finally {
@@ -1341,7 +1572,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     updateStudentStatus(user.id, newStatus);
     setUsers(prev => prev.map(u => u.id === user.id ? { ...u, status: newStatus } : u));
     try {
-      await fetch(`/api/admin/users/${user.id}/status`, {
+      const res = await fetch(`/api/admin/users/${user.id}/status`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1349,8 +1580,16 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         },
         body: JSON.stringify({ status: newStatus }),
       });
-      fetchAdminData();
-    } catch (e) {
+      if (res.status === 401) {
+        handleAdminAuthExpired();
+        return;
+      }
+      invalidateBootstrapCache();
+      await fetchAdminData(adminToken, true);
+      setAdminToastMessage({
+        title: newStatus === 'suspended' ? `تم تجميد حساب ${user.name}` : `تم تنشيط حساب ${user.name}`
+      });
+    } catch {
       // already applied locally
     }
   };
@@ -1361,17 +1600,34 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       message: 'هل أنت متأكد من حذف هذا المستخدم وسجلاته؟',
       onConfirm: async () => {
         try {
-          markItemAsDeleted('user', id);
+          markItemAsDeleted('user', id, { notify: false, syncServer: false });
           deleteStudentLocally(id);
-          setUsers(prev => prev.filter(u => u.id !== id));
-          await fetch(`/api/admin/users/${id}`, {
+          setUsers(prev => prev.filter(u => String(u.id) !== String(id)));
+          invalidateBootstrapCache();
+
+          const res = await fetch(`/api/admin/users/${id}`, {
             method: 'DELETE',
             headers: { 'Authorization': `Bearer ${adminToken}` },
-          }).catch(() => {});
-          fetchAdminData();
-          setAdminToastMessage({ title: 'تم حذف المستخدم بنجاح' });
+          }).catch(() => null);
+
+          if (res && res.status === 401) {
+            handleAdminAuthExpired();
+            return;
+          }
+          if (!res || !res.ok) {
+            await fetch('/api/deleted-ids', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ users: [String(id)] }),
+            }).catch(() => {});
+          }
+
+          invalidateBootstrapCache();
+          await fetchAdminData(adminToken, true);
+          dispatchContentChanged();
+          setAdminToastMessage({ title: 'تم حذف المستخدم نهائياً بنجاح' });
         } catch {
-          // already applied locally
+          setAdminToastMessage({ title: 'تعذر حذف المستخدم', isError: true });
         }
       },
     });
@@ -1383,11 +1639,18 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       message: 'هل تريد تصفير سجلات الأمان وبدء دورة أمنية جديدة؟',
       onConfirm: async () => {
         try {
-          await fetch('/api/admin/security/clear-logs', {
+          const res = await fetch('/api/admin/security/clear-logs', {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${adminToken}` },
           });
-          fetchAdminData();
+          if (res.status === 401) {
+            handleAdminAuthExpired();
+            return;
+          }
+          if (!res.ok) {
+            throw new Error('فشل تصفير السجلات');
+          }
+          await fetchAdminData(adminToken, true);
           setAdminToastMessage({ title: 'تم تصفير سجلات الأمان بنجاح' });
         } catch {
           setAdminToastMessage({ title: 'فشل تصفير السجلات', isError: true });
@@ -1538,22 +1801,22 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           </button>
 
           <button
-            onClick={() => fetchAdminData()}
+            type="button"
+            onClick={() => void fetchAdminData(adminToken, true)}
             className="p-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-zinc-200 dark:hover:bg-zinc-700 border border-zinc-200 dark:border-zinc-700 transition"
             title="تحديث البيانات"
           >
             <RefreshCw className={`w-4 h-4 ${loadingData ? 'animate-spin text-amber-500' : ''}`} />
           </button>
 
-          <a
-            href="/api/admin/backup"
-            target="_blank"
-            rel="noopener noreferrer"
+          <button
+            type="button"
+            onClick={handleDownloadBackup}
             className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-amber-800 dark:text-amber-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-xs font-semibold border border-zinc-200 dark:border-zinc-700 transition"
           >
             <Download className="w-3.5 h-3.5" />
             <span>نسخة احتياطية JSON</span>
-          </a>
+          </button>
 
           <button
             onClick={onClose}
@@ -1589,7 +1852,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         ].map((tab) => (
           <button
             key={tab.id}
-            onClick={() => setActiveAdminTab(tab.id as any)}
+            onClick={() => { setActiveAdminTab(tab.id as any); setTableSearch(''); }}
             className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 whitespace-nowrap ${
               activeAdminTab === tab.id
                 ? 'bg-amber-500 text-zinc-950 shadow-md shadow-amber-500/20 font-extrabold'
@@ -1759,6 +2022,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                         {req.status !== 'approved' && (
                           <button
                             onClick={() => {
+                              invalidateBootstrapCache();
                               updatePaymentRequestStatus(req.id, 'approved', adminToken);
                               setPaymentRequests(getPaymentRequests());
                               setStudentSubscriptionsMap(getAllSavedSubscriptions());
@@ -1868,14 +2132,14 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                   <span>إضافة كتاب جديد</span>
                 </button>
                 <button
-                  onClick={() => setShowArticleModal(true)}
+                  onClick={() => { resetArticleForm(); setShowArticleModal(true); }}
                   className="px-4 py-2.5 bg-white dark:bg-zinc-800 text-amber-700 dark:text-amber-300 font-bold text-xs rounded-xl border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-700 transition flex items-center gap-1.5"
                 >
                   <Plus className="w-4 h-4" />
                   <span>نشر مقال</span>
                 </button>
                 <button
-                  onClick={() => setShowSummaryModal(true)}
+                  onClick={() => { resetSummaryForm(); setShowSummaryModal(true); }}
                   className="px-4 py-2.5 bg-white dark:bg-zinc-800 text-amber-700 dark:text-amber-300 font-bold text-xs rounded-xl border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-700 transition flex items-center gap-1.5"
                 >
                   <Plus className="w-4 h-4" />
@@ -1972,6 +2236,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                         <button
                           onClick={() => {
                             const newStatus = !isActive;
+                            invalidateBootstrapCache();
                             saveAdminPlanStatus(plan.id, newStatus, adminToken);
                             setAdminPlans(getAdminPlansConfig());
                           }}
@@ -2080,6 +2345,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                               {req.status !== 'approved' && (
                                 <button
                                   onClick={() => {
+                                    invalidateBootstrapCache();
                                     updatePaymentRequestStatus(req.id, 'approved', adminToken);
                                     setPaymentRequests(getPaymentRequests());
                                     setStudentSubscriptionsMap(getAllSavedSubscriptions());
@@ -2095,6 +2361,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                               {req.status !== 'rejected' && (
                                 <button
                                   onClick={() => {
+                                    invalidateBootstrapCache();
                                     updatePaymentRequestStatus(req.id, 'rejected', adminToken);
                                     setPaymentRequests(getPaymentRequests());
                                     setStudentSubscriptionsMap(getAllSavedSubscriptions());
@@ -2184,6 +2451,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                                     isTrial: false,
                                     approvedByAdmin: true
                                   };
+                                  invalidateBootstrapCache();
                                   saveStudentSubscription(student.id, updatedSub, true, adminToken);
                                   setStudentSubscriptionsMap(getAllSavedSubscriptions());
                                   setAdminToastMessage({
@@ -2252,7 +2520,11 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                   </thead>
                   <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800/60">
                     {books
-                      .filter(b => !tableSearch || b.title.includes(tableSearch) || b.category.includes(tableSearch))
+                      .filter(b => {
+                        if (!tableSearch.trim()) return true;
+                        const q = tableSearch.trim().toLowerCase();
+                        return b.title.toLowerCase().includes(q) || b.category.toLowerCase().includes(q) || (b.grade || '').toLowerCase().includes(q);
+                      })
                       .map((book) => (
                         <tr key={book.id} className="hover:bg-slate-50 dark:hover:bg-zinc-800/30 transition">
                           <td className="py-3 px-4">
@@ -2270,8 +2542,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                             </span>
                           </td>
                           <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">{book.grade || 'عام'}</td>
-                          <td className="py-3 px-4 font-bold text-amber-700 dark:text-amber-400">{book.downloads || 0}</td>
-                          <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">{book.views || 0}</td>
+                          <td className="py-3 px-4 font-bold text-amber-700 dark:text-amber-400">{getRealDownloads(book.id, book.downloads || 0)}</td>
+                          <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">{getRealViews('book', book.id, book.views || 0)}</td>
                           <td className="py-3 px-4 text-center">
                             <div className="flex items-center justify-center gap-2">
                               <button
@@ -2315,11 +2587,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
             <div className="flex justify-between items-center">
               <button
                 onClick={() => {
-                  setEditingSummaryId(null);
-                  setSummaryTitle('');
-                  setSummaryImagePath('');
-                  setSummaryImageFilePreview('');
-                  setSummaryCategory('عام');
+                  resetSummaryForm();
                   setShowSummaryModal(true);
                 }}
                 className="px-4 py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-2xl shadow-md hover:brightness-110 transition flex items-center gap-2"
@@ -2382,7 +2650,10 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           <div className="space-y-4 animate-in fade-in">
             <div className="flex justify-between items-center">
               <button
-                onClick={() => setShowVideoModal(true)}
+                onClick={() => {
+                  resetVideoForm();
+                  setShowVideoModal(true);
+                }}
                 className="px-4 py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-2xl shadow-md hover:brightness-110 transition flex items-center gap-2"
               >
                 <Plus className="w-4 h-4" />
@@ -2411,13 +2682,23 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                     <span className="text-[10px] bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 rounded text-amber-700 dark:text-amber-400 font-bold">
                       {vid.category}
                     </span>
-                    <button
-                      onClick={() => handleDeleteVideo(vid.id)}
-                      className="p-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 transition"
-                      title="حذف الفيديو"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => openEditVideo(vid)}
+                        className="px-2.5 py-1 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-amber-500 hover:text-zinc-950 text-amber-700 dark:text-amber-300 text-xs font-bold transition flex items-center gap-1"
+                        title="تعديل الفيديو"
+                      >
+                        <Edit3 className="w-3 h-3" />
+                        <span>تعديل</span>
+                      </button>
+                      <button
+                        onClick={() => handleDeleteVideo(vid.id)}
+                        className="p-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 transition"
+                        title="حذف الفيديو"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -2433,11 +2714,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
             <div className="flex justify-between items-center">
               <button
                 onClick={() => {
-                  setEditingArticleId(null);
-                  setArticleTitle('');
-                  setArticleContent('');
-                  setArticleImagePath('');
-                  setArticleImageFilePreview('');
+                  resetArticleForm();
                   setShowArticleModal(true);
                 }}
                 className="px-4 py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-2xl shadow-md hover:brightness-110 transition flex items-center gap-2"
@@ -2460,7 +2737,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                         <span>•</span>
                         <span>وقت القراءة: {art.readTime}</span>
                         <span>•</span>
-                        <span>👁️ {art.views} مشاهدة</span>
+                        <span>👁️ {getRealViews('article', art.id, art.views || 0)} مشاهدة</span>
                       </div>
                     </div>
                   </div>
@@ -2688,6 +2965,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                         <div className="flex items-center gap-2">
                           <button
                             onClick={() => {
+                              invalidateBootstrapCache();
                               toggleReviewApproval(rev.id, adminToken);
                               setAllReviews(getAllReviews());
                             }}
@@ -2703,6 +2981,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
                           <button
                             onClick={() => {
+                              invalidateBootstrapCache();
                               deleteReview(rev.id, adminToken);
                               setAllReviews(getAllReviews());
                               setAdminToastMessage({ title: 'تم حذف المراجعة بنجاح' });
@@ -2767,7 +3046,11 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                   </thead>
                   <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800/60">
                     {studentExams
-                      .filter(e => !tableSearch || e.title.includes(tableSearch) || e.subject.includes(tableSearch) || e.grade.includes(tableSearch))
+                      .filter(e => {
+                        if (!tableSearch.trim()) return true;
+                        const q = tableSearch.trim().toLowerCase();
+                        return e.title.toLowerCase().includes(q) || e.subject.toLowerCase().includes(q) || e.grade.toLowerCase().includes(q);
+                      })
                       .map((exam) => (
                         <tr key={exam.id} className="hover:bg-slate-50 dark:hover:bg-zinc-800/30 transition">
                           <td className="py-3 px-4 font-bold text-zinc-900 dark:text-zinc-100">
@@ -2939,15 +3222,14 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                 </div>
 
                 <div className="pt-4 border-t border-zinc-200 dark:border-zinc-800 flex flex-col gap-2">
-                  <a
-                    href="/api/admin/backup"
-                    target="_blank"
-                    rel="noopener noreferrer"
+                  <button
+                    type="button"
+                    onClick={handleDownloadBackup}
                     className="w-full text-center py-2.5 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-amber-700 dark:text-amber-300 text-xs font-bold rounded-xl border border-zinc-200 dark:border-zinc-700 transition flex items-center justify-center gap-2"
                   >
                     <Download className="w-4 h-4" />
                     <span>تنزيل نسخة احتياطية من قاعدة البيانات (.json)</span>
-                  </a>
+                  </button>
                 </div>
               </div>
 
@@ -3254,19 +3536,22 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       )}
 
       {/* ------------------------------------------------------------------- */}
-      {/* MODAL: ADD SUMMARY */}
+      {/* MODAL: ADD / EDIT SUMMARY */}
       {/* ------------------------------------------------------------------- */}
       {showSummaryModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 dark:bg-black/80 backdrop-blur-md">
           <div className="relative w-full max-w-lg bg-white dark:bg-zinc-900 border border-amber-500/40 rounded-3xl p-6 text-right shadow-2xl">
             <button
-              onClick={() => setShowSummaryModal(false)}
+              type="button"
+              onClick={() => { resetSummaryForm(); setShowSummaryModal(false); }}
               className="absolute top-5 left-5 p-2 rounded-xl bg-slate-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition"
             >
               <X className="w-4 h-4" />
             </button>
 
-            <h3 className="text-lg font-bold text-amber-700 dark:text-amber-200 mb-4">إضافة ملخص بصري / خريطة ذهنية</h3>
+            <h3 className="text-lg font-bold text-amber-700 dark:text-amber-200 mb-4">
+              {editingSummaryId ? 'تعديل الملخص / الخريطة الذهنية' : 'إضافة ملخص بصري / خريطة ذهنية'}
+            </h3>
 
             <form onSubmit={handleSaveSummary} className="space-y-3.5">
               <div>
@@ -3338,9 +3623,10 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
               <button
                 type="submit"
-                className="w-full py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-xl hover:brightness-110 transition shadow-md"
+                disabled={isSavingContent}
+                className="w-full py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-xl hover:brightness-110 transition shadow-md disabled:opacity-60"
               >
-                حفظ الملخص 🖼️
+                {isSavingContent ? 'جاري الحفظ...' : (editingSummaryId ? 'تحديث الملخص 🖼️' : 'حفظ الملخص 🖼️')}
               </button>
             </form>
           </div>
@@ -3348,19 +3634,22 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       )}
 
       {/* ------------------------------------------------------------------- */}
-      {/* MODAL: ADD VIDEO */}
+      {/* MODAL: ADD / EDIT VIDEO */}
       {/* ------------------------------------------------------------------- */}
       {showVideoModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 dark:bg-black/80 backdrop-blur-md">
           <div className="relative w-full max-w-lg bg-white dark:bg-zinc-900 border border-amber-500/40 rounded-3xl p-6 text-right shadow-2xl">
             <button
-              onClick={() => setShowVideoModal(false)}
+              type="button"
+              onClick={() => { resetVideoForm(); setShowVideoModal(false); }}
               className="absolute top-5 left-5 p-2 rounded-xl bg-slate-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition"
             >
               <X className="w-4 h-4" />
             </button>
 
-            <h3 className="text-lg font-bold text-amber-700 dark:text-amber-200 mb-4">إضافة مقطع فيديو تعليمي</h3>
+            <h3 className="text-lg font-bold text-amber-700 dark:text-amber-200 mb-4">
+              {editingVideoId ? 'تعديل مقطع الفيديو التعليمي' : 'إضافة مقطع فيديو تعليمي'}
+            </h3>
 
             <form onSubmit={handleSaveVideo} className="space-y-3.5">
               <div>
@@ -3419,9 +3708,10 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
               <button
                 type="submit"
-                className="w-full py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-xl hover:brightness-110 transition shadow-md"
+                disabled={isSavingContent}
+                className="w-full py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-xl hover:brightness-110 transition shadow-md disabled:opacity-60"
               >
-                حفظ الفيديو 🎬
+                {isSavingContent ? 'جاري الحفظ...' : (editingVideoId ? 'تحديث الفيديو 🎬' : 'حفظ الفيديو 🎬')}
               </button>
             </form>
           </div>
@@ -3435,7 +3725,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 dark:bg-black/85 backdrop-blur-md">
           <div className="relative w-full max-w-2xl bg-white dark:bg-zinc-900 border border-amber-500/40 rounded-3xl p-6 text-right max-h-[90vh] overflow-y-auto shadow-2xl">
             <button
-              onClick={() => setShowArticleModal(false)}
+              type="button"
+              onClick={() => { resetArticleForm(); setShowArticleModal(false); }}
               className="absolute top-5 left-5 p-2 rounded-xl bg-slate-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition"
             >
               <X className="w-4 h-4" />
@@ -3538,9 +3829,10 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
               <button
                 type="submit"
-                className="w-full py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-xl hover:brightness-110 transition shadow-md"
+                disabled={isSavingContent}
+                className="w-full py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-xl hover:brightness-110 transition shadow-md disabled:opacity-60"
               >
-                حفظ ونشر المقال 📝
+                {isSavingContent ? 'جاري النشر...' : (editingArticleId ? 'تحديث المقال 📝' : 'حفظ ونشر المقال 📝')}
               </button>
             </form>
           </div>
@@ -3554,7 +3846,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 dark:bg-black/85 backdrop-blur-md">
           <div className="relative w-full max-w-3xl bg-white dark:bg-zinc-900 border border-amber-500/40 rounded-3xl p-6 text-right max-h-[90vh] overflow-y-auto shadow-2xl">
             <button
-              onClick={() => setShowExamModal(false)}
+              type="button"
+              onClick={() => { resetExamForm(); setShowExamModal(false); }}
               className="absolute top-5 left-5 p-2 rounded-xl bg-slate-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition"
             >
               <X className="w-4 h-4" />
@@ -3932,9 +4225,10 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
               <div className="flex items-center justify-end pt-3 border-t border-slate-200 dark:border-zinc-800">
                 <button
                   type="submit"
-                  className="px-6 py-2.5 bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400 text-zinc-950 font-bold text-xs rounded-xl hover:brightness-110 transition shadow-lg shadow-amber-500/20 active:scale-95"
+                  disabled={isSavingContent}
+                  className="px-6 py-2.5 bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400 text-zinc-950 font-bold text-xs rounded-xl hover:brightness-110 transition shadow-lg shadow-amber-500/20 active:scale-95 disabled:opacity-60"
                 >
-                  حفظ ونشر الامتحان للطلاب فوراً 🚀
+                  {isSavingContent ? 'جاري حفظ ونشر الامتحان...' : 'حفظ ونشر الامتحان للطلاب فوراً 🚀'}
                 </button>
               </div>
             </form>

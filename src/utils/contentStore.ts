@@ -30,39 +30,51 @@ export const getDeletedStore = (): DeletedStore => {
   return { books: [], summaries: [], videos: [], articles: [], users: [] };
 };
 
-export const markItemAsDeleted = (type: 'book' | 'summary' | 'video' | 'article' | 'user', id: number | string) => {
+export const markItemAsDeleted = (
+  type: 'book' | 'summary' | 'video' | 'article' | 'user',
+  id: number | string,
+  options: { notify?: boolean; syncServer?: boolean } = {}
+) => {
+  const { notify = true, syncServer = true } = options;
   try {
     const current = getDeletedStore();
     if (type === 'book') {
       const numId = Number(id);
       if (!current.books.includes(numId)) current.books.push(numId);
-      // Also remove from custom books if present
       removeCustomItem('book', numId);
+      clearEditedItem('book', numId);
     } else if (type === 'summary') {
       const numId = Number(id);
       if (!current.summaries.includes(numId)) current.summaries.push(numId);
       removeCustomItem('summary', numId);
+      clearEditedItem('summary', numId);
     } else if (type === 'video') {
       const numId = Number(id);
       if (!current.videos.includes(numId)) current.videos.push(numId);
       removeCustomItem('video', numId);
+      clearEditedItem('video', numId);
     } else if (type === 'article') {
       const numId = Number(id);
       if (!current.articles.includes(numId)) current.articles.push(numId);
       removeCustomItem('article', numId);
+      clearEditedItem('article', numId);
     } else if (type === 'user') {
       const strId = String(id);
       if (!current.users.includes(strId)) current.users.push(strId);
     }
     localStorage.setItem(DELETED_KEY, JSON.stringify(current));
-    dispatchContentChanged();
+    if (notify) {
+      dispatchContentChanged();
+    }
 
-    // Sync with serverless backend so server also permanently drops these IDs
-    fetch('/api/deleted-ids', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(current)
-    }).catch(() => {});
+    if (syncServer) {
+      // Sync with backend so server also permanently drops these IDs
+      fetch('/api/deleted-ids', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(current)
+      }).catch(() => {});
+    }
   } catch (e) {
     console.error('Error marking item as deleted', e);
   }
@@ -137,11 +149,27 @@ export const removeCustomItem = (type: 'book' | 'summary' | 'video' | 'article',
 export const syncDeletedStoreFromServer = (serverDeleted?: Partial<DeletedStore> | null) => {
   if (!serverDeleted) return;
   try {
-    const books = Array.isArray(serverDeleted.books) ? serverDeleted.books.map(Number) : [];
-    const summaries = Array.isArray(serverDeleted.summaries) ? serverDeleted.summaries.map(Number) : [];
-    const videos = Array.isArray(serverDeleted.videos) ? serverDeleted.videos.map(Number) : [];
-    const articles = Array.isArray(serverDeleted.articles) ? serverDeleted.articles.map(Number) : [];
-    const users = Array.isArray(serverDeleted.users) ? serverDeleted.users.map(String) : [];
+    const local = getDeletedStore();
+    const books = Array.from(new Set([
+      ...(Array.isArray(local.books) ? local.books.map(Number) : []),
+      ...(Array.isArray(serverDeleted.books) ? serverDeleted.books.map(Number) : []),
+    ])).filter(n => !Number.isNaN(n));
+    const summaries = Array.from(new Set([
+      ...(Array.isArray(local.summaries) ? local.summaries.map(Number) : []),
+      ...(Array.isArray(serverDeleted.summaries) ? serverDeleted.summaries.map(Number) : []),
+    ])).filter(n => !Number.isNaN(n));
+    const videos = Array.from(new Set([
+      ...(Array.isArray(local.videos) ? local.videos.map(Number) : []),
+      ...(Array.isArray(serverDeleted.videos) ? serverDeleted.videos.map(Number) : []),
+    ])).filter(n => !Number.isNaN(n));
+    const articles = Array.from(new Set([
+      ...(Array.isArray(local.articles) ? local.articles.map(Number) : []),
+      ...(Array.isArray(serverDeleted.articles) ? serverDeleted.articles.map(Number) : []),
+    ])).filter(n => !Number.isNaN(n));
+    const users = Array.from(new Set([
+      ...(Array.isArray(local.users) ? local.users.map(String) : []),
+      ...(Array.isArray(serverDeleted.users) ? serverDeleted.users.map(String) : []),
+    ]));
 
     const next: DeletedStore = { books, summaries, videos, articles, users };
     localStorage.setItem(DELETED_KEY, JSON.stringify(next));
@@ -195,6 +223,21 @@ export const saveEditedItem = (type: string, id: number | string, updatedFields:
     dispatchContentChanged();
   } catch (e) {
     console.error('Error saving edited item', e);
+  }
+};
+
+export const clearEditedItem = (type: string, id: number | string) => {
+  try {
+    const raw = localStorage.getItem(EDITED_ITEMS_KEY);
+    if (!raw) return;
+    const map = JSON.parse(raw);
+    const key = `${type}_${id}`;
+    if (key in map) {
+      delete map[key];
+      localStorage.setItem(EDITED_ITEMS_KEY, JSON.stringify(map));
+    }
+  } catch {
+    // ignore
   }
 };
 
