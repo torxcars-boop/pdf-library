@@ -12,7 +12,6 @@ import { RatingStars } from './RatingStars';
 import { CommentsSection } from './CommentsSection';
 import { ReviewsSection } from './ReviewsSection';
 import { ShareMenuButton } from './ShareMenuButton';
-import { getRealViews, incrementRealView } from '../utils/contentStore';
 import { getItemRatingStats } from '../utils/reviewsStore';
 
 interface ArticleDetailModalProps {
@@ -41,15 +40,21 @@ export const ArticleDetailModal: React.FC<ArticleDetailModalProps> = ({
 
   useEffect(() => {
     if (article?.id) {
-      const views = incrementRealView('article', article.id, article.views || 0);
-      setViewCount(views);
-      fetch(`/api/items/article/${article.id}/view`, { method: 'POST' }).catch(() => {});
+      setViewCount(article.views || 0);
+      fetch(`/api/items/article/${article.id}/view`, { method: 'POST' })
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+          if (data && typeof data.views === 'number') {
+            setViewCount(data.views);
+          }
+        })
+        .catch(() => {});
     }
   }, [article?.id]);
 
   useEffect(() => {
     if (article?.id) {
-      setViewCount((prev) => Math.max(prev, getRealViews('article', article.id, article.views || 0), article.views || 0));
+      setViewCount((prev) => Math.max(prev, article.views || 0));
     }
   }, [article?.id, article?.views]);
 
@@ -203,9 +208,6 @@ export const ArticleDetailModal: React.FC<ArticleDetailModalProps> = ({
           user={user}
           onOpenAuth={onOpenAuth}
           title={`مراجعات وتقييمات الطلاب للمقال: ${article.title}`}
-          onRatingChanged={(newRating) => {
-            if (onRate) onRate(newRating);
-          }}
         />
 
         {/* Unified Interactive Student & Teacher Comments System */}

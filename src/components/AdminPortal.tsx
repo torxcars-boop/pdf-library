@@ -8,16 +8,8 @@ import {
   EXAMS_UPDATED_EVENT 
 } from '../data/studentExamsData';
 import { 
-  markItemAsDeleted, 
-  saveCustomItem, 
-  saveEditedItem, 
-  clearEditedItem,
   dispatchContentChanged,
-  filterOutDeleted,
-  applyEditedOverrides,
-  getCustomItems,
   syncDeletedStoreFromServer,
-  reconcileCustomItemsWithServer,
   getRealDownloads,
   getRealViews,
   getTotalRealDownloads,
@@ -84,12 +76,6 @@ import {
   Heart
 } from 'lucide-react';
 import { 
-  getRegisteredStudents, 
-  updateStudentStatus, 
-  deleteStudentLocally, 
-  STUDENT_REGISTERED_EVENT 
-} from '../utils/studentUserStore';
-import { 
   getAllReviews, 
   toggleReviewApproval, 
   deleteReview, 
@@ -99,7 +85,7 @@ import {
 import { syncCommentsFromServer } from '../utils/commentsStore';
 import { REALTIME_SYNC_EVENT, syncBootstrapFromServer, invalidateBootstrapCache } from '../utils/realtimeSync';
 import { ItemReview } from '../types';
-import { savePdfToIdb, resolveBookPdfUrl } from '../utils/pdfStorage';
+import { resolveBookPdfUrl } from '../utils/pdfStorage';
 import { getStoredTheme, toggleThemeMode, THEME_CHANGED_EVENT, ThemeMode } from '../utils/themeStore';
 import { Sun, Moon } from 'lucide-react';
 
@@ -172,6 +158,17 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   const [confirmDialog, setConfirmDialog] = useState<{ title: string; message: string; onConfirm: () => Promise<void> | void } | null>(null);
   const [previewPdfBook, setPreviewPdfBook] = useState<{ title: string; url: string; isObjectUrl: boolean } | null>(null);
   const [examFormError, setExamFormError] = useState<string | null>(null);
+
+  // Security & Idempotency helpers
+  const makeClientRequestId = () => `req_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  const [pendingBookRequestId, setPendingBookRequestId] = useState<string>('');
+  const [pendingSummaryRequestId, setPendingSummaryRequestId] = useState<string>('');
+  const [pendingVideoRequestId, setPendingVideoRequestId] = useState<string>('');
+  const [pendingArticleRequestId, setPendingArticleRequestId] = useState<string>('');
+  const [pendingExamId, setPendingExamId] = useState<string>('');
+  const [summaryFormError, setSummaryFormError] = useState<string | null>(null);
+  const [videoFormError, setVideoFormError] = useState<string | null>(null);
+  const [articleFormError, setArticleFormError] = useState<string | null>(null);
 
   // Form States - Student Exam (Target audience controls per package or per student)
   const [showExamModal, setShowExamModal] = useState(false);
@@ -258,11 +255,6 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       setStudentSubscriptionsMap(getAllSavedSubscriptions());
       setAdminPlans(getAdminPlansConfig());
     };
-    const handleStudentSync = () => {
-      if (adminSessionRef.current.loggedIn && adminSessionRef.current.token) {
-        void fetchAdminData(adminSessionRef.current.token);
-      }
-    };
     const handleRealtimeSync = () => {
       if (adminSessionRef.current.open && adminSessionRef.current.loggedIn && adminSessionRef.current.token) {
         void fetchAdminData(adminSessionRef.current.token);
@@ -272,14 +264,12 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     window.addEventListener(REVIEWS_UPDATED_EVENT, handleReviewsSync);
     window.addEventListener(EXAMS_UPDATED_EVENT, handleExamsSync);
     window.addEventListener(SUPPORT_UPDATED_EVENT, handleSupportSync);
-    window.addEventListener(STUDENT_REGISTERED_EVENT, handleStudentSync);
     window.addEventListener(REALTIME_SYNC_EVENT, handleRealtimeSync);
 
     return () => {
       window.removeEventListener(REVIEWS_UPDATED_EVENT, handleReviewsSync);
       window.removeEventListener(EXAMS_UPDATED_EVENT, handleExamsSync);
       window.removeEventListener(SUPPORT_UPDATED_EVENT, handleSupportSync);
-      window.removeEventListener(STUDENT_REGISTERED_EVENT, handleStudentSync);
       window.removeEventListener(REALTIME_SYNC_EVENT, handleRealtimeSync);
     };
   }, []);
@@ -398,7 +388,11 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         syncCommentsFromServer(),
       ]);
 
-      if (statsRes?.status === 401 || usersRes?.status === 401 || logsRes?.status === 401) {
+      if (
+        statsRes?.status === 401 || statsRes?.status === 403 ||
+        usersRes?.status === 401 || usersRes?.status === 403 ||
+        logsRes?.status === 401 || logsRes?.status === 403
+      ) {
         handleAdminAuthExpired();
         return;
       }
@@ -407,132 +401,47 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
       if (bootstrap) {
         syncDeletedStoreFromServer(bootstrap.deletedIds);
-
-        reconcileCustomItemsWithServer('book', bootstrap.books || []);
-        let bList: Book[] = [...(bootstrap.books || [])];
-        getCustomItems<Book>('arm_custom_books_v2').forEach(cb => {
-          if (!bList.some(bk => String(bk.id) === String(cb.id))) bList.unshift(cb);
-        });
-        bList = applyEditedOverrides('book', filterOutDeleted('book', bList));
-        setBooks(bList);
-
-        reconcileCustomItemsWithServer('summary', bootstrap.summaries || []);
-        let sList: Summary[] = [...(bootstrap.summaries || [])];
-        getCustomItems<Summary>('arm_custom_summaries_v2').forEach(cs => {
-          if (!sList.some(sm => String(sm.id) === String(cs.id))) sList.unshift(cs);
-        });
-        sList = applyEditedOverrides('summary', filterOutDeleted('summary', sList));
-        setSummaries(sList);
-
-        reconcileCustomItemsWithServer('video', bootstrap.videos || []);
-        let vList: Video[] = [...(bootstrap.videos || [])];
-        getCustomItems<Video>('arm_custom_videos_v2').forEach(cv => {
-          if (!vList.some(vd => String(vd.id) === String(cv.id))) vList.unshift(cv);
-        });
-        vList = applyEditedOverrides('video', filterOutDeleted('video', vList));
-        setVideos(vList);
-
-        reconcileCustomItemsWithServer('article', bootstrap.articles || []);
-        let aList: Article[] = [...(bootstrap.articles || [])];
-        getCustomItems<Article>('arm_custom_articles_v2').forEach(ca => {
-          if (!aList.some(ar => String(ar.id) === String(ca.id))) aList.unshift(ca);
-        });
-        aList = applyEditedOverrides('article', filterOutDeleted('article', aList));
-        setArticles(aList);
+        setBooks(bootstrap.books || []);
+        setSummaries(bootstrap.summaries || []);
+        setVideos(bootstrap.videos || []);
+        setArticles(bootstrap.articles || []);
       } else {
         const [booksRes, sumRes, vidRes, artRes] = await Promise.all([
-          fetch('/api/books').catch(() => null),
-          fetch('/api/summaries').catch(() => null),
-          fetch('/api/videos').catch(() => null),
-          fetch('/api/articles').catch(() => null),
+          fetch('/api/books', { cache: 'no-store' }).catch(() => null),
+          fetch('/api/summaries', { cache: 'no-store' }).catch(() => null),
+          fetch('/api/videos', { cache: 'no-store' }).catch(() => null),
+          fetch('/api/articles', { cache: 'no-store' }).catch(() => null),
         ]);
         await Promise.all([fetchExamsFromServer(), syncReviewsFromServer()]);
 
         if (booksRes && booksRes.ok) {
           const b = await booksRes.json();
-          let bList: Book[] = b.books || [];
-          getCustomItems<Book>('arm_custom_books_v2').forEach(cb => {
-            if (!bList.some(bk => String(bk.id) === String(cb.id))) bList.unshift(cb);
-          });
-          setBooks(applyEditedOverrides('book', filterOutDeleted('book', bList)));
+          setBooks(b.books || []);
         }
         if (sumRes && sumRes.ok) {
           const s = await sumRes.json();
-          let sList: Summary[] = s.summaries || [];
-          getCustomItems<Summary>('arm_custom_summaries_v2').forEach(cs => {
-            if (!sList.some(sm => String(sm.id) === String(cs.id))) sList.unshift(cs);
-          });
-          setSummaries(applyEditedOverrides('summary', filterOutDeleted('summary', sList)));
+          setSummaries(s.summaries || []);
         }
         if (vidRes && vidRes.ok) {
           const v = await vidRes.json();
-          let vList: Video[] = v.videos || [];
-          getCustomItems<Video>('arm_custom_videos_v2').forEach(cv => {
-            if (!vList.some(vd => String(vd.id) === String(cv.id))) vList.unshift(cv);
-          });
-          setVideos(applyEditedOverrides('video', filterOutDeleted('video', vList)));
+          setVideos(v.videos || []);
         }
         if (artRes && artRes.ok) {
           const a = await artRes.json();
-          let aList: Article[] = a.articles || [];
-          getCustomItems<Article>('arm_custom_articles_v2').forEach(ca => {
-            if (!aList.some(ar => String(ar.id) === String(ca.id))) aList.unshift(ca);
-          });
-          setArticles(applyEditedOverrides('article', filterOutDeleted('article', aList)));
+          setArticles(a.articles || []);
         }
       }
 
-      let uList: User[] = [];
       if (usersRes && usersRes.ok) {
         const u = await usersRes.json();
-        uList = u.users || [];
+        setUsers(u.users || []);
       }
-
-      // 1. Merge registered students from local persistent store
-      const localStudents = getRegisteredStudents();
-      localStudents.forEach(ls => {
-        if (!uList.some(eu => eu.id === ls.id || (ls.email && eu.email?.toLowerCase() === ls.email.toLowerCase()))) {
-          uList.push(ls);
-        }
-      });
-
-      // 2. Merge currently active logged in user from localStorage
-      try {
-        const curRaw = localStorage.getItem('arm_current_user');
-        if (curRaw) {
-          const cur = JSON.parse(curRaw);
-          if (cur && cur.id && !uList.some(eu => eu.id === cur.id || (cur.email && eu.email?.toLowerCase() === cur.email.toLowerCase()))) {
-            uList.push(cur);
-          }
-        }
-      } catch (e) {}
-
-      // 3. Merge payment request students
-      const pReqs = getPaymentRequests();
-      pReqs.forEach(pr => {
-        if (pr.userId && !uList.some(eu => eu.id === pr.userId || (pr.userEmail && eu.email?.toLowerCase() === pr.userEmail.toLowerCase()))) {
-          uList.push({
-            id: pr.userId,
-            name: pr.userName || 'طالب مسجل',
-            email: pr.userEmail || `student_${pr.userId.slice(-5)}@student.edu`,
-            role: 'user',
-            status: 'active',
-            academicStage: 'الثانوية العامة',
-            avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
-            createdAt: pr.submittedAt || new Date().toISOString()
-          });
-        }
-      });
-
-      uList = filterOutDeleted('user', uList);
-      setUsers(uList);
 
       if (logsRes && logsRes.ok) {
         const l = await logsRes.json();
         setLogs(l.logs || []);
       }
 
-      // Synchronize latest subscriber requests, student subscriptions, exams, and reviews
       setPaymentRequests(getPaymentRequests());
       setStudentSubscriptionsMap(getAllSavedSubscriptions());
       setAdminPlans(getAdminPlansConfig());
@@ -545,65 +454,63 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     }
   };
 
-  // Upload PDF via XMLHttpRequest to get real byte-level progress, with fast IndexedDB fallback
+  // Upload PDF via XMLHttpRequest directly to the central server (strictly DB/server backed)
   const uploadPdfWithProgress = async (
     file: File,
     token: string,
     onProgress: (pct: number) => void
   ): Promise<string> => {
-    try {
-      const serverUrl = await new Promise<string>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        const formData = new FormData();
-        formData.append('file', file);
-        xhr.timeout = 60000;
-
-        xhr.upload.onprogress = (ev) => {
-          if (ev.lengthComputable && ev.total > 0) {
-            const pct = Math.min(78, Math.max(15, Math.round((ev.loaded / ev.total) * 63) + 15));
-            onProgress(pct);
-          }
-        };
-
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            const contentType = xhr.getResponseHeader('content-type') || '';
-            if (contentType.includes('application/json')) {
-              try {
-                const data = JSON.parse(xhr.responseText);
-                if (data.url) {
-                  resolve(data.url);
-                  return;
-                }
-              } catch {
-                // fallback below
-              }
-            }
-          }
-          reject(new Error(`Server upload unavailable (${xhr.status})`));
-        };
-
-        xhr.ontimeout = () => reject(new Error('Upload timeout - switching to fast local storage'));
-        xhr.onerror = () => reject(new Error('Network error during upload'));
-        xhr.open('POST', '/api/admin/upload-pdf');
-        if (token) {
-          xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-        }
-        xhr.send(formData);
-      });
-      return serverUrl;
-    } catch {
-      // Fast fallback to IndexedDB (near-instant local storage, works reliably even on serverless deployments)
-      onProgress(65);
-      const idbKey = await savePdfToIdb(`book_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, file);
-      onProgress(82);
-      return idbKey;
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      throw new Error('لا يوجد اتصال بالإنترنت، تعذر رفع ملف PDF إلى الخادم.');
     }
+
+    return new Promise<string>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      const formData = new FormData();
+      formData.append('file', file);
+      xhr.timeout = 60000;
+
+      xhr.upload.onprogress = (ev) => {
+        if (ev.lengthComputable && ev.total > 0) {
+          const pct = Math.min(78, Math.max(15, Math.round((ev.loaded / ev.total) * 63) + 15));
+          onProgress(pct);
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status === 401 || xhr.status === 403) {
+          reject(new Error('UNAUTHORIZED_ADMIN'));
+          return;
+        }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            if (data.url) {
+              onProgress(82);
+              resolve(data.url);
+              return;
+            }
+          } catch {
+            // fall through to error
+          }
+        }
+        reject(new Error(`فشل رفع ملف PDF إلى الخادم (${xhr.status})`));
+      };
+
+      xhr.ontimeout = () => reject(new Error('انتهت مهلة رفع ملف PDF، يرجى المحاولة مرة أخرى.'));
+      xhr.onerror = () => reject(new Error('تعذر الاتصال بالخادم أثناء رفع ملف PDF.'));
+      xhr.open('POST', '/api/admin/upload-pdf');
+      if (token) {
+        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      }
+      xhr.send(formData);
+    });
   };
 
   // BOOK ACTIONS
   const handleSaveBook = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isPublishingBook) return;
     setBookPublishError(null);
 
     if (!bookTitle.trim()) {
@@ -614,6 +521,16 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     if (!selectedPdfFile && !bookFilePath.trim()) {
       setBookPublishError('يرجى اختيار ملف PDF من جهازك أو إدخال رابط مباشر للكتاب.');
       return;
+    }
+
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setBookPublishError('لا يوجد اتصال بالإنترنت حالياً. لا يمكن حفظ أو نشر الكتاب قبل الاتصال بالخادم.');
+      return;
+    }
+
+    const requestId = editingBookId ? '' : (pendingBookRequestId || makeClientRequestId());
+    if (!editingBookId && !pendingBookRequestId) {
+      setPendingBookRequestId(requestId);
     }
 
     setIsPublishingBook(true);
@@ -633,13 +550,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         setBookPublishProgress(72);
       }
 
-      setBookPublishStage('جاري حفظ الكتاب ونشره للطلاب...');
+      setBookPublishStage('جاري حفظ الكتاب في قاعدة البيانات المركزية...');
       setBookPublishProgress(88);
 
       const url = editingBookId ? `/api/books/${editingBookId}` : '/api/books';
       const method = editingBookId ? 'PUT' : 'POST';
 
-      const payload = {
+      const payload: Record<string, any> = {
         title: bookTitle.trim(),
         category: bookCategory,
         filepath: finalFilePath,
@@ -648,12 +565,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         grade: bookGrade,
         description: bookDescription,
       };
+      if (requestId) payload.clientRequestId = requestId;
 
-      let savedBookFromServer: Book | null = null;
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 12000);
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      let res: Response;
       try {
-        const res = await fetch(url, {
+        res = await fetch(url, {
           method,
           headers: {
             'Content-Type': 'application/json',
@@ -662,58 +580,35 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           body: JSON.stringify(payload),
           signal: controller.signal,
         });
-        if (res.status === 401) {
-          handleAdminAuthExpired();
-          return;
-        }
-        if (res.ok) {
-          const data = await res.json();
-          if (data.book) {
-            savedBookFromServer = data.book;
-          }
-        }
-      } catch {
-        // Fast offline / timeout fallback handled cleanly below
       } finally {
         clearTimeout(timeoutId);
       }
 
-      const publishedTitle = bookTitle.trim();
+      if (res.status === 401 || res.status === 403) {
+        handleAdminAuthExpired();
+        return;
+      }
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.book) {
+        throw new Error(data.error || 'تعذر حفظ الكتاب في قاعدة البيانات المركزية.');
+      }
+
+      const savedBookFromServer: Book = data.book;
+      const publishedTitle = savedBookFromServer.title || bookTitle.trim();
       const isEditMode = Boolean(editingBookId);
 
       if (editingBookId) {
-        const updatedBook: Book = savedBookFromServer || {
-          id: editingBookId,
-          ...payload,
-          downloads: books.find(b => b.id === editingBookId)?.downloads || 0,
-          views: books.find(b => b.id === editingBookId)?.views || 0,
-          created_at: books.find(b => b.id === editingBookId)?.created_at || new Date().toISOString(),
-        };
-        if (savedBookFromServer) {
-          clearEditedItem('book', editingBookId);
-        } else {
-          saveEditedItem('book', editingBookId, updatedBook);
-        }
-        setBooks(prev => prev.map(b => (b.id === editingBookId ? updatedBook : b)));
+        setBooks(prev => prev.map(b => (Number(b.id) === Number(editingBookId) ? savedBookFromServer : b)));
       } else {
-        const createdBook: Book = savedBookFromServer || {
-          id: Date.now(),
-          ...payload,
-          downloads: 0,
-          views: 0,
-          created_at: new Date().toISOString(),
-        };
-        if (!savedBookFromServer) {
-          saveCustomItem('book', createdBook);
-        }
-        setBooks(prev => [createdBook, ...prev.filter(b => b.id !== createdBook.id)]);
+        setBooks(prev => [savedBookFromServer, ...prev.filter(b => Number(b.id) !== Number(savedBookFromServer.id))]);
       }
 
       invalidateBootstrapCache();
       setBookPublishProgress(100);
-      setBookPublishStage('تم نشر الكتاب وإتاحته للطلاب بنجاح!');
+      setBookPublishStage('تم حفظ الكتاب ونشره لجميع الطلاب بنجاح!');
 
-      // Immediately close modal, show confirmation banner, and sync cleanly
+      setPendingBookRequestId('');
       setShowBookModal(false);
       resetBookForm();
       setIsPublishingBook(false);
@@ -723,16 +618,24 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         title: isEditMode
           ? `تم تحديث ونشر الكتاب "${publishedTitle}" بنجاح`
           : `تم نشر الكتاب "${publishedTitle}" وإتاحته لجميع الطلاب بنجاح`,
-        subtitle: 'أصبح الكتاب ظاهراً الآن في المكتبة ومتاحاً للقراءة والتحميل الفوري.'
+        subtitle: 'تم الحفظ في قاعدة البيانات المركزية ومزامنته مع جميع المستخدمين.'
       });
       await fetchAdminData(adminToken, true);
       dispatchContentChanged();
       onDataChanged();
     } catch (err: any) {
+      if (err?.message === 'UNAUTHORIZED_ADMIN') {
+        handleAdminAuthExpired();
+        return;
+      }
       setIsPublishingBook(false);
       setBookPublishProgress(0);
       setBookPublishStage('');
-      setBookPublishError(err?.message || 'حدث خطأ أثناء رفع ونشر الكتاب، يرجى المحاولة مرة أخرى.');
+      setBookPublishError(
+        err?.name === 'AbortError'
+          ? 'انتهت مهلة الاتصال بالخادم. يرجى المحاولة مرة أخرى.'
+          : (err?.message || 'حدث خطأ أثناء رفع ونشر الكتاب، لم يتم الحفظ.')
+      );
     }
   };
 
@@ -777,38 +680,37 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   const handleDeleteBook = (id: number) => {
     setConfirmDialog({
       title: 'حذف الكتاب نهائياً',
-      message: 'هل أنت متأكد من حذف هذا الكتاب نهائياً من المكتبة؟',
+      message: 'هل أنت متأكد من حذف هذا الكتاب نهائياً من قاعدة البيانات للجميع؟',
       onConfirm: async () => {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          setAdminToastMessage({ title: 'لا يوجد اتصال بالإنترنت، تعذر حذف الكتاب', isError: true });
+          return;
+        }
         try {
-          markItemAsDeleted('book', id, { notify: false, syncServer: false });
-          setBooks(prev => prev.filter(b => Number(b.id) !== Number(id)));
-          invalidateBootstrapCache();
-
           const res = await fetch(`/api/books/${id}`, {
             method: 'DELETE',
             headers: { 'Authorization': `Bearer ${adminToken}` },
-          }).catch(() => null);
+          });
 
-          if (res && res.status === 401) {
+          if (res.status === 401 || res.status === 403) {
             handleAdminAuthExpired();
             return;
           }
-          if (!res || !res.ok) {
-            // Fallback for serverless cold starts: still register deleted ID
-            await fetch('/api/deleted-ids', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ books: [Number(id)] }),
-            }).catch(() => {});
+
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            setAdminToastMessage({ title: data.error || 'تعذر حذف الكتاب من قاعدة البيانات', isError: true });
+            return;
           }
 
+          setBooks(prev => prev.filter(b => Number(b.id) !== Number(id)));
           invalidateBootstrapCache();
           await fetchAdminData(adminToken, true);
           dispatchContentChanged();
           onDataChanged();
-          setAdminToastMessage({ title: 'تم حذف الكتاب نهائياً من المكتبة بنجاح' });
+          setAdminToastMessage({ title: 'تم حذف الكتاب نهائياً من قاعدة البيانات لجميع المستخدمين بنجاح' });
         } catch {
-          setAdminToastMessage({ title: 'تعذر حذف الكتاب، يرجى المحاولة مرة أخرى', isError: true });
+          setAdminToastMessage({ title: 'تعذر الاتصال بالخادم لحذف الكتاب، يرجى المحاولة مرة أخرى', isError: true });
         }
       },
     });
@@ -844,6 +746,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
   const resetBookForm = () => {
     setEditingBookId(null);
+    setPendingBookRequestId('');
     setBookTitle('');
     setBookCategory('كتب الطلاب');
     setBookFilePath('');
@@ -865,19 +768,26 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   const handleDeleteExam = (id: string) => {
     setConfirmDialog({
       title: 'حذف الامتحان',
-      message: 'هل أنت متأكد من حذف هذا الامتحان بالكامل من المنصة؟',
+      message: 'هل أنت متأكد من حذف هذا الامتحان بالكامل من المنصة للجميع؟',
       onConfirm: async () => {
-        invalidateBootstrapCache();
-        const { exams, unauthorized } = await deleteStudentExam(id, adminToken);
-        if (unauthorized) {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          setAdminToastMessage({ title: 'لا يوجد اتصال بالإنترنت، تعذر حذف الامتحان', isError: true });
+          return;
+        }
+        const res = await deleteStudentExam(id, adminToken);
+        if (res.unauthorized || res.forbidden) {
           handleAdminAuthExpired();
           return;
         }
-        setStudentExams(exams);
+        if (!res.ok) {
+          setAdminToastMessage({ title: res.error || 'تعذر حذف الامتحان من قاعدة البيانات', isError: true });
+          return;
+        }
+        setStudentExams(res.exams);
         invalidateBootstrapCache();
         await fetchAdminData(adminToken, true);
         onDataChanged();
-        setAdminToastMessage({ title: 'تم حذف الامتحان بنجاح' });
+        setAdminToastMessage({ title: 'تم حذف الامتحان من قاعدة البيانات للجميع بنجاح' });
       },
     });
   };
@@ -925,8 +835,18 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       return;
     }
 
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setExamFormError('لا يوجد اتصال بالإنترنت، تعذر حفظ الامتحان في الخادم.');
+      return;
+    }
+
+    const examIdToSave = pendingExamId || ('exam_' + Date.now());
+    if (!pendingExamId) {
+      setPendingExamId(examIdToSave);
+    }
+
     const newExam: Exam = {
-      id: 'exam_' + Date.now(),
+      id: examIdToSave,
       title: examTitle.trim(),
       subject: examSubject,
       grade: examGrade,
@@ -946,13 +866,17 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
     if (isSavingContent) return;
     setIsSavingContent(true);
     try {
-      invalidateBootstrapCache();
-      const { exams, unauthorized } = await addCustomStudentExam(newExam, adminToken);
-      if (unauthorized) {
+      const res = await addCustomStudentExam(newExam, adminToken);
+      if (res.unauthorized || res.forbidden) {
         handleAdminAuthExpired();
         return;
       }
-      setStudentExams(exams);
+      if (!res.ok) {
+        setExamFormError(res.error || 'تعذر حفظ الامتحان في قاعدة البيانات المركزية.');
+        return;
+      }
+      setStudentExams(res.exams);
+      setPendingExamId('');
       setShowExamModal(false);
       resetExamForm();
       invalidateBootstrapCache();
@@ -960,7 +884,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
       onDataChanged();
       setAdminToastMessage({
         title: `تمت إضافة ونشر الامتحان "${newExam.title}" بنجاح! 🎉`,
-        subtitle: 'أصبح الامتحان متاحاً للطلاب في بنك الامتحانات فوراً.'
+        subtitle: 'تم الحفظ في قاعدة البيانات المركزية وأصبح متاحاً للجميع فوراً.'
       });
     } finally {
       setIsSavingContent(false);
@@ -969,6 +893,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
   const resetExamForm = () => {
     setExamFormError(null);
+    setPendingExamId('');
     setExamTitle('');
     setExamSubject('كيمياء');
     setExamGrade('الصف الثالث الثانوي');
@@ -1111,6 +1036,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
   const resetSummaryForm = () => {
     setEditingSummaryId(null);
+    setPendingSummaryRequestId('');
+    setSummaryFormError(null);
     setSummaryTitle('');
     setSummaryImagePath('');
     setSummaryImageFilePreview('');
@@ -1119,6 +1046,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
   const resetVideoForm = () => {
     setEditingVideoId(null);
+    setPendingVideoRequestId('');
+    setVideoFormError(null);
     setVideoTitle('');
     setVideoUrl('');
     setVideoCategory('شروحات');
@@ -1128,6 +1057,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
   const resetArticleForm = () => {
     setEditingArticleId(null);
+    setPendingArticleRequestId('');
+    setArticleFormError(null);
     setArticleTitle('');
     setArticleContent('');
     setArticleImagePath('');
@@ -1138,6 +1069,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
   const openEditSummary = (s: Summary) => {
     setEditingSummaryId(s.id);
+    setPendingSummaryRequestId('');
+    setSummaryFormError(null);
     setSummaryTitle(s.title);
     setSummaryImagePath(s.imagepath);
     setSummaryImageFilePreview(s.imagepath);
@@ -1148,80 +1081,75 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   const handleSaveSummary = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSavingContent) return;
+    setSummaryFormError(null);
+
     const cleanTitle = summaryTitle.trim();
     const cleanImage = summaryImagePath.trim();
     if (!cleanTitle || !cleanImage) {
-      setAdminToastMessage({ title: 'يرجى إدخال عنوان الملخص ورابط أو صورة الملخص', isError: true });
+      setSummaryFormError('يرجى إدخال عنوان الملخص ورابط أو صورة الملخص.');
       return;
     }
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setSummaryFormError('لا يوجد اتصال بالإنترنت، تعذر حفظ الملخص في قاعدة البيانات.');
+      return;
+    }
+
+    const requestId = editingSummaryId ? '' : (pendingSummaryRequestId || makeClientRequestId());
+    if (!editingSummaryId && !pendingSummaryRequestId) {
+      setPendingSummaryRequestId(requestId);
+    }
+
     setIsSavingContent(true);
     try {
-      const payload = {
+      const payload: Record<string, any> = {
         title: cleanTitle,
         imagepath: cleanImage,
         category: summaryCategory.trim() || 'عام',
       };
+      if (requestId) payload.clientRequestId = requestId;
 
       const url = editingSummaryId ? `/api/summaries/${editingSummaryId}` : '/api/summaries';
       const method = editingSummaryId ? 'PUT' : 'POST';
 
-      let savedSumFromServer: Summary | null = null;
-      try {
-        const res = await fetch(url, {
-          method,
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${adminToken}`,
-          },
-          body: JSON.stringify(payload),
-        });
-        if (res.status === 401) {
-          handleAdminAuthExpired();
-          return;
-        }
-        if (res.ok) {
-          const data = await res.json();
-          if (data.summary) savedSumFromServer = data.summary;
-        }
-      } catch {
-        // offline fallback below
+      const res = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.status === 401 || res.status === 403) {
+        handleAdminAuthExpired();
+        return;
       }
 
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.summary) {
+        throw new Error(data.error || 'تعذر حفظ الملخص في قاعدة البيانات المركزية.');
+      }
+
+      const savedSumFromServer: Summary = data.summary;
       if (editingSummaryId) {
-        const updatedSum: Summary = savedSumFromServer || {
-          ...(summaries.find(s => s.id === editingSummaryId) || { id: editingSummaryId, views: 0, created_at: new Date().toISOString() }),
-          ...payload,
-        };
-        if (savedSumFromServer) {
-          clearEditedItem('summary', editingSummaryId);
-        } else {
-          saveEditedItem('summary', editingSummaryId, updatedSum);
-        }
-        setSummaries(prev => prev.map(s => (s.id === editingSummaryId ? updatedSum : s)));
+        setSummaries(prev => prev.map(s => (Number(s.id) === Number(editingSummaryId) ? savedSumFromServer : s)));
       } else {
-        const newSum: Summary = savedSumFromServer || {
-          id: Date.now(),
-          ...payload,
-          views: 0,
-          created_at: new Date().toISOString()
-        };
-        if (!savedSumFromServer) {
-          saveCustomItem('summary', newSum);
-        }
-        setSummaries(prev => [newSum, ...prev.filter(s => s.id !== newSum.id)]);
+        setSummaries(prev => [savedSumFromServer, ...prev.filter(s => Number(s.id) !== Number(savedSumFromServer.id))]);
       }
 
       invalidateBootstrapCache();
       setAdminToastMessage({
-        title: editingSummaryId ? `تم تحديث الملخص "${cleanTitle}" بنجاح` : `تم نشر الملخص "${cleanTitle}" وإتاحته للطلاب فوراً`,
+        title: editingSummaryId ? `تم تحديث الملخص "${cleanTitle}" بنجاح` : `تم نشر الملخص "${cleanTitle}" وإتاحته للجميع فوراً`,
+        subtitle: 'تم الحفظ في قاعدة البيانات المركزية ومزامنته مع جميع المستخدمين.'
       });
+      setPendingSummaryRequestId('');
       setShowSummaryModal(false);
       resetSummaryForm();
       await fetchAdminData(adminToken, true);
       dispatchContentChanged();
       onDataChanged();
     } catch (err: any) {
-      setAdminToastMessage({ title: err?.message || 'حدث خطأ أثناء حفظ الملخص', isError: true });
+      setSummaryFormError(err?.message || 'حدث خطأ أثناء حفظ الملخص في الخادم.');
     } finally {
       setIsSavingContent(false);
     }
@@ -1230,35 +1158,35 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   const handleDeleteSummary = (id: number) => {
     setConfirmDialog({
       title: 'حذف الملخص نهائياً',
-      message: 'هل أنت متأكد من حذف صورة الملخص نهائياً؟',
+      message: 'هل أنت متأكد من حذف صورة الملخص نهائياً للجميع؟',
       onConfirm: async () => {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          setAdminToastMessage({ title: 'لا يوجد اتصال بالإنترنت، تعذر حذف الملخص', isError: true });
+          return;
+        }
         try {
-          markItemAsDeleted('summary', id, { notify: false, syncServer: false });
-          setSummaries(prev => prev.filter(s => Number(s.id) !== Number(id)));
-          invalidateBootstrapCache();
-
           const res = await fetch(`/api/summaries/${id}`, {
             method: 'DELETE',
             headers: { 'Authorization': `Bearer ${adminToken}` },
-          }).catch(() => null);
+          });
 
-          if (res && res.status === 401) {
+          if (res.status === 401 || res.status === 403) {
             handleAdminAuthExpired();
             return;
           }
-          if (!res || !res.ok) {
-            await fetch('/api/deleted-ids', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ summaries: [Number(id)] }),
-            }).catch(() => {});
+
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            setAdminToastMessage({ title: data.error || 'تعذر حذف الملخص من قاعدة البيانات', isError: true });
+            return;
           }
 
+          setSummaries(prev => prev.filter(s => Number(s.id) !== Number(id)));
           invalidateBootstrapCache();
           await fetchAdminData(adminToken, true);
           dispatchContentChanged();
           onDataChanged();
-          setAdminToastMessage({ title: 'تم حذف الملخص نهائياً بنجاح' });
+          setAdminToastMessage({ title: 'تم حذف الملخص نهائياً من قاعدة البيانات بنجاح' });
         } catch {
           setAdminToastMessage({ title: 'تعذر حذف الملخص، يرجى المحاولة مرة أخرى', isError: true });
         }
@@ -1268,6 +1196,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
   const openEditVideo = (v: Video) => {
     setEditingVideoId(v.id);
+    setPendingVideoRequestId('');
+    setVideoFormError(null);
     setVideoTitle(v.title);
     setVideoUrl(v.videourl);
     setVideoCategory(v.category);
@@ -1279,82 +1209,77 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   const handleSaveVideo = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSavingContent) return;
+    setVideoFormError(null);
+
     const cleanTitle = videoTitle.trim();
     const cleanUrl = videoUrl.trim();
     if (!cleanTitle || !cleanUrl) {
-      setAdminToastMessage({ title: 'يرجى إدخال عنوان الفيديو ورابطه', isError: true });
+      setVideoFormError('يرجى إدخال عنوان الفيديو ورابطه.');
       return;
     }
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setVideoFormError('لا يوجد اتصال بالإنترنت، تعذر حفظ الفيديو في قاعدة البيانات.');
+      return;
+    }
+
+    const requestId = editingVideoId ? '' : (pendingVideoRequestId || makeClientRequestId());
+    if (!editingVideoId && !pendingVideoRequestId) {
+      setPendingVideoRequestId(requestId);
+    }
+
     setIsSavingContent(true);
     try {
-      const payload = {
+      const payload: Record<string, any> = {
         title: cleanTitle,
         videourl: cleanUrl,
         category: videoCategory.trim() || 'شروحات',
         channel: videoChannel.trim() || 'المكتبة الرقمية',
         duration: videoDuration.trim() || '20:00',
       };
+      if (requestId) payload.clientRequestId = requestId;
 
       const url = editingVideoId ? `/api/videos/${editingVideoId}` : '/api/videos';
       const method = editingVideoId ? 'PUT' : 'POST';
 
-      let savedVidFromServer: Video | null = null;
-      try {
-        const res = await fetch(url, {
-          method,
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${adminToken}`,
-          },
-          body: JSON.stringify(payload),
-        });
-        if (res.status === 401) {
-          handleAdminAuthExpired();
-          return;
-        }
-        if (res.ok) {
-          const data = await res.json();
-          if (data.video) savedVidFromServer = data.video;
-        }
-      } catch {
-        // offline fallback
+      const res = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.status === 401 || res.status === 403) {
+        handleAdminAuthExpired();
+        return;
       }
 
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.video) {
+        throw new Error(data.error || 'تعذر حفظ الفيديو في قاعدة البيانات المركزية.');
+      }
+
+      const savedVidFromServer: Video = data.video;
       if (editingVideoId) {
-        const updatedVid: Video = savedVidFromServer || {
-          ...(videos.find(v => v.id === editingVideoId) || { id: editingVideoId, views: 0, created_at: new Date().toISOString() }),
-          ...payload,
-        };
-        if (savedVidFromServer) {
-          clearEditedItem('video', editingVideoId);
-        } else {
-          saveEditedItem('video', editingVideoId, updatedVid);
-        }
-        setVideos(prev => prev.map(v => (v.id === editingVideoId ? updatedVid : v)));
+        setVideos(prev => prev.map(v => (Number(v.id) === Number(editingVideoId) ? savedVidFromServer : v)));
       } else {
-        const newVid: Video = savedVidFromServer || {
-          id: Date.now(),
-          ...payload,
-          views: 0,
-          created_at: new Date().toISOString()
-        };
-        if (!savedVidFromServer) {
-          saveCustomItem('video', newVid);
-        }
-        setVideos(prev => [newVid, ...prev.filter(v => v.id !== newVid.id)]);
+        setVideos(prev => [savedVidFromServer, ...prev.filter(v => Number(v.id) !== Number(savedVidFromServer.id))]);
       }
 
       invalidateBootstrapCache();
       setAdminToastMessage({
-        title: editingVideoId ? `تم تحديث الفيديو "${cleanTitle}" بنجاح` : `تم نشر الفيديو "${cleanTitle}" وإتاحته للطلاب فوراً`,
+        title: editingVideoId ? `تم تحديث الفيديو "${cleanTitle}" بنجاح` : `تم نشر الفيديو "${cleanTitle}" وإتاحته للجميع فوراً`,
+        subtitle: 'تم الحفظ في قاعدة البيانات المركزية ومزامنته مع جميع المستخدمين.'
       });
+      setPendingVideoRequestId('');
       setShowVideoModal(false);
       resetVideoForm();
       await fetchAdminData(adminToken, true);
       dispatchContentChanged();
       onDataChanged();
     } catch (err: any) {
-      setAdminToastMessage({ title: err?.message || 'حدث خطأ أثناء حفظ الفيديو', isError: true });
+      setVideoFormError(err?.message || 'حدث خطأ أثناء حفظ الفيديو في الخادم.');
     } finally {
       setIsSavingContent(false);
     }
@@ -1363,35 +1288,35 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   const handleDeleteVideo = (id: number) => {
     setConfirmDialog({
       title: 'حذف مقطع الفيديو نهائياً',
-      message: 'هل أنت متأكد من حذف مقطع الفيديو نهائياً؟',
+      message: 'هل أنت متأكد من حذف مقطع الفيديو نهائياً للجميع؟',
       onConfirm: async () => {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          setAdminToastMessage({ title: 'لا يوجد اتصال بالإنترنت، تعذر حذف الفيديو', isError: true });
+          return;
+        }
         try {
-          markItemAsDeleted('video', id, { notify: false, syncServer: false });
-          setVideos(prev => prev.filter(v => Number(v.id) !== Number(id)));
-          invalidateBootstrapCache();
-
           const res = await fetch(`/api/videos/${id}`, {
             method: 'DELETE',
             headers: { 'Authorization': `Bearer ${adminToken}` },
-          }).catch(() => null);
+          });
 
-          if (res && res.status === 401) {
+          if (res.status === 401 || res.status === 403) {
             handleAdminAuthExpired();
             return;
           }
-          if (!res || !res.ok) {
-            await fetch('/api/deleted-ids', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ videos: [Number(id)] }),
-            }).catch(() => {});
+
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            setAdminToastMessage({ title: data.error || 'تعذر حذف الفيديو من قاعدة البيانات', isError: true });
+            return;
           }
 
+          setVideos(prev => prev.filter(v => Number(v.id) !== Number(id)));
           invalidateBootstrapCache();
           await fetchAdminData(adminToken, true);
           dispatchContentChanged();
           onDataChanged();
-          setAdminToastMessage({ title: 'تم حذف الفيديو نهائياً بنجاح' });
+          setAdminToastMessage({ title: 'تم حذف الفيديو نهائياً من قاعدة البيانات بنجاح' });
         } catch {
           setAdminToastMessage({ title: 'تعذر حذف الفيديو، يرجى المحاولة مرة أخرى', isError: true });
         }
@@ -1403,82 +1328,77 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   const handleSaveArticle = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSavingContent) return;
+    setArticleFormError(null);
+
     const cleanTitle = articleTitle.trim();
     const cleanContent = articleContent.trim();
     if (!cleanTitle || !cleanContent) {
-      setAdminToastMessage({ title: 'يرجى إدخال عنوان المقال ومحتواه بالكامل', isError: true });
+      setArticleFormError('يرجى إدخال عنوان المقال ومحتواه بالكامل.');
       return;
     }
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setArticleFormError('لا يوجد اتصال بالإنترنت، تعذر حفظ المقال في قاعدة البيانات.');
+      return;
+    }
+
+    const requestId = editingArticleId ? '' : (pendingArticleRequestId || makeClientRequestId());
+    if (!editingArticleId && !pendingArticleRequestId) {
+      setPendingArticleRequestId(requestId);
+    }
+
     setIsSavingContent(true);
     try {
-      const payload = {
+      const payload: Record<string, any> = {
         title: cleanTitle,
         content: cleanContent,
         imagepath: articleImagePath.trim() || 'https://images.unsplash.com/photo-1456513080510-7bf3a84b82f8?w=600&auto=format&fit=crop&q=80',
         author: articleAuthor.trim() || 'ARM',
         readTime: articleReadTime.trim() || '5 دقائق',
       };
+      if (requestId) payload.clientRequestId = requestId;
 
       const url = editingArticleId ? `/api/articles/${editingArticleId}` : '/api/articles';
       const method = editingArticleId ? 'PUT' : 'POST';
 
-      let savedArtFromServer: Article | null = null;
-      try {
-        const res = await fetch(url, {
-          method,
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${adminToken}`,
-          },
-          body: JSON.stringify(payload),
-        });
-        if (res.status === 401) {
-          handleAdminAuthExpired();
-          return;
-        }
-        if (res.ok) {
-          const data = await res.json();
-          if (data.article) savedArtFromServer = data.article;
-        }
-      } catch {
-        // offline fallback
+      const res = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.status === 401 || res.status === 403) {
+        handleAdminAuthExpired();
+        return;
       }
 
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.article) {
+        throw new Error(data.error || 'تعذر حفظ المقال في قاعدة البيانات المركزية.');
+      }
+
+      const savedArtFromServer: Article = data.article;
       if (editingArticleId) {
-        const updatedArt: Article = savedArtFromServer || {
-          ...(articles.find(a => a.id === editingArticleId) || { id: editingArticleId, views: 0, created_at: new Date().toISOString() }),
-          ...payload,
-        };
-        if (savedArtFromServer) {
-          clearEditedItem('article', editingArticleId);
-        } else {
-          saveEditedItem('article', editingArticleId, updatedArt);
-        }
-        setArticles(prev => prev.map(a => (a.id === editingArticleId ? updatedArt : a)));
+        setArticles(prev => prev.map(a => (Number(a.id) === Number(editingArticleId) ? savedArtFromServer : a)));
       } else {
-        const newArt: Article = savedArtFromServer || {
-          id: Date.now(),
-          ...payload,
-          views: 0,
-          created_at: new Date().toISOString()
-        };
-        if (!savedArtFromServer) {
-          saveCustomItem('article', newArt);
-        }
-        setArticles(prev => [newArt, ...prev.filter(a => a.id !== newArt.id)]);
+        setArticles(prev => [savedArtFromServer, ...prev.filter(a => Number(a.id) !== Number(savedArtFromServer.id))]);
       }
 
       invalidateBootstrapCache();
       setAdminToastMessage({
-        title: editingArticleId ? `تم تحديث المقال "${cleanTitle}" بنجاح` : `تم نشر المقال "${cleanTitle}" وإتاحته للطلاب فوراً`,
+        title: editingArticleId ? `تم تحديث المقال "${cleanTitle}" بنجاح` : `تم نشر المقال "${cleanTitle}" وإتاحته للجميع فوراً`,
+        subtitle: 'تم الحفظ في قاعدة البيانات المركزية ومزامنته مع جميع المستخدمين.'
       });
+      setPendingArticleRequestId('');
       setShowArticleModal(false);
       resetArticleForm();
       await fetchAdminData(adminToken, true);
       dispatchContentChanged();
       onDataChanged();
     } catch (err: any) {
-      setAdminToastMessage({ title: err?.message || 'حدث خطأ أثناء حفظ المقال', isError: true });
+      setArticleFormError(err?.message || 'حدث خطأ أثناء حفظ المقال في الخادم.');
     } finally {
       setIsSavingContent(false);
     }
@@ -1487,35 +1407,35 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
   const handleDeleteArticle = (id: number) => {
     setConfirmDialog({
       title: 'حذف المقال نهائياً',
-      message: 'هل أنت متأكد من حذف هذا المقال نهائياً؟',
+      message: 'هل أنت متأكد من حذف هذا المقال نهائياً للجميع؟',
       onConfirm: async () => {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          setAdminToastMessage({ title: 'لا يوجد اتصال بالإنترنت، تعذر حذف المقال', isError: true });
+          return;
+        }
         try {
-          markItemAsDeleted('article', id, { notify: false, syncServer: false });
-          setArticles(prev => prev.filter(a => Number(a.id) !== Number(id)));
-          invalidateBootstrapCache();
-
           const res = await fetch(`/api/articles/${id}`, {
             method: 'DELETE',
             headers: { 'Authorization': `Bearer ${adminToken}` },
-          }).catch(() => null);
+          });
 
-          if (res && res.status === 401) {
+          if (res.status === 401 || res.status === 403) {
             handleAdminAuthExpired();
             return;
           }
-          if (!res || !res.ok) {
-            await fetch('/api/deleted-ids', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ articles: [Number(id)] }),
-            }).catch(() => {});
+
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            setAdminToastMessage({ title: data.error || 'تعذر حذف المقال من قاعدة البيانات', isError: true });
+            return;
           }
 
+          setArticles(prev => prev.filter(a => Number(a.id) !== Number(id)));
           invalidateBootstrapCache();
           await fetchAdminData(adminToken, true);
           dispatchContentChanged();
           onDataChanged();
-          setAdminToastMessage({ title: 'تم حذف المقال نهائياً بنجاح' });
+          setAdminToastMessage({ title: 'تم حذف المقال نهائياً من قاعدة البيانات بنجاح' });
         } catch {
           setAdminToastMessage({ title: 'تعذر حذف المقال، يرجى المحاولة مرة أخرى', isError: true });
         }
@@ -1542,7 +1462,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
           confirmPassword,
         }),
       });
-      if (res.status === 401) {
+      if (res.status === 401 || res.status === 403) {
         handleAdminAuthExpired();
         return;
       }
@@ -1568,9 +1488,11 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
   // USER MANAGEMENT ACTIONS
   const handleToggleUserStatus = async (user: User) => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setAdminToastMessage({ title: 'لا يوجد اتصال بالإنترنت، تعذر تعديل حالة الحساب', isError: true });
+      return;
+    }
     const newStatus = user.status === 'active' ? 'suspended' : 'active';
-    updateStudentStatus(user.id, newStatus);
-    setUsers(prev => prev.map(u => u.id === user.id ? { ...u, status: newStatus } : u));
     try {
       const res = await fetch(`/api/admin/users/${user.id}/status`, {
         method: 'PUT',
@@ -1580,54 +1502,58 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
         },
         body: JSON.stringify({ status: newStatus }),
       });
-      if (res.status === 401) {
+      if (res.status === 401 || res.status === 403) {
         handleAdminAuthExpired();
         return;
       }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setAdminToastMessage({ title: data.error || 'تعذر تحديث حالة المستخدم في الخادم', isError: true });
+        return;
+      }
+      setUsers(prev => prev.map(u => u.id === user.id ? { ...u, status: newStatus } : u));
       invalidateBootstrapCache();
       await fetchAdminData(adminToken, true);
       setAdminToastMessage({
         title: newStatus === 'suspended' ? `تم تجميد حساب ${user.name}` : `تم تنشيط حساب ${user.name}`
       });
     } catch {
-      // already applied locally
+      setAdminToastMessage({ title: 'تعذر الاتصال بالخادم لتحديث حالة الحساب', isError: true });
     }
   };
 
   const handleDeleteUser = (id: string) => {
     setConfirmDialog({
       title: 'حذف حساب المستخدم',
-      message: 'هل أنت متأكد من حذف هذا المستخدم وسجلاته؟',
+      message: 'هل أنت متأكد من حذف هذا المستخدم وسجلاته نهائياً من قاعدة البيانات؟',
       onConfirm: async () => {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          setAdminToastMessage({ title: 'لا يوجد اتصال بالإنترنت، تعذر حذف المستخدم', isError: true });
+          return;
+        }
         try {
-          markItemAsDeleted('user', id, { notify: false, syncServer: false });
-          deleteStudentLocally(id);
-          setUsers(prev => prev.filter(u => String(u.id) !== String(id)));
-          invalidateBootstrapCache();
-
           const res = await fetch(`/api/admin/users/${id}`, {
             method: 'DELETE',
             headers: { 'Authorization': `Bearer ${adminToken}` },
-          }).catch(() => null);
+          });
 
-          if (res && res.status === 401) {
+          if (res.status === 401 || res.status === 403) {
             handleAdminAuthExpired();
             return;
           }
-          if (!res || !res.ok) {
-            await fetch('/api/deleted-ids', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ users: [String(id)] }),
-            }).catch(() => {});
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            setAdminToastMessage({ title: data.error || 'تعذر حذف المستخدم من قاعدة البيانات', isError: true });
+            return;
           }
 
+          setUsers(prev => prev.filter(u => String(u.id) !== String(id)));
           invalidateBootstrapCache();
           await fetchAdminData(adminToken, true);
           dispatchContentChanged();
-          setAdminToastMessage({ title: 'تم حذف المستخدم نهائياً بنجاح' });
+          setAdminToastMessage({ title: 'تم حذف المستخدم نهائياً من قاعدة البيانات بنجاح' });
         } catch {
-          setAdminToastMessage({ title: 'تعذر حذف المستخدم', isError: true });
+          setAdminToastMessage({ title: 'تعذر الاتصال بالخادم لحذف المستخدم', isError: true });
         }
       },
     });
@@ -2021,14 +1947,22 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
                         {req.status !== 'approved' && (
                           <button
-                            onClick={() => {
+                            onClick={async () => {
+                              const res = await updatePaymentRequestStatus(req.id, 'approved', adminToken);
+                              if (res.unauthorized) {
+                                handleAdminAuthExpired();
+                                return;
+                              }
+                              if (!res.ok) {
+                                setAdminToastMessage({ title: res.error || 'تعذر توثيق المساهمة في قاعدة البيانات', isError: true });
+                                return;
+                              }
                               invalidateBootstrapCache();
-                              updatePaymentRequestStatus(req.id, 'approved', adminToken);
                               setPaymentRequests(getPaymentRequests());
                               setStudentSubscriptionsMap(getAllSavedSubscriptions());
                               setAdminToastMessage({
                                 title: `تم تأكيد مساهمة الدعم ومنح وسام الداعم للطالب ${req.userName} ❤️`,
-                                subtitle: 'شكراً لتوثيق المساهمة'
+                                subtitle: 'تم الحفظ في قاعدة البيانات المركزية'
                               });
                             }}
                             className="px-3 py-1.5 rounded-xl bg-emerald-500 text-zinc-950 font-black text-xs hover:brightness-110 transition flex items-center gap-1 shadow"
@@ -2234,11 +2168,20 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                         </span>
 
                         <button
-                          onClick={() => {
+                          onClick={async () => {
                             const newStatus = !isActive;
+                            const res = await saveAdminPlanStatus(plan.id, newStatus, adminToken);
+                            if (res.unauthorized) {
+                              handleAdminAuthExpired();
+                              return;
+                            }
+                            if (!res.ok) {
+                              setAdminToastMessage({ title: res.error || 'تعذر تحديث إعدادات الدعم في الخادم', isError: true });
+                              return;
+                            }
                             invalidateBootstrapCache();
-                            saveAdminPlanStatus(plan.id, newStatus, adminToken);
                             setAdminPlans(getAdminPlansConfig());
+                            setAdminToastMessage({ title: 'تم تحديث إعدادات بوابة الدعم في قاعدة البيانات' });
                           }}
                           className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
                             isActive
@@ -2344,9 +2287,17 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                             <div className="flex items-center justify-center gap-1.5">
                               {req.status !== 'approved' && (
                                 <button
-                                  onClick={() => {
+                                  onClick={async () => {
+                                    const res = await updatePaymentRequestStatus(req.id, 'approved', adminToken);
+                                    if (res.unauthorized) {
+                                      handleAdminAuthExpired();
+                                      return;
+                                    }
+                                    if (!res.ok) {
+                                      setAdminToastMessage({ title: res.error || 'تعذر توثيق مساهمة الدعم', isError: true });
+                                      return;
+                                    }
                                     invalidateBootstrapCache();
-                                    updatePaymentRequestStatus(req.id, 'approved', adminToken);
                                     setPaymentRequests(getPaymentRequests());
                                     setStudentSubscriptionsMap(getAllSavedSubscriptions());
                                     setAdminToastMessage({
@@ -2360,11 +2311,20 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                               )}
                               {req.status !== 'rejected' && (
                                 <button
-                                  onClick={() => {
+                                  onClick={async () => {
+                                    const res = await updatePaymentRequestStatus(req.id, 'rejected', adminToken);
+                                    if (res.unauthorized) {
+                                      handleAdminAuthExpired();
+                                      return;
+                                    }
+                                    if (!res.ok) {
+                                      setAdminToastMessage({ title: res.error || 'تعذر تحديث حالة المساهمة', isError: true });
+                                      return;
+                                    }
                                     invalidateBootstrapCache();
-                                    updatePaymentRequestStatus(req.id, 'rejected', adminToken);
                                     setPaymentRequests(getPaymentRequests());
                                     setStudentSubscriptionsMap(getAllSavedSubscriptions());
+                                    setAdminToastMessage({ title: 'تم تحديث حالة مساهمة الدعم بنجاح' });
                                   }}
                                   className="px-2.5 py-1 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 font-bold text-[11px] border border-zinc-200 dark:border-zinc-700 transition"
                                 >
@@ -2437,7 +2397,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                           <td className="py-3 px-3 text-center">
                             <div className="flex items-center justify-center gap-1.5 flex-wrap">
                               <button
-                                onClick={() => {
+                                onClick={async () => {
                                   const now = new Date();
                                   const updatedSub: UserSubscription = {
                                     planId: 'supporter',
@@ -2451,8 +2411,16 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                                     isTrial: false,
                                     approvedByAdmin: true
                                   };
+                                  const res = await saveStudentSubscription(student.id, updatedSub, adminToken);
+                                  if (res.unauthorized) {
+                                    handleAdminAuthExpired();
+                                    return;
+                                  }
+                                  if (!res.ok) {
+                                    setAdminToastMessage({ title: res.error || 'تعذر منح وسام الداعم في الخادم', isError: true });
+                                    return;
+                                  }
                                   invalidateBootstrapCache();
-                                  saveStudentSubscription(student.id, updatedSub, true, adminToken);
                                   setStudentSubscriptionsMap(getAllSavedSubscriptions());
                                   setAdminToastMessage({
                                     title: `تم منح وسام داعم المنصة للطالب ${student.name}! ❤️`
@@ -2964,9 +2932,17 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
 
                         <div className="flex items-center gap-2">
                           <button
-                            onClick={() => {
+                            onClick={async () => {
+                              const res = await toggleReviewApproval(rev.id, adminToken);
+                              if (res.unauthorized || res.forbidden) {
+                                handleAdminAuthExpired();
+                                return;
+                              }
+                              if (!res.ok) {
+                                setAdminToastMessage({ title: res.error || 'تعذر تحديث حالة المراجعة', isError: true });
+                                return;
+                              }
                               invalidateBootstrapCache();
-                              toggleReviewApproval(rev.id, adminToken);
                               setAllReviews(getAllReviews());
                             }}
                             className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
@@ -2980,11 +2956,19 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                           </button>
 
                           <button
-                            onClick={() => {
+                            onClick={async () => {
+                              const res = await deleteReview(rev.id, adminToken);
+                              if (res.unauthorized || res.forbidden) {
+                                handleAdminAuthExpired();
+                                return;
+                              }
+                              if (!res.ok) {
+                                setAdminToastMessage({ title: res.error || 'تعذر حذف المراجعة من الخادم', isError: true });
+                                return;
+                              }
                               invalidateBootstrapCache();
-                              deleteReview(rev.id, adminToken);
                               setAllReviews(getAllReviews());
-                              setAdminToastMessage({ title: 'تم حذف المراجعة بنجاح' });
+                              setAdminToastMessage({ title: 'تم حذف المراجعة نهائياً من قاعدة البيانات' });
                             }}
                             className="p-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-zinc-200 dark:border-zinc-700 transition"
                             title="حذف المراجعة"
@@ -3621,6 +3605,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                 />
               </div>
 
+              {summaryFormError && (
+                <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-700 dark:text-rose-300 text-xs font-bold flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                  <span>{summaryFormError}</span>
+                </div>
+              )}
+
               <button
                 type="submit"
                 disabled={isSavingContent}
@@ -3705,6 +3696,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                   />
                 </div>
               </div>
+
+              {videoFormError && (
+                <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-700 dark:text-rose-300 text-xs font-bold flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                  <span>{videoFormError}</span>
+                </div>
+              )}
 
               <button
                 type="submit"
@@ -3826,6 +3824,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDat
                   className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500 font-mono"
                 />
               </div>
+
+              {articleFormError && (
+                <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-700 dark:text-rose-300 text-xs font-bold flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                  <span>{articleFormError}</span>
+                </div>
+              )}
 
               <button
                 type="submit"

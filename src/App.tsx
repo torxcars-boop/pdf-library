@@ -17,6 +17,8 @@ import {
   Video as VideoIcon, 
   Bookmark, 
   Sparkles, 
+  WifiOff,
+  RefreshCw,
 } from 'lucide-react';
 
 import { 
@@ -41,32 +43,33 @@ import {
 } from './data/studentExamsData';
 import { 
   filterOutDeleted, 
-  getCustomItems, 
-  applyEditedOverrides, 
   recordBookDownload, 
   getDownloadedBooksCount, 
   listenToContentChanged,
   getRealDownloads,
   getRealViews,
-  incrementRealDownload,
   syncDeletedStoreFromServer,
-  reconcileCustomItemsWithServer
+  saveBootstrapCache,
+  getBootstrapCache,
+  clearLegacyLocalOverrides
 } from './utils/contentStore';
 import { 
   calculateStudentSubscription, 
-  saveStudentSubscription,
   syncSupportFromServer,
   SUPPORT_UPDATED_EVENT
 } from './utils/subscriptionStore';
-import { saveRegisteredStudent } from './utils/studentUserStore';
 import { setReviewsCacheFromServer } from './utils/reviewsStore';
 import { setCommentsCacheFromServer } from './utils/commentsStore';
 import {
   initRealtimeSync,
   syncBootstrapFromServer,
+  invalidateBootstrapCache,
   getLastPresenceState,
+  getSyncStatusState,
+  SyncStatusSnapshot,
   PRESENCE_UPDATE_EVENT,
-  REALTIME_SYNC_EVENT
+  REALTIME_SYNC_EVENT,
+  SYNC_STATUS_EVENT
 } from './utils/realtimeSync';
 import { triggerPdfDownload } from './utils/pdfStorage';
 import { 
@@ -120,11 +123,21 @@ export default function App() {
   const [selectedSubject, setSelectedSubject] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Data collections - Initialized with comprehensive Egyptian 3rd Secondary curriculum
-  const [books, setBooks] = useState<Book[]>(EGYPT_THANAWEYA_BOOKS);
-  const [summaries, setSummaries] = useState<Summary[]>(EGYPT_THANAWEYA_SUMMARIES);
-  const [videos, setVideos] = useState<Video[]>(EGYPT_THANAWEYA_VIDEOS);
-  const [articles, setArticles] = useState<Article[]>(EGYPT_THANAWEYA_ARTICLES);
+  // Data collections - Hydrate from last verified server cache (or default curriculum while bootstrapping)
+  const initialCache = typeof window !== 'undefined' ? getBootstrapCache() : null;
+  const [books, setBooks] = useState<Book[]>(() =>
+    initialCache?.books?.length ? initialCache.books : EGYPT_THANAWEYA_BOOKS
+  );
+  const [summaries, setSummaries] = useState<Summary[]>(() =>
+    initialCache?.summaries?.length ? initialCache.summaries : EGYPT_THANAWEYA_SUMMARIES
+  );
+  const [videos, setVideos] = useState<Video[]>(() =>
+    initialCache?.videos?.length ? initialCache.videos : EGYPT_THANAWEYA_VIDEOS
+  );
+  const [articles, setArticles] = useState<Article[]>(() =>
+    initialCache?.articles?.length ? initialCache.articles : EGYPT_THANAWEYA_ARTICLES
+  );
+  const [syncStatus, setSyncStatus] = useState<SyncStatusSnapshot>(getSyncStatusState);
   const [loading, setLoading] = useState(true);
 
   // Toast notification
@@ -222,10 +235,15 @@ export default function App() {
         serverVids = Array.isArray(bootstrap.videos) ? bootstrap.videos : [];
         serverArts = Array.isArray(bootstrap.articles) ? bootstrap.articles : [];
 
-        reconcileCustomItemsWithServer('book', serverBooks);
-        reconcileCustomItemsWithServer('summary', serverSums);
-        reconcileCustomItemsWithServer('video', serverVids);
-        reconcileCustomItemsWithServer('article', serverArts);
+        saveBootstrapCache({
+          version: bootstrap.version,
+          ts: bootstrap.ts,
+          books: serverBooks,
+          summaries: serverSums,
+          videos: serverVids,
+          articles: serverArts,
+          deletedIds: bootstrap.deletedIds as any,
+        });
 
         if (typeof bootstrap.onlineCount === 'number' && bootstrap.onlineCount > 0) {
           setOnlineUsers(bootstrap.onlineCount);
@@ -245,47 +263,43 @@ export default function App() {
             const nextUser = { ...activeUser, subscription: refreshedSub };
             setCurrentUser(nextUser);
             localStorage.setItem('arm_current_user', JSON.stringify(nextUser));
-            saveRegisteredStudent(nextUser);
           }
         }
       } else {
         const [bRes, sRes, vRes, aRes] = await Promise.all([
-          fetch('/api/books').catch(() => null),
-          fetch('/api/summaries').catch(() => null),
-          fetch('/api/videos').catch(() => null),
-          fetch('/api/articles').catch(() => null),
+          fetch('/api/books', { cache: 'no-store' }).catch(() => null),
+          fetch('/api/summaries', { cache: 'no-store' }).catch(() => null),
+          fetch('/api/videos', { cache: 'no-store' }).catch(() => null),
+          fetch('/api/articles', { cache: 'no-store' }).catch(() => null),
         ]);
         if (bRes && bRes.ok) {
           const b = await bRes.json();
           serverBooks = b.books || [];
+          hasServerSnapshot = true;
         }
         if (sRes && sRes.ok) {
           const s = await sRes.json();
           serverSums = s.summaries || [];
+          hasServerSnapshot = true;
         }
         if (vRes && vRes.ok) {
           const v = await vRes.json();
           serverVids = v.videos || [];
+          hasServerSnapshot = true;
         }
         if (aRes && aRes.ok) {
           const a = await aRes.json();
           serverArts = a.articles || [];
+          hasServerSnapshot = true;
         }
       }
 
-      // 1. Books processing: server authoritative + offline custom items, filtered by deletions & edits
+      const cached = getBootstrapCache();
+
+      // 1. Books processing: central DB is single source of truth
       let combinedBooks = hasServerSnapshot
         ? [...serverBooks]
-        : (serverBooks && serverBooks.length > 0 ? [...serverBooks] : [...EGYPT_THANAWEYA_BOOKS]);
-
-      const customBooks = getCustomItems<Book>('arm_custom_books_v2');
-      customBooks.forEach(cb => {
-        if (!combinedBooks.some(b => String(b.id) === String(cb.id))) {
-          combinedBooks.unshift(cb);
-        }
-      });
-      combinedBooks = filterOutDeleted('book', combinedBooks);
-      combinedBooks = applyEditedOverrides('book', combinedBooks);
+        : (cached?.books?.length ? [...cached.books] : filterOutDeleted('book', [...EGYPT_THANAWEYA_BOOKS]));
       combinedBooks = combinedBooks.map(book => {
         if (
           book.title.includes('الثانوية') || 
@@ -299,60 +313,66 @@ export default function App() {
         return book;
       });
       setBooks(combinedBooks);
-      setSelectedBook(prev => prev ? (combinedBooks.find(b => b.id === prev.id) || prev) : null);
+      setSelectedBook(prev => {
+        if (!prev) return null;
+        const match = combinedBooks.find(b => String(b.id) === String(prev.id));
+        if (!match && hasServerSnapshot) {
+          showToast('تم حذف هذا الكتاب من قبل الإدارة');
+          return null;
+        }
+        return match || prev;
+      });
 
       // 2. Summaries processing
-      let combinedSums = hasServerSnapshot
+      const combinedSums = hasServerSnapshot
         ? [...serverSums]
-        : (serverSums && serverSums.length > 0 ? [...serverSums] : [...EGYPT_THANAWEYA_SUMMARIES]);
-      const customSums = getCustomItems<Summary>('arm_custom_summaries_v2');
-      customSums.forEach(cs => {
-        if (!combinedSums.some(s => String(s.id) === String(cs.id))) {
-          combinedSums.unshift(cs);
-        }
-      });
-      combinedSums = applyEditedOverrides('summary', filterOutDeleted('summary', combinedSums));
+        : (cached?.summaries?.length ? [...cached.summaries] : filterOutDeleted('summary', [...EGYPT_THANAWEYA_SUMMARIES]));
       setSummaries(combinedSums);
-      setSelectedSummary(prev => prev ? (combinedSums.find(s => s.id === prev.id) || prev) : null);
+      setSelectedSummary(prev => {
+        if (!prev) return null;
+        const match = combinedSums.find(s => String(s.id) === String(prev.id));
+        if (!match && hasServerSnapshot) {
+          showToast('تم حذف هذا الملخص من قبل الإدارة');
+          return null;
+        }
+        return match || prev;
+      });
 
       // 3. Videos processing
-      let combinedVids = hasServerSnapshot
+      const combinedVids = hasServerSnapshot
         ? [...serverVids]
-        : (serverVids && serverVids.length > 0 ? [...serverVids] : [...EGYPT_THANAWEYA_VIDEOS]);
-      const customVids = getCustomItems<Video>('arm_custom_videos_v2');
-      customVids.forEach(cv => {
-        if (!combinedVids.some(v => String(v.id) === String(cv.id))) {
-          combinedVids.unshift(cv);
-        }
-      });
-      combinedVids = applyEditedOverrides('video', filterOutDeleted('video', combinedVids));
+        : (cached?.videos?.length ? [...cached.videos] : filterOutDeleted('video', [...EGYPT_THANAWEYA_VIDEOS]));
       setVideos(combinedVids);
-      setSelectedVideo(prev => prev ? (combinedVids.find(v => v.id === prev.id) || prev) : null);
+      setSelectedVideo(prev => {
+        if (!prev) return null;
+        const match = combinedVids.find(v => String(v.id) === String(prev.id));
+        if (!match && hasServerSnapshot) {
+          showToast('تم حذف هذا الفيديو من قبل الإدارة');
+          return null;
+        }
+        return match || prev;
+      });
 
       // 4. Articles processing
-      let combinedArts = hasServerSnapshot
+      const combinedArts = hasServerSnapshot
         ? [...serverArts]
-        : (serverArts && serverArts.length > 0 ? [...serverArts] : [...EGYPT_THANAWEYA_ARTICLES]);
-      const customArts = getCustomItems<Article>('arm_custom_articles_v2');
-      customArts.forEach(ca => {
-        if (!combinedArts.some(art => String(art.id) === String(ca.id))) {
-          combinedArts.unshift(ca);
-        }
-      });
-      combinedArts = applyEditedOverrides('article', filterOutDeleted('article', combinedArts));
+        : (cached?.articles?.length ? [...cached.articles] : filterOutDeleted('article', [...EGYPT_THANAWEYA_ARTICLES]));
       setArticles(combinedArts);
-      setSelectedArticle(prev => prev ? (combinedArts.find(a => a.id === prev.id) || prev) : null);
+      setSelectedArticle(prev => {
+        if (!prev) return null;
+        const match = combinedArts.find(a => String(a.id) === String(prev.id));
+        if (!match && hasServerSnapshot) {
+          showToast('تم حذف هذا المقال من قبل الإدارة');
+          return null;
+        }
+        return match || prev;
+      });
 
       // Refresh student downloads & statistics
       setDownloadedCount(getDownloadedBooksCount());
       setStudentStats(getStudentStats(currentUserIdRef.current));
     } catch (err) {
       console.error('Fetch error:', err);
-      // Fallback filtered by deletions
-      setBooks(filterOutDeleted('book', EGYPT_THANAWEYA_BOOKS));
-      setVideos(filterOutDeleted('video', EGYPT_THANAWEYA_VIDEOS));
-      setSummaries(filterOutDeleted('summary', EGYPT_THANAWEYA_SUMMARIES));
-      setArticles(filterOutDeleted('article', EGYPT_THANAWEYA_ARTICLES));
     } finally {
       if (!silent) setLoading(false);
     }
@@ -418,22 +438,27 @@ export default function App() {
     try {
       const res = await fetch('/api/auth/me', {
         headers: { 'Authorization': `Bearer ${token}` },
+        cache: 'no-store',
       });
       if (res.ok) {
         const data = await res.json();
-        // Calculate supporter status / student profile for this specific student
         const studentSub = calculateStudentSubscription(data.user.id, data.user.createdAt, data.user.subscription);
         data.user.subscription = studentSub;
         setCurrentUser(data.user);
         setUserToken(token);
         localStorage.setItem('arm_current_user', JSON.stringify(data.user));
-        saveRegisteredStudent(data.user);
         void syncUserStatsFromServer(data.user.id, token).then((stats) => {
           setStudentStats(stats);
         });
+      } else if (res.status === 401 || res.status === 403) {
+        setCurrentUser(null);
+        setUserToken('');
+        localStorage.removeItem('arm_user_token');
+        localStorage.removeItem('arm_current_user');
+        showToast('تم إنهاء جلسة الحساب أو تعليقه من الإدارة');
       }
-    } catch (e) {
-      // If offline, keep cached user session from localStorage
+    } catch {
+      // If offline, keep read-only cached user session until connection restores
     }
   };
 
@@ -445,16 +470,15 @@ export default function App() {
       };
       setCurrentUser(updatedUser);
       localStorage.setItem('arm_current_user', JSON.stringify(updatedUser));
-      saveStudentSubscription(currentUser.id, sub);
-      saveRegisteredStudent(updatedUser);
     }
     showToast(`شكراً لدعمك الكريم لاستمرار المنصة المجانية ❤️ (${sub.planName})`);
   };
 
   useEffect(() => {
+    clearLegacyLocalOverrides();
     void fetchData(false);
 
-    // 1. Immediately restore cached student session to avoid any flicker/logout
+    // 1. Immediately restore cached student session to avoid flicker, then verify with server
     const savedUserJson = localStorage.getItem('arm_current_user');
     if (savedUserJson) {
       try {
@@ -462,8 +486,7 @@ export default function App() {
         const studentSub = calculateStudentSubscription(cachedUser.id, cachedUser.createdAt, cachedUser.subscription);
         cachedUser.subscription = studentSub;
         setCurrentUser(cachedUser);
-        saveRegisteredStudent(cachedUser);
-      } catch (err) {
+      } catch {
         // ignore parse error
       }
     }
@@ -485,6 +508,13 @@ export default function App() {
       }
     };
 
+    const handleSyncStatus = (e: Event) => {
+      const detail = (e as CustomEvent<SyncStatusSnapshot>).detail;
+      if (detail) {
+        setSyncStatus(detail);
+      }
+    };
+
     const handleRealtimeSync = (e: Event) => {
       const detail = (e as CustomEvent<{ scope?: string }>).detail;
       if (detail?.scope === 'user-stats') {
@@ -496,6 +526,9 @@ export default function App() {
         return;
       }
       void fetchData(true);
+      if ((detail?.scope === 'users' || detail?.scope === 'all') && userTokenRef.current) {
+        void restoreUserSession(userTokenRef.current);
+      }
       if (detail?.scope === 'all' && currentUserRef.current && userTokenRef.current) {
         void syncUserStatsFromServer(currentUserRef.current.id, userTokenRef.current).then((stats) => {
           setStudentStats(stats);
@@ -518,11 +551,11 @@ export default function App() {
         const updatedUser = { ...activeUser, subscription: refreshedSub };
         setCurrentUser(updatedUser);
         localStorage.setItem('arm_current_user', JSON.stringify(updatedUser));
-        saveRegisteredStudent(updatedUser);
       }
     };
 
     window.addEventListener(PRESENCE_UPDATE_EVENT, handlePresence);
+    window.addEventListener(SYNC_STATUS_EVENT, handleSyncStatus);
     window.addEventListener(REALTIME_SYNC_EVENT, handleRealtimeSync);
     window.addEventListener(SUPPORT_UPDATED_EVENT, handleSupportSync);
 
@@ -559,6 +592,7 @@ export default function App() {
       stopRealtime();
       unsubscribeSync();
       window.removeEventListener(PRESENCE_UPDATE_EVENT, handlePresence);
+      window.removeEventListener(SYNC_STATUS_EVENT, handleSyncStatus);
       window.removeEventListener(REALTIME_SYNC_EVENT, handleRealtimeSync);
       window.removeEventListener(SUPPORT_UPDATED_EVENT, handleSupportSync);
       window.removeEventListener('popstate', checkAdminRoute);
@@ -574,7 +608,6 @@ export default function App() {
     setUserToken(token);
     localStorage.setItem('arm_user_token', token);
     localStorage.setItem('arm_current_user', JSON.stringify(user));
-    saveRegisteredStudent(user);
     void syncUserStatsFromServer(user.id, token).then((stats) => {
       setStudentStats(stats);
     });
@@ -588,7 +621,7 @@ export default function App() {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${userToken}` },
         });
-      } catch (e) {
+      } catch {
         // ignore
       }
     }
@@ -615,17 +648,19 @@ export default function App() {
         },
         body: JSON.stringify({ id, type, title, path }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
       if (res.ok) {
         const updatedUser = { ...currentUser, bookmarks: data.bookmarks };
         setCurrentUser(updatedUser);
         localStorage.setItem('arm_current_user', JSON.stringify(updatedUser));
-        saveRegisteredStudent(updatedUser);
         showToast(data.message);
+      } else {
+        showToast(data.error || 'تعذر تحديث المفضلة');
       }
     } catch (err) {
       console.error('Favorite error:', err);
+      showToast('تعذر الاتصال بالخادم لتحديث المفضلة');
     }
   };
 
@@ -656,94 +691,46 @@ export default function App() {
     setIsProfileOpen(false);
   };
 
-  // Handle Content Rating (1-5 stars)
+  // Handle Content Rating (1-5 stars) - confirmed against central DB
   const handleRateItem = async (type: 'book' | 'summary' | 'video' | 'article', id: number, star: number) => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      showToast('أنت غير متصل بالإنترنت — تعذر تسجيل التقييم');
+      return;
+    }
+
     try {
-      // 1. Optimistic updates based on genuine math
-      if (type === 'book') {
-        setBooks(prev => prev.map(b => {
-          if (b.id === id) {
-            const prevCount = b.ratingCount || 0;
-            const prevRating = b.rating || 0;
-            const count = prevCount + 1;
-            const newRating = prevCount === 0 ? star : Math.round((((prevRating * prevCount) + star) / count) * 10) / 10;
-            return { ...b, rating: newRating, ratingCount: count };
-          }
-          return b;
-        }));
-        if (selectedBook && selectedBook.id === id) {
-          const prevCount = selectedBook.ratingCount || 0;
-          const prevRating = selectedBook.rating || 0;
-          const count = prevCount + 1;
-          const newRating = prevCount === 0 ? star : Math.round((((prevRating * prevCount) + star) / count) * 10) / 10;
-          setSelectedBook({ ...selectedBook, rating: newRating, ratingCount: count });
-        }
-      } else if (type === 'video') {
-        setVideos(prev => prev.map(v => {
-          if (v.id === id) {
-            const prevCount = v.ratingCount || 0;
-            const prevRating = v.rating || 0;
-            const count = prevCount + 1;
-            const newRating = prevCount === 0 ? star : Math.round((((prevRating * prevCount) + star) / count) * 10) / 10;
-            return { ...v, rating: newRating, ratingCount: count };
-          }
-          return v;
-        }));
-        if (selectedVideo && selectedVideo.id === id) {
-          const prevCount = selectedVideo.ratingCount || 0;
-          const prevRating = selectedVideo.rating || 0;
-          const count = prevCount + 1;
-          const newRating = prevCount === 0 ? star : Math.round((((prevRating * prevCount) + star) / count) * 10) / 10;
-          setSelectedVideo({ ...selectedVideo, rating: newRating, ratingCount: count });
-        }
-      } else if (type === 'summary') {
-        setSummaries(prev => prev.map(s => {
-          if (s.id === id) {
-            const prevCount = s.ratingCount || 0;
-            const prevRating = s.rating || 0;
-            const count = prevCount + 1;
-            const newRating = prevCount === 0 ? star : Math.round((((prevRating * prevCount) + star) / count) * 10) / 10;
-            return { ...s, rating: newRating, ratingCount: count };
-          }
-          return s;
-        }));
-        if (selectedSummary && selectedSummary.id === id) {
-          const prevCount = selectedSummary.ratingCount || 0;
-          const prevRating = selectedSummary.rating || 0;
-          const count = prevCount + 1;
-          const newRating = prevCount === 0 ? star : Math.round((((prevRating * prevCount) + star) / count) * 10) / 10;
-          setSelectedSummary({ ...selectedSummary, rating: newRating, ratingCount: count });
-        }
-      } else if (type === 'article') {
-        setArticles(prev => prev.map(a => {
-          if (a.id === id) {
-            const prevCount = a.ratingCount || 0;
-            const prevRating = a.rating || 0;
-            const count = prevCount + 1;
-            const newRating = prevCount === 0 ? star : Math.round((((prevRating * prevCount) + star) / count) * 10) / 10;
-            return { ...a, rating: newRating, ratingCount: count };
-          }
-          return a;
-        }));
-        if (selectedArticle && selectedArticle.id === id) {
-          const prevCount = selectedArticle.ratingCount || 0;
-          const prevRating = selectedArticle.rating || 0;
-          const count = prevCount + 1;
-          const newRating = prevCount === 0 ? star : Math.round((((prevRating * prevCount) + star) / count) * 10) / 10;
-          setSelectedArticle({ ...selectedArticle, rating: newRating, ratingCount: count });
-        }
-      }
-
-      showToast(`شكراً لك! تم تسجيل تقييمك (${star} ⭐) بنجاح.`);
-
-      // 2. Server API call
-      await fetch('/api/rate', {
+      const res = await fetch('/api/rate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type, id, rating: star }),
       });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast(data.error || 'تعذر حفظ التقييم في قاعدة البيانات');
+        return;
+      }
+
+      const serverItem = data.item;
+      if (serverItem) {
+        if (type === 'book') {
+          setBooks(prev => prev.map(b => (b.id === id ? { ...b, rating: serverItem.rating, ratingCount: serverItem.ratingCount } : b)));
+          setSelectedBook(prev => (prev && prev.id === id ? { ...prev, rating: serverItem.rating, ratingCount: serverItem.ratingCount } : prev));
+        } else if (type === 'video') {
+          setVideos(prev => prev.map(v => (v.id === id ? { ...v, rating: serverItem.rating, ratingCount: serverItem.ratingCount } : v)));
+          setSelectedVideo(prev => (prev && prev.id === id ? { ...prev, rating: serverItem.rating, ratingCount: serverItem.ratingCount } : prev));
+        } else if (type === 'summary') {
+          setSummaries(prev => prev.map(s => (s.id === id ? { ...s, rating: serverItem.rating, ratingCount: serverItem.ratingCount } : s)));
+          setSelectedSummary(prev => (prev && prev.id === id ? { ...prev, rating: serverItem.rating, ratingCount: serverItem.ratingCount } : prev));
+        } else if (type === 'article') {
+          setArticles(prev => prev.map(a => (a.id === id ? { ...a, rating: serverItem.rating, ratingCount: serverItem.ratingCount } : a)));
+          setSelectedArticle(prev => (prev && prev.id === id ? { ...prev, rating: serverItem.rating, ratingCount: serverItem.ratingCount } : prev));
+        }
+      }
+
+      showToast(`شكراً لك! تم حفظ تقييمك (${star} ⭐) بنجاح.`);
     } catch (e) {
       console.error('Failed to rate item:', e);
+      showToast('تعذر الاتصال بالخادم لحفظ التقييم');
     }
   };
 
@@ -839,6 +826,27 @@ export default function App() {
           onOpenAuth={() => setIsAuthOpen(true)}
           variant="top-bar"
         />
+
+        {/* Real-Time Offline / Sync Failure Warning Banner */}
+        {(!syncStatus.online || syncStatus.status === 'offline' || syncStatus.error) && (
+          <div className="bg-amber-500/15 dark:bg-amber-950/50 border-b border-amber-500/40 px-4 py-2 text-xs font-bold text-amber-900 dark:text-amber-200 flex flex-wrap items-center justify-center gap-3">
+            <span className="flex items-center gap-1.5">
+              <WifiOff className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+              <span>{syncStatus.error || 'انقطع الاتصال بالإنترنت — يتم عرض آخر نسخة محفوظة مؤقتاً'}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                invalidateBootstrapCache();
+                void fetchData(false);
+              }}
+              className="px-3 py-1 rounded-xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-black flex items-center gap-1 transition active:scale-95"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>إعادة المزامنة</span>
+            </button>
+          </div>
+        )}
 
         {/* Hero Section with Quick Statistics */}
         <div className="relative overflow-hidden border-b border-amber-500/15 bg-gradient-to-b from-amber-50/70 via-white/40 to-transparent dark:from-amber-950/20 dark:via-zinc-950/40 dark:to-transparent">
@@ -1541,13 +1549,21 @@ export default function App() {
                             </button>
 
                             <button
-                              onClick={() => {
+                              onClick={async () => {
                                 recordBookDownload(pdf, currentUser?.id);
-                                const updatedDownloads = incrementRealDownload(pdf.id, pdf.downloads || 0);
                                 setDownloadedCount(getDownloadedBooksCount());
                                 setStudentStats(getStudentStats(currentUser?.id));
-                                setBooks(prev => prev.map(b => b.id === pdf.id ? { ...b, downloads: updatedDownloads } : b));
-                                void fetch(`/api/books/${pdf.id}/download`, { method: 'POST' }).catch(() => {});
+                                try {
+                                  const res = await fetch(`/api/books/${pdf.id}/download`, { method: 'POST' });
+                                  if (res.ok) {
+                                    const data = await res.json().catch(() => ({}));
+                                    if (typeof data.downloads === 'number') {
+                                      setBooks(prev => prev.map(b => b.id === pdf.id ? { ...b, downloads: data.downloads } : b));
+                                    }
+                                  }
+                                } catch {
+                                  // ignore counter update when offline
+                                }
                                 void triggerPdfDownload(pdf.filepath, `${pdf.title}.pdf`);
                                 showToast(`بدأ تحميل كتاب: ${pdf.title} ⚡`);
                               }}
@@ -1634,7 +1650,6 @@ export default function App() {
             };
             setCurrentUser(preservedUser);
             localStorage.setItem('arm_current_user', JSON.stringify(preservedUser));
-            saveRegisteredStudent(preservedUser);
           }}
           onRemoveBookmark={handleRemoveBookmark}
           onOpenItem={handleOpenBookmarkItem}

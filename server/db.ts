@@ -125,6 +125,7 @@ export interface DeletedIdsStore {
 }
 
 export interface DatabaseSchema {
+  syncVersion?: number;
   adminConfig: {
     username: string;
     passwordHash: string;
@@ -508,6 +509,7 @@ export const EGYPT_THANAWEYA_DATA: DatabaseSchema = {
       timestamp: '2026-09-01T08:05:00.000Z',
     }
   ],
+  syncVersion: 1,
   deletedIds: { books: [], summaries: [], videos: [], articles: [], users: [] },
   reviews: [],
   comments: [],
@@ -525,6 +527,7 @@ class DatabaseManager {
   private memoryData: DatabaseSchema;
   private pgSyncQueued = false;
   private pgSyncRunning = false;
+  private idempotencyMap = new Map<string, { item: any; ts: number }>();
 
   constructor() {
     this.memoryData = this.normalizeSchema(this.loadFromFile());
@@ -536,6 +539,7 @@ class DatabaseManager {
     return {
       ...fallback,
       ...data,
+      syncVersion: typeof data.syncVersion === 'number' && Number.isFinite(data.syncVersion) ? data.syncVersion : 1,
       adminConfig: data.adminConfig || fallback.adminConfig,
       users: Array.isArray(data.users) ? data.users : [],
       pdfs: Array.isArray(data.pdfs) ? data.pdfs : fallback.pdfs,
@@ -544,16 +548,16 @@ class DatabaseManager {
       articles: Array.isArray(data.articles) ? data.articles : fallback.articles,
       auditLogs: Array.isArray(data.auditLogs) ? data.auditLogs : fallback.auditLogs,
       deletedIds: {
-        books: Array.isArray(data.deletedIds?.books) ? data.deletedIds!.books : [],
-        summaries: Array.isArray(data.deletedIds?.summaries) ? data.deletedIds!.summaries : [],
-        videos: Array.isArray(data.deletedIds?.videos) ? data.deletedIds!.videos : [],
-        articles: Array.isArray(data.deletedIds?.articles) ? data.deletedIds!.articles : [],
-        users: Array.isArray(data.deletedIds?.users) ? data.deletedIds!.users : [],
+        books: Array.isArray(data.deletedIds?.books) ? Array.from(new Set(data.deletedIds!.books.map(Number))) : [],
+        summaries: Array.isArray(data.deletedIds?.summaries) ? Array.from(new Set(data.deletedIds!.summaries.map(Number))) : [],
+        videos: Array.isArray(data.deletedIds?.videos) ? Array.from(new Set(data.deletedIds!.videos.map(Number))) : [],
+        articles: Array.isArray(data.deletedIds?.articles) ? Array.from(new Set(data.deletedIds!.articles.map(Number))) : [],
+        users: Array.isArray(data.deletedIds?.users) ? Array.from(new Set(data.deletedIds!.users.map(String))) : [],
       },
       reviews: Array.isArray(data.reviews) ? data.reviews : [],
       comments: Array.isArray(data.comments) ? data.comments : [],
       customExams: Array.isArray(data.customExams) ? data.customExams : [],
-      deletedExamIds: Array.isArray(data.deletedExamIds) ? data.deletedExamIds : [],
+      deletedExamIds: Array.isArray(data.deletedExamIds) ? Array.from(new Set(data.deletedExamIds.map(String))) : [],
       supportRequests: Array.isArray(data.supportRequests) ? data.supportRequests : [],
       studentSubscriptions: data.studentSubscriptions && typeof data.studentSubscriptions === 'object' ? data.studentSubscriptions : {},
       supportConfig: data.supportConfig && typeof data.supportConfig === 'object' ? data.supportConfig : { basic_50: true },
@@ -583,14 +587,12 @@ class DatabaseManager {
   }
 
   public saveToFile(data: DatabaseSchema) {
-    try {
-      if (!fs.existsSync(DATA_DIR)) {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-      }
-      fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
-    } catch (e) {
-      console.error('Error saving db file:', e);
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
     }
+    const tmpFile = `${DB_FILE}.tmp.${process.pid}`;
+    fs.writeFileSync(tmpFile, JSON.stringify(data, null, 2), 'utf-8');
+    fs.renameSync(tmpFile, DB_FILE);
   }
 
   private async initPostgres() {
@@ -721,14 +723,44 @@ class DatabaseManager {
     return this.memoryData;
   }
 
+  public getSyncVersion(): number {
+    return typeof this.memoryData.syncVersion === 'number' ? this.memoryData.syncVersion : 1;
+  }
+
+  private getIdempotent<T>(scope: string, clientRequestId?: string): T | null {
+    if (!clientRequestId) return null;
+    const key = `${scope}:${clientRequestId}`;
+    const entry = this.idempotencyMap.get(key);
+    if (!entry) return null;
+    if (Date.now() - entry.ts > 10 * 60 * 1000) {
+      this.idempotencyMap.delete(key);
+      return null;
+    }
+    return entry.item as T;
+  }
+
+  private setIdempotent(scope: string, clientRequestId: string | undefined, item: any) {
+    if (!clientRequestId) return;
+    const key = `${scope}:${clientRequestId}`;
+    this.idempotencyMap.set(key, { item, ts: Date.now() });
+    if (this.idempotencyMap.size > 500) {
+      const oldestKey = this.idempotencyMap.keys().next().value;
+      if (oldestKey) this.idempotencyMap.delete(oldestKey);
+    }
+  }
+
   public async commit() {
+    this.memoryData.syncVersion = (this.memoryData.syncVersion || 1) + 1;
     this.saveToFile(this.memoryData);
     void this.syncToPostgres();
   }
 
   public resetToEgyptianThanaweya() {
-    this.memoryData = this.normalizeSchema(EGYPT_THANAWEYA_DATA);
-    this.commit();
+    const nextVersion = (this.memoryData.syncVersion || 1) + 1;
+    this.memoryData = this.normalizeSchema({ ...EGYPT_THANAWEYA_DATA, syncVersion: nextVersion });
+    this.idempotencyMap.clear();
+    this.saveToFile(this.memoryData);
+    void this.syncToPostgres();
   }
 
   // Admin credentials verification
@@ -810,7 +842,11 @@ class DatabaseManager {
     return this.memoryData.pdfs;
   }
 
-  public addBook(book: Omit<Book, 'id' | 'downloads' | 'views' | 'created_at'>): Book {
+  public addBook(book: Omit<Book, 'id' | 'downloads' | 'views' | 'created_at'>, clientRequestId?: string): Book {
+    const cached = this.getIdempotent<Book>('book', clientRequestId);
+    if (cached && this.memoryData.pdfs.some(b => b.id === cached.id)) {
+      return cached;
+    }
     const deleted = this.getDeletedIds().books;
     const nextId = Math.max(0, ...this.memoryData.pdfs.map(b => Number(b.id) || 0), ...deleted.map(Number)) + 1;
     const newBook: Book = {
@@ -823,6 +859,7 @@ class DatabaseManager {
     this.getDeletedIds().books = deleted.filter(id => Number(id) !== nextId);
     this.memoryData.pdfs.unshift(newBook);
     this.commit();
+    this.setIdempotent('book', clientRequestId, newBook);
     return newBook;
   }
 
@@ -854,7 +891,11 @@ class DatabaseManager {
     return this.memoryData.summaries;
   }
 
-  public addSummary(summary: Omit<Summary, 'id' | 'views' | 'created_at'>): Summary {
+  public addSummary(summary: Omit<Summary, 'id' | 'views' | 'created_at'>, clientRequestId?: string): Summary {
+    const cached = this.getIdempotent<Summary>('summary', clientRequestId);
+    if (cached && this.memoryData.summaries.some(s => s.id === cached.id)) {
+      return cached;
+    }
     const deleted = this.getDeletedIds().summaries;
     const nextId = Math.max(0, ...this.memoryData.summaries.map(s => Number(s.id) || 0), ...deleted.map(Number)) + 1;
     const newSum: Summary = {
@@ -866,6 +907,7 @@ class DatabaseManager {
     this.getDeletedIds().summaries = deleted.filter(id => Number(id) !== nextId);
     this.memoryData.summaries.unshift(newSum);
     this.commit();
+    this.setIdempotent('summary', clientRequestId, newSum);
     return newSum;
   }
 
@@ -897,7 +939,11 @@ class DatabaseManager {
     return this.memoryData.videos;
   }
 
-  public addVideo(video: Omit<Video, 'id' | 'views' | 'created_at'>): Video {
+  public addVideo(video: Omit<Video, 'id' | 'views' | 'created_at'>, clientRequestId?: string): Video {
+    const cached = this.getIdempotent<Video>('video', clientRequestId);
+    if (cached && this.memoryData.videos.some(v => v.id === cached.id)) {
+      return cached;
+    }
     const deleted = this.getDeletedIds().videos;
     const nextId = Math.max(0, ...this.memoryData.videos.map(v => Number(v.id) || 0), ...deleted.map(Number)) + 1;
     const newVid: Video = {
@@ -909,6 +955,7 @@ class DatabaseManager {
     this.getDeletedIds().videos = deleted.filter(id => Number(id) !== nextId);
     this.memoryData.videos.unshift(newVid);
     this.commit();
+    this.setIdempotent('video', clientRequestId, newVid);
     return newVid;
   }
 
@@ -944,7 +991,11 @@ class DatabaseManager {
     return this.memoryData.articles.find(a => a.id === id);
   }
 
-  public addArticle(art: Omit<Article, 'id' | 'views' | 'created_at'>): Article {
+  public addArticle(art: Omit<Article, 'id' | 'views' | 'created_at'>, clientRequestId?: string): Article {
+    const cached = this.getIdempotent<Article>('article', clientRequestId);
+    if (cached && this.memoryData.articles.some(a => a.id === cached.id)) {
+      return cached;
+    }
     const deleted = this.getDeletedIds().articles;
     const nextId = Math.max(0, ...this.memoryData.articles.map(a => Number(a.id) || 0), ...deleted.map(Number)) + 1;
     const newArt: Article = {
@@ -956,6 +1007,7 @@ class DatabaseManager {
     this.getDeletedIds().articles = deleted.filter(id => Number(id) !== nextId);
     this.memoryData.articles.unshift(newArt);
     this.commit();
+    this.setIdempotent('article', clientRequestId, newArt);
     return newArt;
   }
 
@@ -1061,6 +1113,21 @@ class DatabaseManager {
 
   public addReview(rev: Omit<ServerReview, 'id' | 'createdAt' | 'isApproved'> & { id?: string }): ServerReview {
     const list = this.getReviews();
+    if (rev.id) {
+      const existing = list.find(r => r.id === rev.id);
+      if (existing) return existing;
+    }
+    const now = Date.now();
+    const recentDuplicate = list.find(
+      r =>
+        String(r.userId) === String(rev.userId) &&
+        String(r.itemId) === String(rev.itemId) &&
+        r.itemType === rev.itemType &&
+        r.comment.trim() === rev.comment.trim() &&
+        now - new Date(r.createdAt).getTime() < 30000
+    );
+    if (recentDuplicate) return recentDuplicate;
+
     const created: ServerReview = {
       ...rev,
       id: rev.id || 'rev_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
@@ -1099,6 +1166,21 @@ class DatabaseManager {
 
   public addComment(cmt: Omit<ServerComment, 'id' | 'createdAt' | 'likesCount' | 'likedBy'> & { id?: string }): ServerComment {
     const list = this.getComments();
+    if (cmt.id) {
+      const existing = list.find(c => c.id === cmt.id);
+      if (existing) return existing;
+    }
+    const now = Date.now();
+    const recentDuplicate = list.find(
+      c =>
+        String(c.authorId) === String(cmt.authorId) &&
+        String(c.itemId) === String(cmt.itemId) &&
+        c.itemType === cmt.itemType &&
+        c.content.trim() === cmt.content.trim() &&
+        now - new Date(c.createdAt).getTime() < 15000
+    );
+    if (recentDuplicate) return recentDuplicate;
+
     const created: ServerComment = {
       ...cmt,
       id: cmt.id || 'cmt_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
@@ -1165,6 +1247,7 @@ class DatabaseManager {
     const list = this.getCustomExams();
     const clean = [exam, ...list.filter(e => String(e.id) !== String(exam.id))];
     this.memoryData.customExams = clean;
+    this.memoryData.deletedExamIds = this.getDeletedExamIds().filter(id => String(id) !== String(exam.id));
     this.commit();
     return exam;
   }
@@ -1199,9 +1282,13 @@ class DatabaseManager {
 
   public addSupportRequest(req: any): any {
     const list = this.getSupportRequests();
+    if (req.id) {
+      const existing = list.find(r => r.id === req.id);
+      if (existing) return existing;
+    }
     const newReq = {
       ...req,
-      id: req.id || 'req_' + Date.now(),
+      id: req.id || 'req_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
       submittedAt: req.submittedAt || new Date().toISOString(),
       status: req.status || 'pending',
     };

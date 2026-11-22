@@ -96,6 +96,7 @@ function broadcastSync(scope: string, extra?: Record<string, unknown>) {
   broadcastWsJson({
     type: 'sync',
     scope,
+    version: db.getSyncVersion(),
     ts: Date.now(),
     onlineCount: getOnlineCount(),
     ...(extra || {}),
@@ -162,15 +163,97 @@ function isValidAdminToken(token: string | undefined): boolean {
   return false;
 }
 
-// Security middleware for Admin
-function requireAdminAuth(req: Request, res: Response, next: NextFunction) {
+type AuthActor =
+  | { kind: 'admin'; id: string; name: string; role: 'admin'; avatar?: string; academicStage: string }
+  | { kind: 'user'; id: string; name: string; role: 'user' | 'moderator' | 'admin'; avatar?: string; academicStage: string; user: User }
+  | { kind: 'suspended'; user: User }
+  | { kind: 'anonymous' };
+
+function extractBearerToken(req: Request): string | undefined {
   const authHeader = req.headers.authorization;
-  const token = authHeader?.replace('Bearer ', '') || (req.query.auth as string);
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    return authHeader.slice(7).trim();
+  }
+  return typeof req.query.auth === 'string' ? req.query.auth.trim() : undefined;
+}
+
+function getAuthActor(req: Request): AuthActor {
+  const token = extractBearerToken(req);
+  if (!token) return { kind: 'anonymous' };
 
   if (isValidAdminToken(token)) {
+    const adminConfig = db.getAdminConfig();
+    return {
+      kind: 'admin',
+      id: 'admin_arm',
+      name: adminConfig.username || 'ARM',
+      role: 'admin',
+      academicStage: 'إدارة المنصة',
+    };
+  }
+
+  const uid = verifyUserToken(token);
+  if (uid) {
+    const user = db.getUserById(uid);
+    if (!user) return { kind: 'anonymous' };
+    if (user.status === 'suspended') return { kind: 'suspended', user };
+    return {
+      kind: 'user',
+      id: user.id,
+      name: user.name,
+      role: user.role,
+      avatar: user.avatar,
+      academicStage: user.academicStage || 'طالب',
+      user,
+    };
+  }
+
+  return { kind: 'anonymous' };
+}
+
+// Security middleware for Admin
+function requireAdminAuth(req: Request, res: Response, next: NextFunction) {
+  const actor = getAuthActor(req);
+  if (actor.kind === 'admin' || (actor.kind === 'user' && actor.role === 'admin')) {
     return next();
   }
+  if (actor.kind === 'suspended') {
+    return res.status(403).json({ error: 'تم تجميد هذا الحساب من قبل الإدارة' });
+  }
+  if (actor.kind === 'user') {
+    return res.status(403).json({ error: 'غير مصرح: هذه العملية تتطلب صلاحية المدير العام' });
+  }
   return res.status(401).json({ error: 'غير مصرح: مطلوب صلاحية الأدمن' });
+}
+
+// Security middleware for Content Publishing / Editing / Deleting (Admin or Moderator)
+function requireContentWriteAuth(req: Request, res: Response, next: NextFunction) {
+  const actor = getAuthActor(req);
+  if (actor.kind === 'admin') {
+    return next();
+  }
+  if (actor.kind === 'suspended') {
+    return res.status(403).json({ error: 'تم تجميد هذا الحساب من قبل الإدارة' });
+  }
+  if (actor.kind === 'user') {
+    if (actor.role === 'admin' || actor.role === 'moderator') {
+      return next();
+    }
+    return res.status(403).json({ error: 'ليس لديك صلاحية نشر أو تعديل أو حذف المحتوى' });
+  }
+  return res.status(401).json({ error: 'يرجى تسجيل الدخول بصلاحية الأدمن أو المشرف' });
+}
+
+// Security middleware for Active Logged-in Users (or Admin)
+function requireActiveUserAuth(req: Request, res: Response, next: NextFunction) {
+  const actor = getAuthActor(req);
+  if (actor.kind === 'admin' || actor.kind === 'user') {
+    return next();
+  }
+  if (actor.kind === 'suspended') {
+    return res.status(403).json({ error: 'تم تجميد هذا الحساب من قبل الإدارة' });
+  }
+  return res.status(401).json({ error: 'يرجى تسجيل الدخول أولاً للمتابعة' });
 }
 
 // --------------------------------------------------------------------------
@@ -187,6 +270,7 @@ app.get('/api/status', (req: Request, res: Response) => {
 
   res.json({
     status: 'ok',
+    syncVersion: db.getSyncVersion(),
     engine: db.isUsingPostgres() ? 'PostgreSQL Cloud Database' : 'Local High-Speed Persistence Engine',
     totals: {
       books: books.length,
@@ -195,16 +279,17 @@ app.get('/api/status', (req: Request, res: Response) => {
       articles: articles.length,
       users: users.length,
     },
-    version: '2.5.0-security-hardened',
+    version: '2.6.0-central-sync',
   });
 });
 
-// Initialization & Sync endpoint for Egyptian Thanaweya Curriculum
-app.get('/api/init-egypt-curriculum', (req: Request, res: Response) => {
+// Initialization & Sync endpoint for Egyptian Thanaweya Curriculum (Admin only!)
+app.get('/api/init-egypt-curriculum', requireAdminAuth, (req: Request, res: Response) => {
   db.resetToEgyptianThanaweya();
-  broadcastSync('all');
+  broadcastSync('all', { action: 'updated' });
   res.json({
     success: true,
+    version: db.getSyncVersion(),
     message: 'تمت تهيئة وتحديث مناهج وفيديوهات الصف الثالث الثانوي المصري بنجاح 🇪🇬',
     counts: {
       books: db.getBooks().length,
@@ -214,7 +299,16 @@ app.get('/api/init-egypt-curriculum', (req: Request, res: Response) => {
   });
 });
 
-// Unified Bootstrap Sync Endpoint (Single Fast Payload for All Clients & Devices)
+// Lightweight Sync Version Endpoint (Fast Polling Fallback)
+app.get('/api/sync/version', (_req: Request, res: Response) => {
+  res.json({
+    version: db.getSyncVersion(),
+    ts: Date.now(),
+    onlineCount: getOnlineCount(),
+  });
+});
+
+// Unified Bootstrap Sync Endpoint (Single Authoritative Payload for All Clients & Devices)
 app.get('/api/sync/bootstrap', (_req: Request, res: Response) => {
   const deletedIds = db.getDeletedIds();
   const books = db.getBooks().filter(b => !deletedIds.books.includes(Number(b.id)));
@@ -241,6 +335,7 @@ app.get('/api/sync/bootstrap', (_req: Request, res: Response) => {
   });
 
   res.json({
+    version: db.getSyncVersion(),
     ts: Date.now(),
     onlineCount: getOnlineCount(),
     books,
@@ -258,13 +353,13 @@ app.get('/api/sync/bootstrap', (_req: Request, res: Response) => {
 });
 
 app.get('/api/deleted-ids', (_req: Request, res: Response) => {
-  res.json({ deletedIds: db.getDeletedIds() });
+  res.json({ deletedIds: db.getDeletedIds(), version: db.getSyncVersion() });
 });
 
-app.post('/api/deleted-ids', (req: Request, res: Response) => {
+app.post('/api/deleted-ids', requireContentWriteAuth, (req: Request, res: Response) => {
   const updated = db.mergeDeletedIds(req.body || {});
-  broadcastSync('content');
-  res.json({ success: true, deletedIds: updated });
+  broadcastSync('content', { action: 'deleted' });
+  res.json({ success: true, deletedIds: updated, version: db.getSyncVersion() });
 });
 
 // --------------------------------------------------------------------------
@@ -410,6 +505,7 @@ app.post('/api/user/favorite', (req: Request, res: Response) => {
 
   const user = db.getUserById(userId);
   if (!user) return res.status(404).json({ error: 'المستخدم غير موجود' });
+  if (user.status === 'suspended') return res.status(403).json({ error: 'تم تجميد هذا الحساب' });
 
   const { id, type, title, path: itemPath } = req.body;
   if (!id || !type || !title) {
@@ -451,6 +547,9 @@ app.get('/api/user/stats', (req: Request, res: Response) => {
   if (!userId) {
     return res.status(401).json({ error: 'يرجى تسجيل الدخول لمزامنة التقدم' });
   }
+  const user = db.getUserById(userId);
+  if (!user) return res.status(404).json({ error: 'المستخدم غير موجود' });
+  if (user.status === 'suspended') return res.status(403).json({ error: 'تم تجميد هذا الحساب' });
   const stats = db.getStudentStatsForUser(userId);
   res.json({ stats });
 });
@@ -461,6 +560,9 @@ app.put('/api/user/stats', (req: Request, res: Response) => {
   if (!userId) {
     return res.status(401).json({ error: 'يرجى تسجيل الدخول لحفظ التقدم' });
   }
+  const user = db.getUserById(userId);
+  if (!user) return res.status(404).json({ error: 'المستخدم غير موجود' });
+  if (user.status === 'suspended') return res.status(403).json({ error: 'تم تجميد هذا الحساب' });
   const { stats } = req.body || {};
   if (!stats || typeof stats !== 'object') {
     return res.status(400).json({ error: 'بيانات الإحصائيات غير صالحة' });
@@ -482,10 +584,11 @@ app.post('/api/rate', (req: Request, res: Response) => {
     return res.status(404).json({ error: 'العنصر المطلوب غير موجود' });
   }
 
-  broadcastSync('content');
+  broadcastSync('content', { action: 'updated', itemId: Number(id) });
 
   res.json({
     success: true,
+    version: db.getSyncVersion(),
     message: 'تم تسجيل تقييمك بنجاح ⭐',
     rating: result.rating,
     ratingCount: result.ratingCount,
@@ -502,6 +605,10 @@ app.put('/api/user/profile', (req: Request, res: Response) => {
     return res.status(401).json({ error: 'يرجى تسجيل الدخول أولاً' });
   }
 
+  const currentUser = db.getUserById(userId);
+  if (!currentUser) return res.status(404).json({ error: 'لم يتم العثور على المستخدم' });
+  if (currentUser.status === 'suspended') return res.status(403).json({ error: 'تم تجميد هذا الحساب' });
+
   const { name, academicStage, avatar, password } = req.body;
 
   const updates: Partial<User> = {};
@@ -513,7 +620,7 @@ app.put('/api/user/profile', (req: Request, res: Response) => {
   const updated = db.updateUser(userId, updates);
   if (!updated) return res.status(404).json({ error: 'لم يتم العثور على المستخدم' });
 
-  broadcastSync('users');
+  broadcastSync('users', { action: 'updated', itemId: userId });
 
   res.json({ message: 'تم تحديث الملف الشخصي بنجاح', user: sanitizeUserForClient(updated) });
 });
@@ -769,7 +876,7 @@ app.post('/api/admin/restore', requireAdminAuth, (req: Request, res: Response) =
 // --------------------------------------------------------------------------
 
 // Real Multipart PDF Upload endpoint (supports up to 50MB PDFs cleanly with progress tracking)
-app.post('/api/admin/upload-pdf', requireAdminAuth, (req: Request, res: Response) => {
+app.post('/api/admin/upload-pdf', requireContentWriteAuth, (req: Request, res: Response) => {
   uploadPdf.single('file')(req, res, (err: any) => {
     if (err) {
       return res.status(400).json({ error: err.message || 'فشل رفع ملف PDF' });
@@ -813,87 +920,119 @@ app.get('/api/books', (req: Request, res: Response) => {
     );
   }
 
-  res.json({ books });
+  res.json({ books, version: db.getSyncVersion() });
 });
 
-app.post('/api/books', requireAdminAuth, (req: Request, res: Response) => {
-  const { title, category, filepath, coverpath, is_student, grade, description } = req.body;
-  if (!title || !filepath) {
+app.post('/api/books', requireContentWriteAuth, (req: Request, res: Response) => {
+  const { title, category, filepath, coverpath, is_student, grade, description, clientRequestId } = req.body || {};
+  if (!title || !String(title).trim() || !filepath || !String(filepath).trim()) {
     return res.status(400).json({ error: 'العنوان ورابط الملف مطلوبان' });
   }
 
+  const actor = getAuthActor(req);
   const book = db.addBook({
-    title: title.trim(),
-    category: category || 'تعليم',
-    filepath: filepath.trim(),
-    coverpath: coverpath || 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=600&auto=format&fit=crop&q=80',
+    title: String(title).trim(),
+    category: category ? String(category).trim() : 'تعليم',
+    filepath: String(filepath).trim(),
+    coverpath: coverpath ? String(coverpath).trim() : 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=600&auto=format&fit=crop&q=80',
     is_student: is_student ? 1 : 0,
-    grade: grade || '',
-    description: description || '',
-  });
+    grade: grade ? String(grade).trim() : '',
+    description: description ? String(description).trim() : '',
+  }, typeof clientRequestId === 'string' ? clientRequestId : undefined);
 
   db.addAuditLog({
     type: 'item_created',
-    user: 'الأدمن',
+    user: actor.kind === 'admin' || actor.kind === 'user' ? actor.name : 'الأدمن',
     details: `إضافة كتاب جديد: "${book.title}" (${book.category})`,
     ip: getClientIp(req),
     status: 'success',
   });
 
-  broadcastSync('books');
-  res.status(201).json({ book, message: 'تمت إضافة الكتاب بنجاح' });
+  broadcastSync('books', { action: 'created', itemId: book.id });
+  res.status(201).json({ book, version: db.getSyncVersion(), message: 'تمت إضافة الكتاب بنجاح' });
 });
 
-app.put('/api/books/:id', requireAdminAuth, (req: Request, res: Response) => {
+app.put('/api/books/:id', requireContentWriteAuth, (req: Request, res: Response) => {
   const id = parseInt(req.params.id, 10);
-  const updated = db.updateBook(id, req.body);
+  if (Number.isNaN(id)) return res.status(400).json({ error: 'معرف الكتاب غير صالح' });
+  const body = req.body || {};
+  const updates: Partial<Book> = {};
+  if (body.title !== undefined) updates.title = String(body.title).trim();
+  if (body.category !== undefined) updates.category = String(body.category).trim();
+  if (body.filepath !== undefined) updates.filepath = String(body.filepath).trim();
+  if (body.coverpath !== undefined) updates.coverpath = String(body.coverpath).trim();
+  if (body.is_student !== undefined) updates.is_student = body.is_student ? 1 : 0;
+  if (body.grade !== undefined) updates.grade = String(body.grade).trim();
+  if (body.description !== undefined) updates.description = String(body.description).trim();
+
+  if (updates.title === '' || updates.filepath === '') {
+    return res.status(400).json({ error: 'العنوان ورابط الملف لا يمكن أن يكونا فارغين' });
+  }
+
+  const updated = db.updateBook(id, updates);
   if (!updated) return res.status(404).json({ error: 'الكتاب غير موجود' });
-  broadcastSync('books');
-  res.json({ book: updated, message: 'تم تحديث بيانات الكتاب بنجاح' });
+
+  const actor = getAuthActor(req);
+  db.addAuditLog({
+    type: 'item_updated',
+    user: actor.kind === 'admin' || actor.kind === 'user' ? actor.name : 'الأدمن',
+    details: `تعديل كتاب: "${updated.title}"`,
+    ip: getClientIp(req),
+    status: 'success',
+  });
+
+  broadcastSync('books', { action: 'updated', itemId: updated.id });
+  res.json({ book: updated, version: db.getSyncVersion(), message: 'تم تحديث بيانات الكتاب بنجاح' });
 });
 
-app.delete('/api/books/:id', requireAdminAuth, (req: Request, res: Response) => {
+app.delete('/api/books/:id', requireContentWriteAuth, (req: Request, res: Response) => {
   const id = parseInt(req.params.id, 10);
+  if (Number.isNaN(id)) return res.status(400).json({ error: 'معرف الكتاب غير صالح' });
   const book = db.getBooks().find(b => b.id === id);
   const success = db.deleteBook(id);
   db.mergeDeletedIds({ books: [id] });
+  const actor = getAuthActor(req);
   if (!success) {
-    broadcastSync('books');
-    return res.json({ message: 'تمت إزالة الكتاب من المنصة' });
+    broadcastSync('books', { action: 'deleted', itemId: id });
+    return res.json({ success: true, version: db.getSyncVersion(), message: 'تمت إزالة الكتاب من المنصة' });
   }
 
   db.addAuditLog({
     type: 'item_deleted',
-    user: 'الأدمن',
+    user: actor.kind === 'admin' || actor.kind === 'user' ? actor.name : 'الأدمن',
     details: `حذف كتاب: "${book?.title || id}"`,
     ip: getClientIp(req),
     status: 'warning',
   });
 
-  broadcastSync('books');
-  res.json({ message: 'تم حذف الكتاب بنجاح' });
+  broadcastSync('books', { action: 'deleted', itemId: id });
+  res.json({ success: true, version: db.getSyncVersion(), message: 'تم حذف الكتاب بنجاح' });
 });
 
 app.post('/api/books/:id/view', (req: Request, res: Response) => {
   const id = parseInt(req.params.id, 10);
-  const book = db.getBooks().find(b => b.id === id);
-  if (book) {
-    db.updateBook(id, { views: (book.views || 0) + 1 });
-    broadcastSync('content');
+  if (db.getDeletedIds().books.includes(id)) {
+    return res.status(404).json({ error: 'الكتاب غير موجود أو تم حذفه' });
   }
-  res.json({ success: true });
+  const book = db.getBooks().find(b => b.id === id);
+  if (!book) return res.status(404).json({ error: 'الكتاب غير موجود' });
+  const views = (book.views || 0) + 1;
+  db.updateBook(id, { views });
+  broadcastSync('books', { action: 'updated', itemId: id });
+  res.json({ success: true, views, version: db.getSyncVersion() });
 });
 
 app.post('/api/books/:id/download', (req: Request, res: Response) => {
   const id = parseInt(req.params.id, 10);
-  const book = db.getBooks().find(b => b.id === id);
-  let newDownloads = 1;
-  if (book) {
-    newDownloads = (book.downloads || 0) + 1;
-    db.updateBook(id, { downloads: newDownloads });
-    broadcastSync('content');
+  if (db.getDeletedIds().books.includes(id)) {
+    return res.status(404).json({ error: 'الكتاب غير موجود أو تم حذفه' });
   }
-  res.json({ success: true, downloads: newDownloads });
+  const book = db.getBooks().find(b => b.id === id);
+  if (!book) return res.status(404).json({ error: 'الكتاب غير موجود' });
+  const newDownloads = (book.downloads || 0) + 1;
+  db.updateBook(id, { downloads: newDownloads });
+  broadcastSync('books', { action: 'updated', itemId: id });
+  res.json({ success: true, downloads: newDownloads, version: db.getSyncVersion() });
 });
 
 // Fast Student PDF Download Proxy (forces direct attachment download even for cross-origin PDFs)
@@ -954,33 +1093,41 @@ app.post('/api/items/:type/:id/view', (req: Request, res: Response) => {
   const { type, id } = req.params;
   const numId = parseInt(id, 10);
   let views = 1;
-  if (type === 'book') {
+  let updated = false;
+  if (type === 'book' && !db.getDeletedIds().books.includes(numId)) {
     const book = db.getBooks().find(b => b.id === numId);
     if (book) {
       views = (book.views || 0) + 1;
       db.updateBook(numId, { views });
+      updated = true;
     }
-  } else if (type === 'summary') {
+  } else if (type === 'summary' && !db.getDeletedIds().summaries.includes(numId)) {
     const sum = db.getSummaries().find(s => s.id === numId);
     if (sum) {
       views = (sum.views || 0) + 1;
       db.updateSummary(numId, { views });
+      updated = true;
     }
-  } else if (type === 'video') {
+  } else if (type === 'video' && !db.getDeletedIds().videos.includes(numId)) {
     const vid = db.getVideos().find(v => v.id === numId);
     if (vid) {
       views = (vid.views || 0) + 1;
       db.updateVideo(numId, { views });
+      updated = true;
     }
-  } else if (type === 'article') {
+  } else if (type === 'article' && !db.getDeletedIds().articles.includes(numId)) {
     const art = db.getArticles().find(a => a.id === numId);
     if (art) {
       views = (art.views || 0) + 1;
       db.updateArticle(numId, { views });
+      updated = true;
     }
   }
-  broadcastSync('content');
-  res.json({ success: true, views });
+  if (!updated) {
+    return res.status(404).json({ error: 'العنصر غير موجود' });
+  }
+  broadcastSync('content', { action: 'updated', itemId: numId });
+  res.json({ success: true, views, version: db.getSyncVersion() });
 });
 
 // SUMMARIES
@@ -992,61 +1139,73 @@ app.get('/api/summaries', (req: Request, res: Response) => {
     const q = search.toLowerCase();
     summaries = summaries.filter(s => s.title.toLowerCase().includes(q));
   }
-  res.json({ summaries });
+  res.json({ summaries, version: db.getSyncVersion() });
 });
 
-app.post('/api/summaries', requireAdminAuth, (req: Request, res: Response) => {
-  const { title, imagepath, category } = req.body;
-  if (!title || !imagepath) {
+app.post('/api/summaries', requireContentWriteAuth, (req: Request, res: Response) => {
+  const { title, imagepath, category, clientRequestId } = req.body || {};
+  if (!title || !String(title).trim() || !imagepath || !String(imagepath).trim()) {
     return res.status(400).json({ error: 'العنوان ورابط صورة الملخص مطلوبان' });
   }
 
+  const actor = getAuthActor(req);
   const summary = db.addSummary({
-    title: title.trim(),
-    imagepath: imagepath.trim(),
-    category: category || 'عام',
-  });
+    title: String(title).trim(),
+    imagepath: String(imagepath).trim(),
+    category: category ? String(category).trim() : 'عام',
+  }, typeof clientRequestId === 'string' ? clientRequestId : undefined);
 
   db.addAuditLog({
     type: 'item_created',
-    user: 'الأدمن',
+    user: actor.kind === 'admin' || actor.kind === 'user' ? actor.name : 'الأدمن',
     details: `إضافة ملخص صورة جديد: "${summary.title}"`,
     ip: getClientIp(req),
     status: 'success',
   });
 
-  broadcastSync('summaries');
-  res.status(201).json({ summary, message: 'تمت إضافة الملخص بنجاح' });
+  broadcastSync('summaries', { action: 'created', itemId: summary.id });
+  res.status(201).json({ summary, version: db.getSyncVersion(), message: 'تمت إضافة الملخص بنجاح' });
 });
 
-app.put('/api/summaries/:id', requireAdminAuth, (req: Request, res: Response) => {
+app.put('/api/summaries/:id', requireContentWriteAuth, (req: Request, res: Response) => {
   const id = parseInt(req.params.id, 10);
-  const updated = db.updateSummary(id, req.body);
+  if (Number.isNaN(id)) return res.status(400).json({ error: 'معرف الملخص غير صالح' });
+  const body = req.body || {};
+  const updates: Partial<Summary> = {};
+  if (body.title !== undefined) updates.title = String(body.title).trim();
+  if (body.imagepath !== undefined) updates.imagepath = String(body.imagepath).trim();
+  if (body.category !== undefined) updates.category = String(body.category).trim();
+  if (updates.title === '' || updates.imagepath === '') {
+    return res.status(400).json({ error: 'العنوان ورابط الصورة لا يمكن أن يكونا فارغين' });
+  }
+  const updated = db.updateSummary(id, updates);
   if (!updated) return res.status(404).json({ error: 'الملخص غير موجود' });
-  broadcastSync('summaries');
-  res.json({ summary: updated, message: 'تم تعديل الملخص بنجاح' });
+  broadcastSync('summaries', { action: 'updated', itemId: updated.id });
+  res.json({ summary: updated, version: db.getSyncVersion(), message: 'تم تعديل الملخص بنجاح' });
 });
 
-app.delete('/api/summaries/:id', requireAdminAuth, (req: Request, res: Response) => {
+app.delete('/api/summaries/:id', requireContentWriteAuth, (req: Request, res: Response) => {
   const id = parseInt(req.params.id, 10);
+  if (Number.isNaN(id)) return res.status(400).json({ error: 'معرف الملخص غير صالح' });
   const sum = db.getSummaries().find(s => s.id === id);
   const success = db.deleteSummary(id);
   db.mergeDeletedIds({ summaries: [id] });
+  const actor = getAuthActor(req);
   if (!success) {
-    broadcastSync('summaries');
-    return res.json({ message: 'تم حذف الملخص بنجاح' });
+    broadcastSync('summaries', { action: 'deleted', itemId: id });
+    return res.json({ success: true, version: db.getSyncVersion(), message: 'تم حذف الملخص بنجاح' });
   }
 
   db.addAuditLog({
     type: 'item_deleted',
-    user: 'الأدمن',
+    user: actor.kind === 'admin' || actor.kind === 'user' ? actor.name : 'الأدمن',
     details: `حذف ملخص: "${sum?.title || id}"`,
     ip: getClientIp(req),
     status: 'warning',
   });
 
-  broadcastSync('summaries');
-  res.json({ message: 'تم حذف الملخص بنجاح' });
+  broadcastSync('summaries', { action: 'deleted', itemId: id });
+  res.json({ success: true, version: db.getSyncVersion(), message: 'تم حذف الملخص بنجاح' });
 });
 
 // VIDEOS
@@ -1058,63 +1217,77 @@ app.get('/api/videos', (req: Request, res: Response) => {
     const q = search.toLowerCase();
     videos = videos.filter(v => v.title.toLowerCase().includes(q));
   }
-  res.json({ videos });
+  res.json({ videos, version: db.getSyncVersion() });
 });
 
-app.post('/api/videos', requireAdminAuth, (req: Request, res: Response) => {
-  const { title, videourl, category, channel, duration } = req.body;
-  if (!title || !videourl) {
+app.post('/api/videos', requireContentWriteAuth, (req: Request, res: Response) => {
+  const { title, videourl, category, channel, duration, clientRequestId } = req.body || {};
+  if (!title || !String(title).trim() || !videourl || !String(videourl).trim()) {
     return res.status(400).json({ error: 'العنوان ورابط الفيديو مطلوبان' });
   }
 
+  const actor = getAuthActor(req);
   const video = db.addVideo({
-    title: title.trim(),
-    videourl: videourl.trim(),
-    category: category || 'شروحات',
-    channel: channel || 'المكتبة الرقمية',
-    duration: duration || '15:00',
-  });
+    title: String(title).trim(),
+    videourl: String(videourl).trim(),
+    category: category ? String(category).trim() : 'شروحات',
+    channel: channel ? String(channel).trim() : 'المكتبة الرقمية',
+    duration: duration ? String(duration).trim() : '15:00',
+  }, typeof clientRequestId === 'string' ? clientRequestId : undefined);
 
   db.addAuditLog({
     type: 'item_created',
-    user: 'الأدمن',
+    user: actor.kind === 'admin' || actor.kind === 'user' ? actor.name : 'الأدمن',
     details: `إضافة فيديو تعليمي: "${video.title}"`,
     ip: getClientIp(req),
     status: 'success',
   });
 
-  broadcastSync('videos');
-  res.status(201).json({ video, message: 'تمت إضافة الفيديو بنجاح' });
+  broadcastSync('videos', { action: 'created', itemId: video.id });
+  res.status(201).json({ video, version: db.getSyncVersion(), message: 'تمت إضافة الفيديو بنجاح' });
 });
 
-app.put('/api/videos/:id', requireAdminAuth, (req: Request, res: Response) => {
+app.put('/api/videos/:id', requireContentWriteAuth, (req: Request, res: Response) => {
   const id = parseInt(req.params.id, 10);
-  const updated = db.updateVideo(id, req.body);
+  if (Number.isNaN(id)) return res.status(400).json({ error: 'معرف الفيديو غير صالح' });
+  const body = req.body || {};
+  const updates: Partial<Video> = {};
+  if (body.title !== undefined) updates.title = String(body.title).trim();
+  if (body.videourl !== undefined) updates.videourl = String(body.videourl).trim();
+  if (body.category !== undefined) updates.category = String(body.category).trim();
+  if (body.channel !== undefined) updates.channel = String(body.channel).trim();
+  if (body.duration !== undefined) updates.duration = String(body.duration).trim();
+  if (updates.title === '' || updates.videourl === '') {
+    return res.status(400).json({ error: 'العنوان ورابط الفيديو لا يمكن أن يكونا فارغين' });
+  }
+  const updated = db.updateVideo(id, updates);
   if (!updated) return res.status(404).json({ error: 'الفيديو غير موجود' });
-  broadcastSync('videos');
-  res.json({ video: updated, message: 'تم تعديل الفيديو بنجاح' });
+  broadcastSync('videos', { action: 'updated', itemId: updated.id });
+  res.json({ video: updated, version: db.getSyncVersion(), message: 'تم تعديل الفيديو بنجاح' });
 });
 
-app.delete('/api/videos/:id', requireAdminAuth, (req: Request, res: Response) => {
+app.delete('/api/videos/:id', requireContentWriteAuth, (req: Request, res: Response) => {
   const id = parseInt(req.params.id, 10);
+  if (Number.isNaN(id)) return res.status(400).json({ error: 'معرف الفيديو غير صالح' });
   const vid = db.getVideos().find(v => v.id === id);
   const success = db.deleteVideo(id);
   db.mergeDeletedIds({ videos: [id] });
+  const actor = getAuthActor(req);
   if (!success) {
-    broadcastSync('videos');
-    return res.json({ message: 'تم حذف مقطع الفيديو بنجاح' });
+    broadcastSync('videos', { action: 'deleted', itemId: id });
+    return res.json({ success: true, version: db.getSyncVersion(), message: 'تم حذف مقطع الفيديو بنجاح' });
   }
 
   db.addAuditLog({
     type: 'item_deleted',
-    user: 'الأدمن',
+    user: actor.kind === 'admin' || actor.kind === 'user' ? actor.name : 'الأدمن',
     details: `حذف فيديو: "${vid?.title || id}"`,
     ip: getClientIp(req),
     status: 'warning',
   });
 
-  broadcastSync('videos');
-  res.json({ message: 'تم حذف مقطع الفيديو بنجاح' });
+  broadcastSync('videos', { action: 'deleted', itemId: id });
+  res.json({ success: true, version: db.getSyncVersion(), message: 'تم حذف مقطع الفيديو بنجاح' });
 });
 
 // ARTICLES
@@ -1129,71 +1302,88 @@ app.get('/api/articles', (req: Request, res: Response) => {
       a.content.toLowerCase().includes(q)
     );
   }
-  res.json({ articles });
+  res.json({ articles, version: db.getSyncVersion() });
 });
 
 app.get('/api/articles/:id', (req: Request, res: Response) => {
   const id = parseInt(req.params.id, 10);
+  if (db.getDeletedIds().articles.includes(id)) {
+    return res.status(404).json({ error: 'المقالة غير موجودة' });
+  }
   const article = db.getArticleById(id);
   if (!article) return res.status(404).json({ error: 'المقالة غير موجودة' });
   db.updateArticle(id, { views: (article.views || 0) + 1 });
   res.json({ article });
 });
 
-app.post('/api/articles', requireAdminAuth, (req: Request, res: Response) => {
-  const { title, content, imagepath, author, readTime } = req.body;
-  if (!title || !content) {
+app.post('/api/articles', requireContentWriteAuth, (req: Request, res: Response) => {
+  const { title, content, imagepath, author, readTime, clientRequestId } = req.body || {};
+  if (!title || !String(title).trim() || !content || !String(content).trim()) {
     return res.status(400).json({ error: 'عنوان المقال والمحتوى مطلوبان' });
   }
 
+  const actor = getAuthActor(req);
   const article = db.addArticle({
-    title: title.trim(),
-    content: content.trim(),
-    imagepath: imagepath || 'https://images.unsplash.com/photo-1499750310107-5fef28a66643?w=800&auto=format&fit=crop&q=80',
-    author: author || 'ARM',
-    readTime: readTime || '5 دقائق',
-  });
+    title: String(title).trim(),
+    content: String(content).trim(),
+    imagepath: imagepath ? String(imagepath).trim() : 'https://images.unsplash.com/photo-1499750310107-5fef28a66643?w=800&auto=format&fit=crop&q=80',
+    author: author ? String(author).trim() : 'ARM',
+    readTime: readTime ? String(readTime).trim() : '5 دقائق',
+  }, typeof clientRequestId === 'string' ? clientRequestId : undefined);
 
   db.addAuditLog({
     type: 'item_created',
-    user: 'الأدمن',
+    user: actor.kind === 'admin' || actor.kind === 'user' ? actor.name : 'الأدمن',
     details: `نشر مقال جديد: "${article.title}"`,
     ip: getClientIp(req),
     status: 'success',
   });
 
-  broadcastSync('articles');
-  res.status(201).json({ article, message: 'تم نشر المقال بنجاح' });
+  broadcastSync('articles', { action: 'created', itemId: article.id });
+  res.status(201).json({ article, version: db.getSyncVersion(), message: 'تم نشر المقال بنجاح' });
 });
 
-app.put('/api/articles/:id', requireAdminAuth, (req: Request, res: Response) => {
+app.put('/api/articles/:id', requireContentWriteAuth, (req: Request, res: Response) => {
   const id = parseInt(req.params.id, 10);
-  const updated = db.updateArticle(id, req.body);
+  if (Number.isNaN(id)) return res.status(400).json({ error: 'معرف المقالة غير صالح' });
+  const body = req.body || {};
+  const updates: Partial<Article> = {};
+  if (body.title !== undefined) updates.title = String(body.title).trim();
+  if (body.content !== undefined) updates.content = String(body.content).trim();
+  if (body.imagepath !== undefined) updates.imagepath = String(body.imagepath).trim();
+  if (body.author !== undefined) updates.author = String(body.author).trim();
+  if (body.readTime !== undefined) updates.readTime = String(body.readTime).trim();
+  if (updates.title === '' || updates.content === '') {
+    return res.status(400).json({ error: 'عنوان المقال والمحتوى لا يمكن أن يكونا فارغين' });
+  }
+  const updated = db.updateArticle(id, updates);
   if (!updated) return res.status(404).json({ error: 'المقالة غير موجودة' });
-  broadcastSync('articles');
-  res.json({ article: updated, message: 'تم تعديل المقال بنجاح' });
+  broadcastSync('articles', { action: 'updated', itemId: updated.id });
+  res.json({ article: updated, version: db.getSyncVersion(), message: 'تم تعديل المقال بنجاح' });
 });
 
-app.delete('/api/articles/:id', requireAdminAuth, (req: Request, res: Response) => {
+app.delete('/api/articles/:id', requireContentWriteAuth, (req: Request, res: Response) => {
   const id = parseInt(req.params.id, 10);
+  if (Number.isNaN(id)) return res.status(400).json({ error: 'معرف المقالة غير صالح' });
   const art = db.getArticles().find(a => a.id === id);
   const success = db.deleteArticle(id);
   db.mergeDeletedIds({ articles: [id] });
+  const actor = getAuthActor(req);
   if (!success) {
-    broadcastSync('articles');
-    return res.json({ message: 'تم حذف المقالة بنجاح' });
+    broadcastSync('articles', { action: 'deleted', itemId: id });
+    return res.json({ success: true, version: db.getSyncVersion(), message: 'تم حذف المقالة بنجاح' });
   }
 
   db.addAuditLog({
     type: 'item_deleted',
-    user: 'الأدمن',
+    user: actor.kind === 'admin' || actor.kind === 'user' ? actor.name : 'الأدمن',
     details: `حذف مقال: "${art?.title || id}"`,
     ip: getClientIp(req),
     status: 'warning',
   });
 
-  broadcastSync('articles');
-  res.json({ message: 'تم حذف المقالة بنجاح' });
+  broadcastSync('articles', { action: 'deleted', itemId: id });
+  res.json({ success: true, version: db.getSyncVersion(), message: 'تم حذف المقالة بنجاح' });
 });
 
 // --------------------------------------------------------------------------
@@ -1205,10 +1395,11 @@ app.get('/api/exams', (_req: Request, res: Response) => {
   res.json({
     customExams: db.getCustomExams(),
     deletedExamIds: db.getDeletedExamIds(),
+    version: db.getSyncVersion(),
   });
 });
 
-app.post('/api/exams', requireAdminAuth, (req: Request, res: Response) => {
+app.post('/api/exams', requireContentWriteAuth, (req: Request, res: Response) => {
   const exam = req.body;
   if (!exam || !exam.title || !Array.isArray(exam.questions) || exam.questions.length === 0) {
     return res.status(400).json({ error: 'بيانات الامتحان والأسئلة غير مكتملة' });
@@ -1218,15 +1409,15 @@ app.post('/api/exams', requireAdminAuth, (req: Request, res: Response) => {
     id: exam.id || 'exam_' + Date.now(),
     createdByAdmin: true,
   });
-  broadcastSync('exams');
-  res.status(201).json({ exam: saved, message: 'تم نشر الامتحان لجميع الطلاب بنجاح' });
+  broadcastSync('exams', { action: 'created', itemId: saved.id });
+  res.status(201).json({ exam: saved, version: db.getSyncVersion(), message: 'تم نشر الامتحان لجميع الطلاب بنجاح' });
 });
 
-app.delete('/api/exams/:id', requireAdminAuth, (req: Request, res: Response) => {
+app.delete('/api/exams/:id', requireContentWriteAuth, (req: Request, res: Response) => {
   const { id } = req.params;
   db.deleteExam(id);
-  broadcastSync('exams');
-  res.json({ success: true, message: 'تم حذف الامتحان بنجاح' });
+  broadcastSync('exams', { action: 'deleted', itemId: id });
+  res.json({ success: true, version: db.getSyncVersion(), message: 'تم حذف الامتحان بنجاح' });
 });
 
 // REVIEWS
@@ -1236,54 +1427,60 @@ app.get('/api/reviews', (req: Request, res: Response) => {
   if (itemId && itemType) {
     reviews = reviews.filter(r => String(r.itemId) === String(itemId) && r.itemType === String(itemType));
   }
-  res.json({ reviews });
+  res.json({ reviews, version: db.getSyncVersion() });
 });
 
-app.post('/api/reviews', (req: Request, res: Response) => {
+app.post('/api/reviews', requireActiveUserAuth, (req: Request, res: Response) => {
+  const actor = getAuthActor(req);
+  if (actor.kind !== 'admin' && actor.kind !== 'user') {
+    return res.status(401).json({ error: 'يرجى تسجيل الدخول لإضافة مراجعة' });
+  }
   const body = req.body || {};
-  const token = req.headers.authorization?.replace('Bearer ', '');
-  const verifiedUserId = verifyUserToken(token);
-  const effectiveUserId = verifiedUserId || body.userId;
 
-  if (!effectiveUserId || !body.itemId || !body.itemType || !body.comment || typeof body.rating !== 'number') {
+  if (!body.itemId || !body.itemType || !body.comment || !String(body.comment).trim() || typeof body.rating !== 'number') {
     return res.status(400).json({ error: 'بيانات المراجعة غير مكتملة' });
   }
 
   const created = db.addReview({
-    id: body.id,
+    id: body.id ? String(body.id) : undefined,
     itemId: body.itemId,
     itemType: body.itemType,
-    userId: String(effectiveUserId),
-    userName: String(body.userName || 'طالب'),
-    userAvatar: body.userAvatar,
-    academicStage: body.academicStage || 'طالب',
+    userId: actor.id,
+    userName: actor.kind === 'admin' ? `${actor.name} (المدير العام)` : actor.name,
+    userAvatar: actor.avatar,
+    academicStage: actor.academicStage,
     rating: Math.min(5, Math.max(1, Number(body.rating))),
     comment: String(body.comment).trim(),
   });
-  broadcastSync('reviews');
-  res.status(201).json({ review: created });
+  broadcastSync('reviews', { action: 'created', itemId: created.id });
+  res.status(201).json({ review: created, version: db.getSyncVersion() });
 });
 
-app.put('/api/reviews/:id/toggle', requireAdminAuth, (req: Request, res: Response) => {
+app.put('/api/reviews/:id/toggle', requireContentWriteAuth, (req: Request, res: Response) => {
   const updated = db.toggleApproveReview(req.params.id);
   if (!updated) return res.status(404).json({ error: 'المراجعة غير موجودة' });
-  broadcastSync('reviews');
-  res.json({ review: updated });
+  broadcastSync('reviews', { action: 'updated', itemId: updated.id });
+  res.json({ review: updated, version: db.getSyncVersion() });
 });
 
 app.delete('/api/reviews/:id', (req: Request, res: Response) => {
-  const token = req.headers.authorization?.replace('Bearer ', '');
-  const isAdmin = isValidAdminToken(token);
-  const uid = verifyUserToken(token);
+  const actor = getAuthActor(req);
+  if (actor.kind === 'anonymous') {
+    return res.status(401).json({ error: 'يرجى تسجيل الدخول أولاً' });
+  }
+  if (actor.kind === 'suspended') {
+    return res.status(403).json({ error: 'تم تجميد هذا الحساب' });
+  }
   const rev = db.getReviews().find(r => r.id === req.params.id);
   if (!rev) return res.status(404).json({ error: 'المراجعة غير موجودة' });
 
-  if (!isAdmin && uid !== rev.userId) {
+  const isPrivileged = actor.kind === 'admin' || actor.role === 'admin' || actor.role === 'moderator';
+  if (!isPrivileged && actor.id !== rev.userId) {
     return res.status(403).json({ error: 'غير مصرح بحذف هذه المراجعة' });
   }
   db.deleteReview(req.params.id);
-  broadcastSync('reviews');
-  res.json({ success: true });
+  broadcastSync('reviews', { action: 'deleted', itemId: req.params.id });
+  res.json({ success: true, version: db.getSyncVersion() });
 });
 
 // COMMENTS
@@ -1293,67 +1490,79 @@ app.get('/api/comments', (req: Request, res: Response) => {
   if (itemId && itemType) {
     comments = comments.filter(c => String(c.itemId) === String(itemId) && c.itemType === String(itemType));
   }
-  res.json({ comments });
+  res.json({ comments, version: db.getSyncVersion() });
 });
 
-app.post('/api/comments', (req: Request, res: Response) => {
+app.post('/api/comments', requireActiveUserAuth, (req: Request, res: Response) => {
+  const actor = getAuthActor(req);
+  if (actor.kind !== 'admin' && actor.kind !== 'user') {
+    return res.status(401).json({ error: 'يرجى تسجيل الدخول للمشاركة في التعليقات' });
+  }
   const body = req.body || {};
-  const token = req.headers.authorization?.replace('Bearer ', '');
-  const verifiedUserId = verifyUserToken(token);
-  const effectiveAuthorId = verifiedUserId || body.authorId;
 
-  if (!effectiveAuthorId || !body.itemId || !body.itemType || !body.content) {
+  if (!body.itemId || !body.itemType || !body.content || !String(body.content).trim()) {
     return res.status(400).json({ error: 'بيانات التعليق غير مكتملة' });
   }
 
   const created = db.addComment({
-    id: body.id,
+    id: body.id ? String(body.id) : undefined,
     itemId: String(body.itemId),
     itemType: body.itemType,
-    authorId: String(effectiveAuthorId),
-    authorName: String(body.authorName || 'طالب'),
-    authorAvatar: body.authorAvatar,
-    authorRole: body.authorRole || 'user',
-    academicStage: body.academicStage || 'طالب',
+    authorId: actor.id,
+    authorName: actor.kind === 'admin' ? 'إدارة المكتبة الرقمية' : actor.name,
+    authorAvatar: actor.avatar,
+    authorRole: actor.role,
+    academicStage: actor.academicStage,
     content: String(body.content).trim(),
   });
-  broadcastSync('comments');
-  res.status(201).json({ comment: created });
+  broadcastSync('comments', { action: 'created', itemId: created.id });
+  res.status(201).json({ comment: created, version: db.getSyncVersion() });
 });
 
 app.post('/api/comments/:id/like', (req: Request, res: Response) => {
-  const actorId = String(req.body?.actorId || 'guest');
+  const actor = getAuthActor(req);
+  if (actor.kind === 'suspended') {
+    return res.status(403).json({ error: 'تم تجميد هذا الحساب' });
+  }
+  const actorId = (actor.kind === 'admin' || actor.kind === 'user')
+    ? actor.id
+    : String(req.body?.actorId || 'guest');
   const result = db.toggleLikeComment(req.params.id, actorId);
   if (!result) return res.status(404).json({ error: 'التعليق غير موجود' });
-  broadcastSync('comments');
-  res.json(result);
+  broadcastSync('comments', { action: 'updated', itemId: req.params.id });
+  res.json({ ...result, version: db.getSyncVersion() });
 });
 
-app.post('/api/comments/:id/admin-like', requireAdminAuth, (req: Request, res: Response) => {
+app.post('/api/comments/:id/admin-like', requireContentWriteAuth, (req: Request, res: Response) => {
   const updated = db.toggleAdminLikeComment(req.params.id);
   if (!updated) return res.status(404).json({ error: 'التعليق غير موجود' });
-  broadcastSync('comments');
-  res.json({ comment: updated });
+  broadcastSync('comments', { action: 'updated', itemId: req.params.id });
+  res.json({ comment: updated, version: db.getSyncVersion() });
 });
 
 app.delete('/api/comments/:id', (req: Request, res: Response) => {
-  const token = req.headers.authorization?.replace('Bearer ', '');
-  const isAdmin = isValidAdminToken(token);
-  const uid = verifyUserToken(token);
+  const actor = getAuthActor(req);
+  if (actor.kind === 'anonymous') {
+    return res.status(401).json({ error: 'يرجى تسجيل الدخول أولاً' });
+  }
+  if (actor.kind === 'suspended') {
+    return res.status(403).json({ error: 'تم تجميد هذا الحساب' });
+  }
   const cmt = db.getComments().find(c => c.id === req.params.id);
   if (!cmt) return res.status(404).json({ error: 'التعليق غير موجود' });
 
-  if (!isAdmin && uid !== cmt.authorId) {
+  const isPrivileged = actor.kind === 'admin' || actor.role === 'admin' || actor.role === 'moderator';
+  if (!isPrivileged && actor.id !== cmt.authorId) {
     return res.status(403).json({ error: 'غير مصرح بحذف هذا التعليق' });
   }
   db.deleteComment(req.params.id);
-  broadcastSync('comments');
-  res.json({ success: true });
+  broadcastSync('comments', { action: 'deleted', itemId: req.params.id });
+  res.json({ success: true, version: db.getSyncVersion() });
 });
 
 // VOLUNTARY SUPPORT & SUPPORTERS
 app.get('/api/support/config', (_req: Request, res: Response) => {
-  res.json({ supportConfig: db.getSupportConfig() });
+  res.json({ supportConfig: db.getSupportConfig(), version: db.getSyncVersion() });
 });
 
 app.put('/api/support/config', requireAdminAuth, (req: Request, res: Response) => {
@@ -1362,27 +1571,41 @@ app.put('/api/support/config', requireAdminAuth, (req: Request, res: Response) =
     return res.status(400).json({ error: 'بيانات غير صالحة' });
   }
   const supportConfig = db.setSupportPlanStatus(String(planId), isActive);
-  broadcastSync('support');
-  res.json({ supportConfig });
+  broadcastSync('support', { action: 'updated' });
+  res.json({ supportConfig, version: db.getSyncVersion() });
 });
 
 app.get('/api/support/requests', requireAdminAuth, (_req: Request, res: Response) => {
   res.json({
     requests: db.getSupportRequests(),
     studentSubscriptions: db.getStudentSubscriptions(),
+    version: db.getSyncVersion(),
   });
 });
 
-app.post('/api/support/requests', (req: Request, res: Response) => {
-  const body = req.body || {};
-  if (!body.userId || !body.senderPhone) {
-    return res.status(400).json({ error: 'بيانات مساهمة الدعم غير مكتملة' });
+app.post('/api/support/requests', requireActiveUserAuth, (req: Request, res: Response) => {
+  const actor = getAuthActor(req);
+  if (actor.kind !== 'admin' && actor.kind !== 'user') {
+    return res.status(401).json({ error: 'يرجى تسجيل الدخول لتسجيل مساهمة الدعم' });
   }
-  const created = db.addSupportRequest(body);
-  // Automatically register supporter badge immediately
+  const body = req.body || {};
+  if (!body.senderPhone || !String(body.senderPhone).trim()) {
+    return res.status(400).json({ error: 'يرجى إدخال رقم المحفظة أو هاتف المرسل' });
+  }
+  const targetUserId = actor.kind === 'user' ? actor.id : String(body.userId || actor.id);
+  const targetUserName = actor.kind === 'user' ? actor.name : String(body.userName || actor.name);
+  const targetUserEmail = actor.kind === 'user' ? actor.user.email : String(body.userEmail || '');
+
+  const created = db.addSupportRequest({
+    ...body,
+    userId: targetUserId,
+    userName: targetUserName,
+    userEmail: targetUserEmail,
+    senderPhone: String(body.senderPhone).trim(),
+  });
   const now = new Date();
   const expiry = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
-  db.setStudentSubscription(String(body.userId), {
+  const supporterBadge = db.setStudentSubscription(targetUserId, {
     planId: body.planId || 'basic_50',
     planName: 'داعم للمنصة المجانية ❤️',
     status: 'active',
@@ -1394,12 +1617,12 @@ app.post('/api/support/requests', (req: Request, res: Response) => {
     isTrial: false,
     pricePaid: body.amountEGP,
     paymentMethod: body.paymentMethod,
-    paymentSenderPhone: body.senderPhone,
+    paymentSenderPhone: String(body.senderPhone).trim(),
     transactionRef: body.transactionRef,
     approvedByAdmin: true,
   });
-  broadcastSync('support');
-  res.status(201).json({ request: created });
+  broadcastSync('support', { action: 'created', itemId: created.id });
+  res.status(201).json({ request: created, subscription: supporterBadge, version: db.getSyncVersion() });
 });
 
 app.put('/api/support/requests/:id/status', requireAdminAuth, (req: Request, res: Response) => {
@@ -1409,14 +1632,14 @@ app.put('/api/support/requests/:id/status', requireAdminAuth, (req: Request, res
   }
   const updated = db.updateSupportRequestStatus(req.params.id, status);
   if (!updated) return res.status(404).json({ error: 'طلب الدعم غير موجود' });
-  broadcastSync('support');
-  res.json({ request: updated });
+  broadcastSync('support', { action: 'updated', itemId: updated.id });
+  res.json({ request: updated, version: db.getSyncVersion() });
 });
 
 app.put('/api/support/supporters/:userId', requireAdminAuth, (req: Request, res: Response) => {
   const saved = db.setStudentSubscription(req.params.userId, req.body || {});
-  broadcastSync('support');
-  res.json({ subscription: saved });
+  broadcastSync('support', { action: 'updated', itemId: req.params.userId });
+  res.json({ subscription: saved, version: db.getSyncVersion() });
 });
 
 // --------------------------------------------------------------------------
@@ -1434,7 +1657,12 @@ async function startServer() {
   wss.on('connection', (ws: WebSocket) => {
     const onlineCount = getOnlineCount();
     try {
-      ws.send(JSON.stringify({ type: 'connected', onlineCount, ts: Date.now() }));
+      ws.send(JSON.stringify({
+        type: 'connected',
+        version: db.getSyncVersion(),
+        onlineCount,
+        ts: Date.now(),
+      }));
     } catch {
       // ignore
     }
@@ -1444,7 +1672,12 @@ async function startServer() {
       try {
         const msg = JSON.parse(raw.toString());
         if (msg?.type === 'ping' && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'pong', ts: Date.now(), onlineCount: getOnlineCount() }));
+          ws.send(JSON.stringify({
+            type: 'pong',
+            version: db.getSyncVersion(),
+            ts: Date.now(),
+            onlineCount: getOnlineCount(),
+          }));
         }
       } catch {
         // ignore non-json frames

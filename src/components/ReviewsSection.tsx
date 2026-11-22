@@ -49,8 +49,10 @@ export const ReviewsSection: React.FC<ReviewsSectionProps> = ({
   const [successToast, setSuccessToast] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
 
-  const isAdmin = user?.role === 'moderator' || user?.role === 'admin' || !!localStorage.getItem('arm_admin_token');
+  const hasAdminToken = typeof window !== 'undefined' && !!localStorage.getItem('arm_admin_token');
+  const isAdmin = user?.role === 'moderator' || user?.role === 'admin' || hasAdminToken;
 
   const refreshReviews = () => {
     const list = getReviewsForItem(itemId, itemType);
@@ -81,10 +83,11 @@ export const ReviewsSection: React.FC<ReviewsSectionProps> = ({
     };
   }, [itemId, itemType]);
 
-  const handleSubmitReview = (e: React.FormEvent) => {
+  const handleSubmitReview = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setFormError(null);
-    if (!user) {
+    if (!user && !hasAdminToken) {
       onOpenAuth();
       return;
     }
@@ -94,33 +97,56 @@ export const ReviewsSection: React.FC<ReviewsSectionProps> = ({
       return;
     }
 
+    const reqId = pendingRequestId || ('rev_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6));
+    setPendingRequestId(reqId);
     setIsSubmitting(true);
-    addReview({
+
+    const res = await addReview({
       itemId,
       itemType,
-      userId: user.id,
-      userName: user.name,
-      userAvatar: user.avatar,
-      academicStage: user.academicStage || 'طالب',
+      userId: user?.id || 'admin',
+      userName: user?.name || 'إدارة المكتبة',
+      userAvatar: user?.avatar,
+      academicStage: user?.academicStage || (hasAdminToken ? 'إشراف تعليمي' : 'طالب'),
       rating: userRating,
       comment: reviewComment.trim(),
-    });
+    }, reqId);
 
-    setReviewComment('');
     setIsSubmitting(false);
+
+    if (!res.ok) {
+      setFormError(res.error || 'تعذر حفظ المراجعة في قاعدة البيانات');
+      if (res.unauthorized && !hasAdminToken) {
+        onOpenAuth();
+      }
+      return;
+    }
+
+    setPendingRequestId(null);
+    setReviewComment('');
     refreshReviews();
-    setSuccessToast('تم نشر مراجعتك وتقييمك بنجاح! شكراً لمشاركتك القيّمة ✨');
+    setSuccessToast('تم نشر مراجعتك وتقييمك وحفظها في الخادم بنجاح! شكراً لمشاركتك القيّمة ✨');
     setTimeout(() => setSuccessToast(null), 3500);
   };
 
-  const handleToggleApprove = (reviewId: string) => {
+  const handleToggleApprove = async (reviewId: string) => {
     if (!isAdmin) return;
-    toggleApproveReview(reviewId);
+    setFormError(null);
+    const res = await toggleApproveReview(reviewId);
+    if (!res.ok) {
+      setFormError(res.error || 'تعذر تحديث حالة اعتماد المراجعة');
+      return;
+    }
     refreshReviews();
   };
 
-  const handleConfirmDelete = (reviewId: string) => {
-    deleteReview(reviewId);
+  const handleConfirmDelete = async (reviewId: string) => {
+    setFormError(null);
+    const res = await deleteReview(reviewId);
+    if (!res.ok) {
+      setFormError(res.error || 'تعذر حذف المراجعة من قاعدة البيانات');
+      return;
+    }
     setConfirmDeleteId(null);
     refreshReviews();
   };
@@ -228,10 +254,11 @@ export const ReviewsSection: React.FC<ReviewsSectionProps> = ({
             value={reviewComment}
             onChange={(e) => {
               setReviewComment(e.target.value);
+              setPendingRequestId(null);
               if (formError) setFormError(null);
             }}
             placeholder={
-              user
+              user || hasAdminToken
                 ? 'اكتب مراجعة نصية قصيرة (مثال: الشرح ممتاز والمسائل شاملة لجميع نواتج التعلم الوزارية...)'
                 : 'سجّل الدخول لتتمكن من كتابة مراجعة وتقييم بالنجوم...'
             }
@@ -250,13 +277,13 @@ export const ReviewsSection: React.FC<ReviewsSectionProps> = ({
               مراجعتك تساعد زملاءك في اختيار أفضل المناهج والشروحات.
             </span>
 
-            {user ? (
+            {user || hasAdminToken ? (
               <button
                 type="submit"
                 disabled={isSubmitting || !reviewComment.trim()}
                 className="px-4 py-2 bg-gradient-to-r from-amber-500 to-amber-600 text-zinc-950 font-bold text-xs rounded-xl hover:brightness-110 active:scale-95 transition flex items-center gap-1.5 shadow-md shadow-amber-500/20 disabled:opacity-40"
               >
-                <span>نشر التقييم</span>
+                <span>{isSubmitting ? 'جاري النشر...' : 'نشر التقييم'}</span>
                 <Send className="w-3.5 h-3.5" />
               </button>
             ) : (

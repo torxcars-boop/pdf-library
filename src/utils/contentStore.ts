@@ -1,10 +1,11 @@
-// Content persistence, synchronization, and deleted items tracker
-// Ensures admin additions, edits, deletions, and student downloads are immediately synchronized across all views
+// Content persistence cache and deleted items registry
+// Central DB (via /api/sync/bootstrap & WebSocket) is the single source of truth.
+// localStorage here serves ONLY as a read-only hydration cache and per-student download history.
 
 import { Book, Summary, Video, Article, DownloadedBookItem } from '../types';
 import { syncBookDownloadProgress } from './gamificationStore';
 
-interface DeletedStore {
+export interface DeletedStore {
   books: number[];
   summaries: number[];
   videos: number[];
@@ -12,72 +13,37 @@ interface DeletedStore {
   users: string[];
 }
 
+export interface BootstrapCache {
+  version?: number;
+  ts: number;
+  books: Book[];
+  summaries: Summary[];
+  videos: Video[];
+  articles: Article[];
+  deletedIds: DeletedStore;
+}
+
 const DELETED_KEY = 'arm_deleted_content_ids_v2';
-const CUSTOM_BOOKS_KEY = 'arm_custom_books_v2';
-const CUSTOM_SUMMARIES_KEY = 'arm_custom_summaries_v2';
-const CUSTOM_VIDEOS_KEY = 'arm_custom_videos_v2';
-const CUSTOM_ARTICLES_KEY = 'arm_custom_articles_v2';
-const EDITED_ITEMS_KEY = 'arm_edited_items_v2';
+const BOOTSTRAP_CACHE_KEY = 'arm_bootstrap_cache_v1';
 const DOWNLOADED_BOOKS_KEY = 'arm_downloaded_books_v2';
 
 export const getDeletedStore = (): DeletedStore => {
   try {
     const raw = localStorage.getItem(DELETED_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch (e) {
-    // fallback
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return {
+        books: Array.isArray(parsed.books) ? parsed.books.map(Number) : [],
+        summaries: Array.isArray(parsed.summaries) ? parsed.summaries.map(Number) : [],
+        videos: Array.isArray(parsed.videos) ? parsed.videos.map(Number) : [],
+        articles: Array.isArray(parsed.articles) ? parsed.articles.map(Number) : [],
+        users: Array.isArray(parsed.users) ? parsed.users.map(String) : [],
+      };
+    }
+  } catch {
+    // ignore
   }
   return { books: [], summaries: [], videos: [], articles: [], users: [] };
-};
-
-export const markItemAsDeleted = (
-  type: 'book' | 'summary' | 'video' | 'article' | 'user',
-  id: number | string,
-  options: { notify?: boolean; syncServer?: boolean } = {}
-) => {
-  const { notify = true, syncServer = true } = options;
-  try {
-    const current = getDeletedStore();
-    if (type === 'book') {
-      const numId = Number(id);
-      if (!current.books.includes(numId)) current.books.push(numId);
-      removeCustomItem('book', numId);
-      clearEditedItem('book', numId);
-    } else if (type === 'summary') {
-      const numId = Number(id);
-      if (!current.summaries.includes(numId)) current.summaries.push(numId);
-      removeCustomItem('summary', numId);
-      clearEditedItem('summary', numId);
-    } else if (type === 'video') {
-      const numId = Number(id);
-      if (!current.videos.includes(numId)) current.videos.push(numId);
-      removeCustomItem('video', numId);
-      clearEditedItem('video', numId);
-    } else if (type === 'article') {
-      const numId = Number(id);
-      if (!current.articles.includes(numId)) current.articles.push(numId);
-      removeCustomItem('article', numId);
-      clearEditedItem('article', numId);
-    } else if (type === 'user') {
-      const strId = String(id);
-      if (!current.users.includes(strId)) current.users.push(strId);
-    }
-    localStorage.setItem(DELETED_KEY, JSON.stringify(current));
-    if (notify) {
-      dispatchContentChanged();
-    }
-
-    if (syncServer) {
-      // Sync with backend so server also permanently drops these IDs
-      fetch('/api/deleted-ids', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(current)
-      }).catch(() => {});
-    }
-  } catch (e) {
-    console.error('Error marking item as deleted', e);
-  }
 };
 
 export const filterOutDeleted = <T extends { id: number | string }>(
@@ -93,173 +59,82 @@ export const filterOutDeleted = <T extends { id: number | string }>(
   return items;
 };
 
-// ---------------------------------------------------------------------------
-// CUSTOM ITEMS ADDED BY ADMIN (Local Persistence & Realtime Sharing)
-// ---------------------------------------------------------------------------
-export const getCustomItems = <T>(key: string): T[] => {
-  try {
-    const raw = localStorage.getItem(key);
-    if (raw) return JSON.parse(raw);
-  } catch (e) {
-    // ignore
-  }
-  return [];
-};
-
-import { deletePdfFromIdb } from './pdfStorage';
-
-export const saveCustomItem = <T extends { id: number | string }>(type: 'book' | 'summary' | 'video' | 'article', item: T): boolean => {
-  try {
-    const key = type === 'book' ? CUSTOM_BOOKS_KEY :
-                type === 'summary' ? CUSTOM_SUMMARIES_KEY :
-                type === 'video' ? CUSTOM_VIDEOS_KEY : CUSTOM_ARTICLES_KEY;
-    const current = getCustomItems<T>(key);
-    const existingIndex = current.findIndex(i => String(i.id) === String(item.id));
-    if (existingIndex >= 0) {
-      current[existingIndex] = item;
-    } else {
-      current.unshift(item);
-    }
-    localStorage.setItem(key, JSON.stringify(current));
-    dispatchContentChanged();
-    return true;
-  } catch (e) {
-    console.error('Error saving custom item', e);
-    return false;
-  }
-};
-
-export const removeCustomItem = (type: 'book' | 'summary' | 'video' | 'article', id: number | string) => {
-  try {
-    const key = type === 'book' ? CUSTOM_BOOKS_KEY :
-                type === 'summary' ? CUSTOM_SUMMARIES_KEY :
-                type === 'video' ? CUSTOM_VIDEOS_KEY : CUSTOM_ARTICLES_KEY;
-    const current = getCustomItems<{ id: number | string; filepath?: string }>(key);
-    const target = current.find(i => String(i.id) === String(id));
-    if (target?.filepath) {
-      deletePdfFromIdb(target.filepath).catch(() => {});
-    }
-    const updated = current.filter(i => String(i.id) !== String(id));
-    localStorage.setItem(key, JSON.stringify(updated));
-  } catch (e) {
-    // ignore
-  }
-};
-
 export const syncDeletedStoreFromServer = (serverDeleted?: Partial<DeletedStore> | null) => {
   if (!serverDeleted) return;
   try {
-    const local = getDeletedStore();
-    const books = Array.from(new Set([
-      ...(Array.isArray(local.books) ? local.books.map(Number) : []),
-      ...(Array.isArray(serverDeleted.books) ? serverDeleted.books.map(Number) : []),
-    ])).filter(n => !Number.isNaN(n));
-    const summaries = Array.from(new Set([
-      ...(Array.isArray(local.summaries) ? local.summaries.map(Number) : []),
-      ...(Array.isArray(serverDeleted.summaries) ? serverDeleted.summaries.map(Number) : []),
-    ])).filter(n => !Number.isNaN(n));
-    const videos = Array.from(new Set([
-      ...(Array.isArray(local.videos) ? local.videos.map(Number) : []),
-      ...(Array.isArray(serverDeleted.videos) ? serverDeleted.videos.map(Number) : []),
-    ])).filter(n => !Number.isNaN(n));
-    const articles = Array.from(new Set([
-      ...(Array.isArray(local.articles) ? local.articles.map(Number) : []),
-      ...(Array.isArray(serverDeleted.articles) ? serverDeleted.articles.map(Number) : []),
-    ])).filter(n => !Number.isNaN(n));
-    const users = Array.from(new Set([
-      ...(Array.isArray(local.users) ? local.users.map(String) : []),
-      ...(Array.isArray(serverDeleted.users) ? serverDeleted.users.map(String) : []),
-    ]));
-
-    const next: DeletedStore = { books, summaries, videos, articles, users };
+    const next: DeletedStore = {
+      books: Array.isArray(serverDeleted.books)
+        ? Array.from(new Set(serverDeleted.books.map(Number).filter(n => !Number.isNaN(n))))
+        : [],
+      summaries: Array.isArray(serverDeleted.summaries)
+        ? Array.from(new Set(serverDeleted.summaries.map(Number).filter(n => !Number.isNaN(n))))
+        : [],
+      videos: Array.isArray(serverDeleted.videos)
+        ? Array.from(new Set(serverDeleted.videos.map(Number).filter(n => !Number.isNaN(n))))
+        : [],
+      articles: Array.isArray(serverDeleted.articles)
+        ? Array.from(new Set(serverDeleted.articles.map(Number).filter(n => !Number.isNaN(n))))
+        : [],
+      users: Array.isArray(serverDeleted.users)
+        ? Array.from(new Set(serverDeleted.users.map(String)))
+        : [],
+    };
     localStorage.setItem(DELETED_KEY, JSON.stringify(next));
-
-    books.forEach(id => removeCustomItem('book', id));
-    summaries.forEach(id => removeCustomItem('summary', id));
-    videos.forEach(id => removeCustomItem('video', id));
-    articles.forEach(id => removeCustomItem('article', id));
   } catch (e) {
     console.error('Error syncing deleted store from server', e);
   }
 };
 
-export const reconcileCustomItemsWithServer = <T extends { id: number | string }>(
-  type: 'book' | 'summary' | 'video' | 'article',
-  serverItems: T[]
-) => {
+export const saveBootstrapCache = (cache: Partial<BootstrapCache>) => {
   try {
-    const key = type === 'book' ? CUSTOM_BOOKS_KEY :
-                type === 'summary' ? CUSTOM_SUMMARIES_KEY :
-                type === 'video' ? CUSTOM_VIDEOS_KEY : CUSTOM_ARTICLES_KEY;
-    const current = getCustomItems<T>(key);
-    if (current.length === 0) return;
+    const existing = getBootstrapCache();
+    const merged: BootstrapCache = {
+      version: typeof cache.version === 'number' ? cache.version : existing?.version,
+      ts: cache.ts || Date.now(),
+      books: Array.isArray(cache.books) ? cache.books : (existing?.books || []),
+      summaries: Array.isArray(cache.summaries) ? cache.summaries : (existing?.summaries || []),
+      videos: Array.isArray(cache.videos) ? cache.videos : (existing?.videos || []),
+      articles: Array.isArray(cache.articles) ? cache.articles : (existing?.articles || []),
+      deletedIds: cache.deletedIds || existing?.deletedIds || getDeletedStore(),
+    };
+    localStorage.setItem(BOOTSTRAP_CACHE_KEY, JSON.stringify(merged));
+  } catch {
+    // ignore storage quota errors on optional read cache
+  }
+};
 
-    const deleted = getDeletedStore();
-    const deletedList = type === 'book' ? deleted.books :
-                        type === 'summary' ? deleted.summaries :
-                        type === 'video' ? deleted.videos : deleted.articles;
-    const deletedSet = new Set(deletedList.map(String));
-    const serverSet = new Set(serverItems.map(i => String(i.id)));
-
-    const remaining = current.filter(i => !deletedSet.has(String(i.id)) && !serverSet.has(String(i.id)));
-    if (remaining.length !== current.length) {
-      localStorage.setItem(key, JSON.stringify(remaining));
-    }
-  } catch (e) {
+export const getBootstrapCache = (): BootstrapCache | null => {
+  try {
+    const raw = localStorage.getItem(BOOTSTRAP_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') return parsed as BootstrapCache;
+  } catch {
     // ignore
   }
+  return null;
 };
 
-// ---------------------------------------------------------------------------
-// EDITED ITEMS (Overrides original fields)
-// ---------------------------------------------------------------------------
-export const saveEditedItem = (type: string, id: number | string, updatedFields: Record<string, any>) => {
+// Clear any legacy local-override keys left from older builds so central DB always wins
+export const clearLegacyLocalOverrides = () => {
   try {
-    const raw = localStorage.getItem(EDITED_ITEMS_KEY);
-    const map = raw ? JSON.parse(raw) : {};
-    const key = `${type}_${id}`;
-    map[key] = { ...(map[key] || {}), ...updatedFields };
-    localStorage.setItem(EDITED_ITEMS_KEY, JSON.stringify(map));
-    dispatchContentChanged();
-  } catch (e) {
-    console.error('Error saving edited item', e);
-  }
-};
-
-export const clearEditedItem = (type: string, id: number | string) => {
-  try {
-    const raw = localStorage.getItem(EDITED_ITEMS_KEY);
-    if (!raw) return;
-    const map = JSON.parse(raw);
-    const key = `${type}_${id}`;
-    if (key in map) {
-      delete map[key];
-      localStorage.setItem(EDITED_ITEMS_KEY, JSON.stringify(map));
-    }
+    const legacyKeys = [
+      'arm_custom_books_v2',
+      'arm_custom_summaries_v2',
+      'arm_custom_videos_v2',
+      'arm_custom_articles_v2',
+      'arm_edited_items_v2',
+      'arm_real_downloads_map_v1',
+      'arm_real_views_map_v1',
+    ];
+    legacyKeys.forEach(k => localStorage.removeItem(k));
   } catch {
     // ignore
   }
 };
 
-export const applyEditedOverrides = <T extends { id: number | string }>(type: string, items: T[]): T[] => {
-  try {
-    const raw = localStorage.getItem(EDITED_ITEMS_KEY);
-    if (!raw) return items;
-    const map = JSON.parse(raw);
-    return items.map(item => {
-      const key = `${type}_${item.id}`;
-      if (map[key]) {
-        return { ...item, ...map[key] };
-      }
-      return item;
-    });
-  } catch (e) {
-    return items;
-  }
-};
-
 // ---------------------------------------------------------------------------
-// DOWNLOADED BOOKS TRACKER (For Student Dashboard)
+// PERSONAL DOWNLOADED BOOKS TRACKER (Per-Student History for Dashboard)
 // ---------------------------------------------------------------------------
 export const recordBookDownload = (
   book: {
@@ -277,9 +152,8 @@ export const recordBookDownload = (
     const raw = localStorage.getItem(DOWNLOADED_BOOKS_KEY);
     let list: DownloadedBookItem[] = raw ? JSON.parse(raw) : [];
 
-    // Filter out if already in list to put it at the very top
     list = list.filter(item => String(item.id) !== String(book.id));
-    
+
     const newItem: DownloadedBookItem = {
       id: book.id,
       title: book.title,
@@ -294,7 +168,6 @@ export const recordBookDownload = (
     list.unshift(newItem);
     localStorage.setItem(DOWNLOADED_BOOKS_KEY, JSON.stringify(list));
 
-    // Synchronize real book download milestone with student badges & level progress
     syncBookDownloadProgress(list.length, list, userId);
 
     dispatchContentChanged();
@@ -307,7 +180,7 @@ export const getDownloadedBooks = (): DownloadedBookItem[] => {
   try {
     const raw = localStorage.getItem(DOWNLOADED_BOOKS_KEY);
     if (raw) return JSON.parse(raw);
-  } catch (e) {
+  } catch {
     // ignore
   }
   return [];
@@ -318,74 +191,18 @@ export const getDownloadedBooksCount = (): number => {
 };
 
 // ---------------------------------------------------------------------------
-// 100% REAL AUTHENTIC VIEWS & DOWNLOADS TRACKING
+// AUTHORITATIVE SERVER METRICS (Zero Local Divergence)
 // ---------------------------------------------------------------------------
-const REAL_DOWNLOADS_MAP_KEY = 'arm_real_downloads_map_v1';
-const REAL_VIEWS_MAP_KEY = 'arm_real_views_map_v1';
-
-export const getRealDownloadsMap = (): Record<string, number> => {
-  try {
-    const raw = localStorage.getItem(REAL_DOWNLOADS_MAP_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch (e) {}
-  return {};
+export const getRealDownloads = (_bookId: number | string, baseCount = 0): number => {
+  return Math.max(0, Number(baseCount) || 0);
 };
 
-export const getRealViewsMap = (): Record<string, number> => {
-  try {
-    const raw = localStorage.getItem(REAL_VIEWS_MAP_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch (e) {}
-  return {};
-};
-
-export const getRealDownloads = (bookId: number | string, baseCount = 0): number => {
-  const map = getRealDownloadsMap();
-  const recorded = map[String(bookId)];
-  return Math.max(baseCount || 0, typeof recorded === 'number' ? recorded : 0);
-};
-
-export const incrementRealDownload = (bookId: number | string, baseCount = 0): number => {
-  try {
-    const map = getRealDownloadsMap();
-    const key = String(bookId);
-    const updated = Math.max(map[key] || 0, baseCount || 0) + 1;
-    map[key] = updated;
-    localStorage.setItem(REAL_DOWNLOADS_MAP_KEY, JSON.stringify(map));
-    dispatchContentChanged();
-    return updated;
-  } catch (e) {
-    return (baseCount || 0) + 1;
-  }
-};
-
-export const getRealViews = (type: string, id: number | string, baseCount = 0): number => {
-  const map = getRealViewsMap();
-  const key = `${type}_${id}`;
-  const recorded = map[key];
-  return Math.max(baseCount || 0, typeof recorded === 'number' ? recorded : 0);
-};
-
-export const incrementRealView = (type: string, id: number | string, baseCount = 0): number => {
-  try {
-    const map = getRealViewsMap();
-    const key = `${type}_${id}`;
-    const updated = Math.max(map[key] || 0, baseCount || 0) + 1;
-    map[key] = updated;
-    localStorage.setItem(REAL_VIEWS_MAP_KEY, JSON.stringify(map));
-    dispatchContentChanged();
-    return updated;
-  } catch (e) {
-    return (baseCount || 0) + 1;
-  }
+export const getRealViews = (_type: string, _id: number | string, baseCount = 0): number => {
+  return Math.max(0, Number(baseCount) || 0);
 };
 
 export const getTotalRealDownloads = (books: { id: number | string; downloads?: number }[]): number => {
-  const map = getRealDownloadsMap();
-  return books.reduce((acc, b) => {
-    const recorded = typeof map[String(b.id)] === 'number' ? map[String(b.id)] : 0;
-    return acc + Math.max(b.downloads || 0, recorded);
-  }, 0);
+  return books.reduce((acc, b) => acc + Math.max(0, Number(b.downloads) || 0), 0);
 };
 
 export const getTotalRealViews = (
@@ -394,24 +211,11 @@ export const getTotalRealViews = (
   videos: { id: number | string; views?: number }[],
   articles: { id: number | string; views?: number }[]
 ): number => {
-  const map = getRealViewsMap();
   let total = 0;
-  books.forEach(b => {
-    const rec = typeof map[`book_${b.id}`] === 'number' ? map[`book_${b.id}`] : 0;
-    total += Math.max(b.views || 0, rec);
-  });
-  summaries.forEach(s => {
-    const rec = typeof map[`summary_${s.id}`] === 'number' ? map[`summary_${s.id}`] : 0;
-    total += Math.max(s.views || 0, rec);
-  });
-  videos.forEach(v => {
-    const rec = typeof map[`video_${v.id}`] === 'number' ? map[`video_${v.id}`] : 0;
-    total += Math.max(v.views || 0, rec);
-  });
-  articles.forEach(a => {
-    const rec = typeof map[`article_${a.id}`] === 'number' ? map[`article_${a.id}`] : 0;
-    total += Math.max(a.views || 0, rec);
-  });
+  books.forEach(b => { total += Math.max(0, Number(b.views) || 0); });
+  summaries.forEach(s => { total += Math.max(0, Number(s.views) || 0); });
+  videos.forEach(v => { total += Math.max(0, Number(v.views) || 0); });
+  articles.forEach(a => { total += Math.max(0, Number(a.views) || 0); });
   return total;
 };
 
@@ -428,9 +232,7 @@ export const listenToContentChanged = (callback: () => void) => {
   if (typeof window === 'undefined') return () => {};
   const handler = () => callback();
   window.addEventListener('arm_content_sync', handler);
-  window.addEventListener('storage', handler);
   return () => {
     window.removeEventListener('arm_content_sync', handler);
-    window.removeEventListener('storage', handler);
   };
 };

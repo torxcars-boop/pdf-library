@@ -1,20 +1,25 @@
 import { ItemReview } from '../types';
 
 const REVIEWS_STORAGE_KEY = 'arm_item_reviews_v2';
+export const REVIEWS_UPDATED_EVENT = 'arm_reviews_updated';
 
-const SEED_REVIEWS: ItemReview[] = [];
+export interface ReviewActionResult {
+  ok: boolean;
+  review?: ItemReview;
+  isApproved?: boolean;
+  error?: string;
+  unauthorized?: boolean;
+  forbidden?: boolean;
+}
 
 export function getAllReviews(): ItemReview[] {
   try {
     const raw = localStorage.getItem(REVIEWS_STORAGE_KEY);
-    if (!raw) {
-      localStorage.setItem(REVIEWS_STORAGE_KEY, JSON.stringify(SEED_REVIEWS));
-      return SEED_REVIEWS;
-    }
+    if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : SEED_REVIEWS;
-  } catch (e) {
-    return SEED_REVIEWS;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
   }
 }
 
@@ -33,8 +38,6 @@ export function getItemRatingStats(itemId: string | number, itemType: string): {
   return { averageRating: avg, totalReviews: reviews.length };
 }
 
-export const REVIEWS_UPDATED_EVENT = 'arm_reviews_updated';
-
 function dispatchReviewsUpdated(detail?: unknown) {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(REVIEWS_UPDATED_EVENT, { detail }));
@@ -44,7 +47,13 @@ function dispatchReviewsUpdated(detail?: unknown) {
 export function setReviewsCacheFromServer(serverReviews: ItemReview[] | undefined | null) {
   if (!Array.isArray(serverReviews)) return;
   try {
-    localStorage.setItem(REVIEWS_STORAGE_KEY, JSON.stringify(serverReviews));
+    const dedupMap = new Map<string, ItemReview>();
+    serverReviews.forEach(r => {
+      if (r && r.id && !dedupMap.has(String(r.id))) {
+        dedupMap.set(String(r.id), r);
+      }
+    });
+    localStorage.setItem(REVIEWS_STORAGE_KEY, JSON.stringify(Array.from(dedupMap.values())));
     dispatchReviewsUpdated();
   } catch (e) {
     console.error('Error updating reviews cache from server:', e);
@@ -65,90 +74,133 @@ export async function syncReviewsFromServer(itemId?: string | number, itemType?:
       }
     }
   } catch {
-    // offline fallback
+    // read-only fallback
   }
   return itemId !== undefined && itemType ? getReviewsForItem(itemId, itemType) : getAllReviews();
 }
 
-export function addReview(newRev: Omit<ItemReview, 'id' | 'createdAt' | 'isApproved'>): ItemReview {
-  const all = getAllReviews();
-  const created: ItemReview = {
-    ...newRev,
-    id: 'rev_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-    createdAt: new Date().toISOString(),
-    isApproved: true, // Published immediately
-    likesCount: 0,
-  };
-  all.unshift(created);
-  try {
-    localStorage.setItem(REVIEWS_STORAGE_KEY, JSON.stringify(all));
-  } catch (e) {
-    console.error('Error saving review:', e);
+export async function addReview(
+  newRev: Omit<ItemReview, 'id' | 'createdAt' | 'isApproved'>,
+  clientRequestId?: string
+): Promise<ReviewActionResult> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return { ok: false, error: 'أنت غير متصل بالإنترنت — تعذر نشر المراجعة' };
+  }
+  const userToken = typeof window !== 'undefined' ? (localStorage.getItem('arm_user_token') || '') : '';
+  const adminToken = typeof window !== 'undefined' ? (localStorage.getItem('arm_admin_token') || '') : '';
+  const token = userToken || adminToken;
+
+  if (!token) {
+    return { ok: false, unauthorized: true, error: 'يرجى تسجيل الدخول أولاً لإضافة مراجعة' };
   }
 
-  dispatchReviewsUpdated(created);
+  const requestId = clientRequestId || ('rev_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6));
 
-  if (typeof window !== 'undefined') {
-    const userToken = localStorage.getItem('arm_user_token') || '';
-    fetch('/api/reviews', {
+  try {
+    const res = await fetch('/api/reviews', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(userToken ? { Authorization: `Bearer ${userToken}` } : {}),
+        Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify(created),
-    }).catch(() => {});
-  }
+      body: JSON.stringify({
+        id: requestId,
+        itemId: newRev.itemId,
+        itemType: newRev.itemType,
+        rating: newRev.rating,
+        comment: newRev.comment,
+      }),
+    });
 
-  return created;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.review) {
+      return {
+        ok: false,
+        unauthorized: res.status === 401,
+        forbidden: res.status === 403,
+        error: data.error || 'تعذر حفظ المراجعة في قاعدة البيانات',
+      };
+    }
+
+    const saved = data.review as ItemReview;
+    const all = getAllReviews().filter(r => String(r.id) !== String(saved.id));
+    all.unshift(saved);
+    try {
+      localStorage.setItem(REVIEWS_STORAGE_KEY, JSON.stringify(all));
+    } catch {
+      // ignore storage quota errors
+    }
+    dispatchReviewsUpdated(saved);
+    return { ok: true, review: saved };
+  } catch {
+    return { ok: false, error: 'تعذر الاتصال بالخادم لنشر المراجعة. حاول مرة أخرى.' };
+  }
 }
 
-export function toggleApproveReview(reviewId: string, adminTokenOverride?: string): boolean {
-  const all = getAllReviews();
-  const item = all.find(r => r.id === reviewId);
-  if (!item) return false;
-  item.isApproved = !item.isApproved;
+export async function toggleApproveReview(reviewId: string, adminTokenOverride?: string): Promise<ReviewActionResult> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return { ok: false, error: 'أنت غير متصل بالإنترنت' };
+  }
+  const token = adminTokenOverride || (typeof window !== 'undefined' ? localStorage.getItem('arm_admin_token') || '' : '');
+  if (!token) {
+    return { ok: false, unauthorized: true, error: 'مطلوب صلاحية الأدمن أو المشرف' };
+  }
+
   try {
+    const res = await fetch(`/api/reviews/${encodeURIComponent(reviewId)}/toggle`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.review) {
+      return {
+        ok: false,
+        unauthorized: res.status === 401,
+        forbidden: res.status === 403,
+        error: data.error || 'تعذر تحديث حالة اعتماد المراجعة',
+      };
+    }
+    const all = getAllReviews();
+    const idx = all.findIndex(r => r.id === reviewId);
+    if (idx >= 0) all[idx] = data.review;
     localStorage.setItem(REVIEWS_STORAGE_KEY, JSON.stringify(all));
-  } catch (e) {
-    console.error('Error updating review:', e);
+    dispatchReviewsUpdated();
+    return { ok: true, review: data.review, isApproved: Boolean(data.review.isApproved) };
+  } catch {
+    return { ok: false, error: 'تعذر الاتصال بالخادم' };
   }
-  dispatchReviewsUpdated();
-
-  if (typeof window !== 'undefined') {
-    const token = adminTokenOverride || localStorage.getItem('arm_admin_token') || '';
-    if (token) {
-      fetch(`/api/reviews/${encodeURIComponent(reviewId)}/toggle`, {
-        method: 'PUT',
-        headers: { Authorization: `Bearer ${token}` },
-      }).catch(() => {});
-    }
-  }
-
-  return item.isApproved;
 }
 
-export function deleteReview(reviewId: string, authTokenOverride?: string): boolean {
-  const all = getAllReviews();
-  const filtered = all.filter(r => r.id !== reviewId);
+export async function deleteReview(reviewId: string, authTokenOverride?: string): Promise<ReviewActionResult> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return { ok: false, error: 'أنت غير متصل بالإنترنت — تعذر حذف المراجعة' };
+  }
+  const token = authTokenOverride || (typeof window !== 'undefined' ? (localStorage.getItem('arm_admin_token') || localStorage.getItem('arm_user_token') || '') : '');
+  if (!token) {
+    return { ok: false, unauthorized: true, error: 'غير مصرح بحذف هذه المراجعة' };
+  }
+
   try {
-    localStorage.setItem(REVIEWS_STORAGE_KEY, JSON.stringify(filtered));
-  } catch (e) {
-    console.error('Error deleting review:', e);
-  }
-  dispatchReviewsUpdated();
-
-  if (typeof window !== 'undefined') {
-    const token = authTokenOverride || localStorage.getItem('arm_admin_token') || localStorage.getItem('arm_user_token') || '';
-    if (token) {
-      fetch(`/api/reviews/${encodeURIComponent(reviewId)}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-      }).catch(() => {});
+    const res = await fetch(`/api/reviews/${encodeURIComponent(reviewId)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return {
+        ok: false,
+        unauthorized: res.status === 401,
+        forbidden: res.status === 403,
+        error: data.error || 'تعذر حذف المراجعة من قاعدة البيانات',
+      };
     }
+    const filtered = getAllReviews().filter(r => r.id !== reviewId);
+    localStorage.setItem(REVIEWS_STORAGE_KEY, JSON.stringify(filtered));
+    dispatchReviewsUpdated();
+    return { ok: true };
+  } catch {
+    return { ok: false, error: 'تعذر الاتصال بالخادم لحذف المراجعة' };
   }
-
-  return true;
 }
 
 export const toggleReviewApproval = toggleApproveReview;

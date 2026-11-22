@@ -44,9 +44,12 @@ export const CommentsSection: React.FC<CommentsSectionProps> = ({
   const [filter, setFilter] = useState<'all' | 'endorsed'>('all');
   const [submitting, setSubmitting] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
 
   // Check if current user is admin / teacher
-  const isAdmin = user?.role === 'moderator' || user?.role === 'admin' || !!localStorage.getItem('arm_admin_token');
+  const hasAdminToken = typeof window !== 'undefined' && !!localStorage.getItem('arm_admin_token');
+  const isAdmin = user?.role === 'moderator' || user?.role === 'admin' || hasAdminToken;
 
   const getActorId = () => {
     if (user?.id) return user.id;
@@ -82,46 +85,75 @@ export const CommentsSection: React.FC<CommentsSectionProps> = ({
     };
   }, [itemId, itemType]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newText.trim()) return;
+    if (!newText.trim() || submitting) return;
+    setActionError(null);
 
-    if (!user) {
+    if (!user && !hasAdminToken) {
       onOpenAuth();
       return;
     }
 
+    const reqId = pendingRequestId || ('cmt_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6));
+    setPendingRequestId(reqId);
     setSubmitting(true);
-    addComment({
+
+    const res = await addComment({
       itemId: String(itemId),
       itemType,
-      authorId: user.id,
-      authorName: user.name,
-      authorAvatar: user.avatar,
-      authorRole: (user.role as any) || 'user',
-      academicStage: user.academicStage || 'طالب',
+      authorId: user?.id || 'admin',
+      authorName: user?.name || 'إدارة المكتبة',
+      authorAvatar: user?.avatar,
+      authorRole: (user?.role as any) || (hasAdminToken ? 'admin' : 'user'),
+      academicStage: user?.academicStage || (hasAdminToken ? 'إشراف تعليمي' : 'طالب'),
       content: newText.trim(),
-    });
+    }, reqId);
 
-    setNewText('');
     setSubmitting(false);
+
+    if (!res.ok) {
+      setActionError(res.error || 'تعذر حفظ التعليق في قاعدة البيانات');
+      if (res.unauthorized && !hasAdminToken) {
+        onOpenAuth();
+      }
+      return;
+    }
+
+    setPendingRequestId(null);
+    setNewText('');
     refreshComments();
   };
 
-  const handleLike = (commentId: string) => {
+  const handleLike = async (commentId: string) => {
+    setActionError(null);
     const currentUserId = getActorId();
-    toggleLikeComment(commentId, currentUserId);
+    const res = await toggleLikeComment(commentId, currentUserId);
+    if (!res.ok) {
+      setActionError(res.error || 'تعذر تحديث الإعجاب');
+      return;
+    }
     refreshComments();
   };
 
-  const handleAdminLike = (commentId: string) => {
+  const handleAdminLike = async (commentId: string) => {
     if (!isAdmin) return;
-    toggleAdminLikeComment(commentId);
+    setActionError(null);
+    const res = await toggleAdminLikeComment(commentId);
+    if (!res.ok) {
+      setActionError(res.error || 'تعذر تنفيذ اعتماد المعلم');
+      return;
+    }
     refreshComments();
   };
 
-  const handleConfirmDelete = (commentId: string) => {
-    deleteComment(commentId);
+  const handleConfirmDelete = async (commentId: string) => {
+    setActionError(null);
+    const res = await deleteComment(commentId);
+    if (!res.ok) {
+      setActionError(res.error || 'تعذر حذف التعليق من قاعدة البيانات');
+      return;
+    }
     setConfirmDeleteId(null);
     refreshComments();
   };
@@ -194,13 +226,24 @@ export const CommentsSection: React.FC<CommentsSectionProps> = ({
 
       {/* Comment Form */}
       <form onSubmit={handleSubmit} className="mb-6">
+        {actionError && (
+          <div className="mb-3 p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-600 dark:text-rose-300 text-xs font-semibold">
+            {actionError}
+          </div>
+        )}
         <div className="relative">
           <textarea
             value={newText}
-            onChange={(e) => setNewText(e.target.value)}
+            onChange={(e) => {
+              setNewText(e.target.value);
+              setPendingRequestId(null);
+              if (actionError) setActionError(null);
+            }}
             placeholder={
               user 
                 ? `اكتب سؤالك أو ملاحظتك يا ${user.name}...` 
+                : hasAdminToken
+                ? 'اكتب ملاحظة أو توجيهاً تعليمياً بصفتك المشرف...'
                 : 'سجّل الدخول لطرح سؤال أو مشاركة ملاحظتك مع زملائك والمعلمين...'
             }
             rows={3}
@@ -208,13 +251,13 @@ export const CommentsSection: React.FC<CommentsSectionProps> = ({
           />
 
           <div className="absolute left-3 bottom-3 flex items-center gap-2">
-            {user ? (
+            {user || hasAdminToken ? (
               <button
                 type="submit"
                 disabled={submitting || !newText.trim()}
                 className="px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:hover:bg-amber-500 text-zinc-950 font-bold text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/20 transition"
               >
-                <span>إرسال</span>
+                <span>{submitting ? 'جاري النشر...' : 'إرسال'}</span>
                 <Send className="w-3.5 h-3.5" />
               </button>
             ) : (

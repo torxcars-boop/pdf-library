@@ -4,7 +4,6 @@ import { X, Download, Bookmark, ExternalLink, Eye } from 'lucide-react';
 import { RatingStars } from './RatingStars';
 import { CommentsSection } from './CommentsSection';
 import { ReviewsSection } from './ReviewsSection';
-import { getRealViews, incrementRealView } from '../utils/contentStore';
 import { getItemRatingStats } from '../utils/reviewsStore';
 
 interface ImageDetailModalProps {
@@ -31,15 +30,21 @@ export const ImageDetailModal: React.FC<ImageDetailModalProps> = ({
 
   useEffect(() => {
     if (summary?.id) {
-      const views = incrementRealView('summary', summary.id, summary.views || 0);
-      setViewCount(views);
-      fetch(`/api/items/summary/${summary.id}/view`, { method: 'POST' }).catch(() => {});
+      setViewCount(summary.views || 0);
+      fetch(`/api/items/summary/${summary.id}/view`, { method: 'POST' })
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+          if (data && typeof data.views === 'number') {
+            setViewCount(data.views);
+          }
+        })
+        .catch(() => {});
     }
   }, [summary?.id]);
 
   useEffect(() => {
     if (summary?.id) {
-      setViewCount((prev) => Math.max(prev, getRealViews('summary', summary.id, summary.views || 0), summary.views || 0));
+      setViewCount((prev) => Math.max(prev, summary.views || 0));
     }
   }, [summary?.id, summary?.views]);
 
@@ -183,9 +188,6 @@ export const ImageDetailModal: React.FC<ImageDetailModalProps> = ({
           user={user}
           onOpenAuth={onOpenAuth}
           title={`مراجعات وتقييمات الطلاب للملخص: ${summary.title}`}
-          onRatingChanged={(newRating) => {
-            if (onRate) onRate(newRating);
-          }}
         />
 
         {/* Interactive Student Comments & Questions Section */}

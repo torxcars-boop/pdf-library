@@ -31,7 +31,6 @@ const PLANS_CONFIG_KEY = 'arm_admin_plans_config_v1';
 const PAYMENT_REQUESTS_KEY = 'arm_payment_requests_v1';
 const STUDENTS_SUBSCRIPTIONS_MAP_KEY = 'arm_students_subscriptions_map_v1';
 
-// Voluntary Platform Support Package (100% Free Platform — Never Required!)
 export const DEFAULT_SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
   {
     id: 'basic_50',
@@ -41,7 +40,7 @@ export const DEFAULT_SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
     billingPeriod: 'دعم اختياري',
     badge: 'داعم للمنصة ❤️',
     isPopular: true,
-    examsPerWeek: -1, // Everything is unlimited & free for everyone
+    examsPerWeek: -1,
     isActive: true,
     features: [
       'جميع الكتب والمذكرات الدراسية PDF متاحة ومجانية 100% لكل الطلاب بدون أي قيود',
@@ -78,9 +77,7 @@ export const syncSupportFromServer = (payload?: {
       localStorage.setItem(PAYMENT_REQUESTS_KEY, JSON.stringify(payload.supportRequests));
     }
     if (payload.studentSubscriptions && typeof payload.studentSubscriptions === 'object') {
-      const existing = getAllSavedSubscriptions();
-      const merged = { ...existing, ...payload.studentSubscriptions };
-      localStorage.setItem(STUDENTS_SUBSCRIPTIONS_MAP_KEY, JSON.stringify(merged));
+      localStorage.setItem(STUDENTS_SUBSCRIPTIONS_MAP_KEY, JSON.stringify(payload.studentSubscriptions));
     }
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent(SUPPORT_UPDATED_EVENT, { detail: { timestamp: Date.now() } }));
@@ -105,11 +102,10 @@ export const fetchAdminSupportFromServer = async (adminToken: string): Promise<v
       });
     }
   } catch {
-    // offline fallback
+    // read-only fallback
   }
 };
 
-// 1. Admin Support Package Configuration
 export const getAdminPlansConfig = (): SubscriptionPlan[] => {
   try {
     const raw = localStorage.getItem(PLANS_CONFIG_KEY);
@@ -120,38 +116,45 @@ export const getAdminPlansConfig = (): SubscriptionPlan[] => {
         isActive: saved[p.id] !== undefined ? saved[p.id] : true
       }));
     }
-  } catch (e) {}
+  } catch {}
   return DEFAULT_SUBSCRIPTION_PLANS;
 };
 
-export const saveAdminPlanStatus = (planId: string, isActive: boolean, adminTokenOverride?: string) => {
+export const saveAdminPlanStatus = async (
+  planId: string,
+  isActive: boolean,
+  adminTokenOverride?: string
+): Promise<{ ok: boolean; error?: string; unauthorized?: boolean }> => {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return { ok: false, error: 'أنت غير متصل بالإنترنت' };
+  }
+  const adminToken = adminTokenOverride || (typeof window !== 'undefined' ? localStorage.getItem('arm_admin_token') || '' : '');
+  if (!adminToken) {
+    return { ok: false, unauthorized: true, error: 'مطلوب صلاحية الأدمن' };
+  }
+
   try {
-    let saved: Record<string, boolean> = {};
-    const raw = localStorage.getItem(PLANS_CONFIG_KEY);
-    if (raw) saved = JSON.parse(raw);
-    saved[planId] = isActive;
+    const res = await fetch('/api/support/config', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminToken}`,
+      },
+      body: JSON.stringify({ planId, isActive }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, unauthorized: res.status === 401 || res.status === 403, error: data.error || 'تعذر حفظ حالة باقة الدعم' };
+    }
+    const saved = data.supportConfig || { [planId]: isActive };
     localStorage.setItem(PLANS_CONFIG_KEY, JSON.stringify(saved));
     dispatchSupportUpdated();
-
-    if (typeof window !== 'undefined') {
-      const adminToken = adminTokenOverride || localStorage.getItem('arm_admin_token') || '';
-      if (adminToken) {
-        fetch('/api/support/config', {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${adminToken}`,
-          },
-          body: JSON.stringify({ planId, isActive }),
-        }).catch(() => {});
-      }
-    }
-  } catch (e) {
-    console.error('Error saving support config status', e);
+    return { ok: true };
+  } catch {
+    return { ok: false, error: 'تعذر الاتصال بالخادم' };
   }
 };
 
-// 2. 100% Free Forever Full Access for Every Student
 export const calculateStudentSubscription = (
   userId: string,
   userCreatedAt?: string,
@@ -186,7 +189,7 @@ export const calculateStudentSubscription = (
         isTrial: false,
       };
     }
-  } catch (e) {}
+  } catch {}
 
   const start = userCreatedAt ? new Date(userCreatedAt) : new Date();
   const futureEnd = new Date(Date.now() + 3650 * 24 * 60 * 60 * 1000);
@@ -204,43 +207,48 @@ export const calculateStudentSubscription = (
   };
 };
 
-export const saveStudentSubscription = (
+export const saveStudentSubscription = async (
   userId: string,
   sub: UserSubscription,
-  syncToServer = true,
   adminTokenOverride?: string
-) => {
-  try {
-    let map: Record<string, UserSubscription> = {};
-    const rawMap = localStorage.getItem(STUDENTS_SUBSCRIPTIONS_MAP_KEY);
-    if (rawMap) map = JSON.parse(rawMap);
-    const normalizedSub: UserSubscription = {
-      ...sub,
-      status: 'active',
-      examsRemainingThisWeek: -1,
-      maxExamsPerWeek: -1,
-      isTrial: false,
-    };
-    map[userId] = normalizedSub;
-    localStorage.setItem(STUDENTS_SUBSCRIPTIONS_MAP_KEY, JSON.stringify(map));
-    localStorage.setItem(`arm_subscription_${userId}`, JSON.stringify(normalizedSub));
-    dispatchSupportUpdated();
+): Promise<{ ok: boolean; subscription?: UserSubscription; error?: string; unauthorized?: boolean }> => {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return { ok: false, error: 'أنت غير متصل بالإنترنت' };
+  }
+  const adminToken = adminTokenOverride || (typeof window !== 'undefined' ? localStorage.getItem('arm_admin_token') || '' : '');
+  if (!adminToken) {
+    return { ok: false, unauthorized: true, error: 'مطلوب صلاحية الأدمن لمنح الشارة' };
+  }
 
-    if (syncToServer && typeof window !== 'undefined') {
-      const adminToken = adminTokenOverride || localStorage.getItem('arm_admin_token') || '';
-      if (adminToken) {
-        fetch(`/api/support/supporters/${encodeURIComponent(userId)}`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${adminToken}`,
-          },
-          body: JSON.stringify(normalizedSub),
-        }).catch(() => {});
-      }
+  const normalizedSub: UserSubscription = {
+    ...sub,
+    status: 'active',
+    examsRemainingThisWeek: -1,
+    maxExamsPerWeek: -1,
+    isTrial: false,
+  };
+
+  try {
+    const res = await fetch(`/api/support/supporters/${encodeURIComponent(userId)}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminToken}`,
+      },
+      body: JSON.stringify(normalizedSub),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, unauthorized: res.status === 401 || res.status === 403, error: data.error || 'تعذر حفظ شارة الداعم' };
     }
-  } catch (e) {
-    console.error('Error saving student support record', e);
+    const saved = (data.subscription || normalizedSub) as UserSubscription;
+    const map = getAllSavedSubscriptions();
+    map[userId] = saved;
+    localStorage.setItem(STUDENTS_SUBSCRIPTIONS_MAP_KEY, JSON.stringify(map));
+    dispatchSupportUpdated();
+    return { ok: true, subscription: saved };
+  } catch {
+    return { ok: false, error: 'تعذر الاتصال بالخادم' };
   }
 };
 
@@ -248,121 +256,129 @@ export const getAllSavedSubscriptions = (): Record<string, UserSubscription> => 
   try {
     const rawMap = localStorage.getItem(STUDENTS_SUBSCRIPTIONS_MAP_KEY);
     if (rawMap) return JSON.parse(rawMap);
-  } catch (e) {}
+  } catch {}
   return {};
 };
 
-// 3. Voluntary Support Requests Management
 export const getPaymentRequests = (): SubscriptionPaymentRequest[] => {
   try {
     const raw = localStorage.getItem(PAYMENT_REQUESTS_KEY);
     if (raw) return JSON.parse(raw);
-  } catch (e) {}
+  } catch {}
   return [];
 };
 
-export const submitPaymentRequest = (request: Omit<SubscriptionPaymentRequest, 'id' | 'submittedAt' | 'status'>) => {
-  const newReq: SubscriptionPaymentRequest = {
+export const submitPaymentRequest = async (
+  request: Omit<SubscriptionPaymentRequest, 'id' | 'submittedAt' | 'status'>,
+  clientRequestId?: string
+): Promise<{
+  ok: boolean;
+  request?: SubscriptionPaymentRequest;
+  subscription?: UserSubscription;
+  error?: string;
+  unauthorized?: boolean;
+}> => {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return { ok: false, error: 'أنت غير متصل بالإنترنت — تعذر إرسال إشعار الدعم' };
+  }
+  const userToken = typeof window !== 'undefined' ? (localStorage.getItem('arm_user_token') || '') : '';
+  const adminToken = typeof window !== 'undefined' ? (localStorage.getItem('arm_admin_token') || '') : '';
+  const token = userToken || adminToken;
+
+  if (!token) {
+    return { ok: false, unauthorized: true, error: 'يرجى تسجيل الدخول أولاً لتوثيق مساهمة الدعم' };
+  }
+
+  const reqPayload = {
     ...request,
-    id: 'req_' + Date.now(),
+    id: clientRequestId || ('req_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6)),
     submittedAt: new Date().toISOString(),
-    status: 'pending'
+    status: 'pending' as const,
   };
 
   try {
-    let list = getPaymentRequests();
-    if (list.length > 25) {
-      list = list.slice(0, 25);
-    }
-    list.unshift(newReq);
-    localStorage.setItem(PAYMENT_REQUESTS_KEY, JSON.stringify(list));
-    dispatchSupportUpdated();
-  } catch (e) {
-    console.warn('Quota exceeded while saving support request, retrying without large payload...', e);
-    try {
-      const fallbackReq = { ...newReq, receiptImage: undefined };
-      let list = getPaymentRequests().map(r => ({ ...r, receiptImage: undefined })).slice(0, 15);
-      list.unshift(fallbackReq);
-      localStorage.setItem(PAYMENT_REQUESTS_KEY, JSON.stringify(list));
-      dispatchSupportUpdated();
-    } catch (err2) {
-      console.error('Final fallback for support request', err2);
-      dispatchSupportUpdated();
-    }
-  }
-
-  if (typeof window !== 'undefined') {
-    fetch('/api/support/requests', {
+    const res = await fetch('/api/support/requests', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newReq),
-    }).catch(() => {});
-  }
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(reqPayload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.request) {
+      return {
+        ok: false,
+        unauthorized: res.status === 401 || res.status === 403,
+        error: data.error || 'تعذر تسجيل مساهمة الدعم في الخادم',
+      };
+    }
 
-  return newReq;
+    const savedReq = data.request as SubscriptionPaymentRequest;
+    const savedSub = data.subscription as UserSubscription | undefined;
+    try {
+      const list = getPaymentRequests().filter(r => r.id !== savedReq.id).slice(0, 50);
+      list.unshift(savedReq);
+      localStorage.setItem(PAYMENT_REQUESTS_KEY, JSON.stringify(list));
+      if (savedSub && savedReq.userId) {
+        const map = getAllSavedSubscriptions();
+        map[savedReq.userId] = savedSub;
+        localStorage.setItem(STUDENTS_SUBSCRIPTIONS_MAP_KEY, JSON.stringify(map));
+      }
+    } catch {
+      // ignore storage quota errors on optional cache
+    }
+    dispatchSupportUpdated();
+    return { ok: true, request: savedReq, subscription: savedSub };
+  } catch {
+    return { ok: false, error: 'تعذر الاتصال بالخادم. يرجى المحاولة مرة أخرى.' };
+  }
 };
 
-export const updatePaymentRequestStatus = (
+export const updatePaymentRequestStatus = async (
   requestId: string,
   newStatus: 'approved' | 'rejected',
   adminTokenOverride?: string
-) => {
+): Promise<{ ok: boolean; error?: string; unauthorized?: boolean }> => {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return { ok: false, error: 'أنت غير متصل بالإنترنت' };
+  }
+  const adminToken = adminTokenOverride || (typeof window !== 'undefined' ? localStorage.getItem('arm_admin_token') || '' : '');
+  if (!adminToken) {
+    return { ok: false, unauthorized: true, error: 'مطلوب صلاحية الأدمن' };
+  }
+
   try {
-    const list = getPaymentRequests();
-    const req = list.find(r => r.id === requestId);
-    if (!req) return false;
-
-    req.status = newStatus;
-    localStorage.setItem(PAYMENT_REQUESTS_KEY, JSON.stringify(list));
-
-    if (newStatus === 'approved') {
-      const now = new Date();
-      const expiry = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
-
-      const supporterSub: UserSubscription = {
-        planId: req.planId || 'basic_50',
-        planName: 'داعم للمنصة المجانية ❤️',
-        status: 'active',
-        billingPeriod: 'monthly',
-        examsRemainingThisWeek: -1,
-        maxExamsPerWeek: -1,
-        startDate: now.toISOString(),
-        endDate: expiry.toISOString(),
-        isTrial: false,
-        pricePaid: req.amountEGP,
-        paymentMethod: req.paymentMethod,
-        receiptImage: req.receiptImage,
-        paymentSenderPhone: req.senderPhone,
-        transactionRef: req.transactionRef,
-        approvedByAdmin: true
+    const res = await fetch(`/api/support/requests/${encodeURIComponent(requestId)}/status`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminToken}`,
+      },
+      body: JSON.stringify({ status: newStatus }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return {
+        ok: false,
+        unauthorized: res.status === 401 || res.status === 403,
+        error: data.error || 'تعذر تحديث حالة طلب الدعم',
       };
-
-      saveStudentSubscription(req.userId, supporterSub, false);
     }
-
-    if (typeof window !== 'undefined') {
-      const adminToken = adminTokenOverride || localStorage.getItem('arm_admin_token') || '';
-      if (adminToken) {
-        fetch(`/api/support/requests/${encodeURIComponent(requestId)}/status`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${adminToken}`,
-          },
-          body: JSON.stringify({ status: newStatus }),
-        }).catch(() => {});
-      }
+    const list = getPaymentRequests();
+    const target = list.find(r => r.id === requestId);
+    if (target) {
+      target.status = newStatus;
+      localStorage.setItem(PAYMENT_REQUESTS_KEY, JSON.stringify(list));
     }
-
+    await fetchAdminSupportFromServer(adminToken);
     dispatchSupportUpdated();
-    return true;
-  } catch (e) {
-    console.error('Error updating support request status', e);
-    return false;
+    return { ok: true };
+  } catch {
+    return { ok: false, error: 'تعذر الاتصال بالخادم' };
   }
 };
 
-// 4. Legacy Compatibility Helpers (Zero Locks - 100% Free Forever)
 export interface TrialRemainingTime {
   days: number;
   hours: number;

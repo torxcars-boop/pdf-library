@@ -8,13 +8,7 @@ import {
   BookOpen,
 } from 'lucide-react';
 import { RatingStars } from './RatingStars';
-import { 
-  recordBookDownload, 
-  getRealDownloads, 
-  getRealViews,
-  incrementRealDownload, 
-  incrementRealView 
-} from '../utils/contentStore';
+import { recordBookDownload } from '../utils/contentStore';
 import { getItemRatingStats } from '../utils/reviewsStore';
 import { resolveBookPdfUrl, triggerPdfDownload } from '../utils/pdfStorage';
 import { CommentsSection } from './CommentsSection';
@@ -53,21 +47,27 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
 
   useEffect(() => {
     if (book?.id) {
-      const views = incrementRealView('book', book.id, book.views || 0);
-      setViewCount(views);
-      setDownloadCount(getRealDownloads(book.id, book.downloads || 0));
+      setViewCount(book.views || 0);
+      setDownloadCount(book.downloads || 0);
       setShowReader(false);
       setResolvedReaderUrl('');
       setReaderError(null);
-      fetch(`/api/items/book/${book.id}/view`, { method: 'POST' }).catch(() => {});
+      fetch(`/api/items/book/${book.id}/view`, { method: 'POST' })
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+          if (data && typeof data.views === 'number') {
+            setViewCount(data.views);
+          }
+        })
+        .catch(() => {});
     }
   }, [book?.id]);
 
   // Keep view/download counts in sync when real-time server sync updates book props
   useEffect(() => {
     if (book?.id) {
-      setViewCount((prev) => Math.max(prev, getRealViews('book', book.id, book.views || 0), book.views || 0));
-      setDownloadCount((prev) => Math.max(prev, getRealDownloads(book.id, book.downloads || 0), book.downloads || 0));
+      setViewCount((prev) => Math.max(prev, book.views || 0));
+      setDownloadCount((prev) => Math.max(prev, book.downloads || 0));
     }
   }, [book?.id, book?.views, book?.downloads]);
 
@@ -131,9 +131,17 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
   const handleDownload = async () => {
     setDownloading(true);
     recordBookDownload(book, user?.id);
-    const newCount = incrementRealDownload(book.id, book.downloads || 0);
-    setDownloadCount(newCount);
-    void fetch(`/api/books/${book.id}/download`, { method: 'POST' }).catch(() => {});
+    try {
+      const dlRes = await fetch(`/api/books/${book.id}/download`, { method: 'POST' });
+      if (dlRes.ok) {
+        const dlData = await dlRes.json().catch(() => ({}));
+        if (typeof dlData.downloads === 'number') {
+          setDownloadCount(dlData.downloads);
+        }
+      }
+    } catch {
+      // network offline; still allow local/cached download if available
+    }
     try {
       await triggerPdfDownload(book.filepath, `${book.title || 'book'}.pdf`);
     } catch {
@@ -307,9 +315,6 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
           user={user}
           onOpenAuth={onOpenAuth}
           title={`مراجعات وتقييمات الطلاب لكتاب: ${book.title}`}
-          onRatingChanged={(newRating) => {
-            if (onRate) onRate(newRating);
-          }}
         />
 
         {/* Interactive Student Comments & Questions Section */}

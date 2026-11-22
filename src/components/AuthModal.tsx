@@ -15,7 +15,6 @@ import {
   CheckCircle2,
   AlertCircle
 } from 'lucide-react';
-import { saveRegisteredStudent, getRegisteredStudents } from '../utils/studentUserStore';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -61,57 +60,33 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setError('أنت غير متصل بالإنترنت — يتطلب تسجيل الدخول الاتصال بالخادم.');
+      return;
+    }
     setLoading(true);
 
-    class ServerRejectionError extends Error {}
-
     try {
-      let loggedUser: User | null = null;
-      let token = 'tok_usr_' + Date.now();
-
-      try {
-        const res = await fetch('/api/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: loginEmail, password: loginPassword }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok && data.user) {
-          loggedUser = data.user;
-          token = data.token || token;
-        } else if (res.status === 400 || res.status === 401 || res.status === 403) {
-          throw new ServerRejectionError(data.error || 'البريد الإلكتروني أو كلمة المرور غير صحيحة');
-        } else {
-          throw new Error(data.error || 'تعذر الاتصال بالخادم');
-        }
-      } catch (networkErr: any) {
-        if (networkErr instanceof ServerRejectionError) {
-          throw networkErr;
-        }
-        // Only fall back to local cache when the server is genuinely unreachable offline
-        const localStudents = getRegisteredStudents();
-        const found = localStudents.find(s => s.email.toLowerCase() === loginEmail.trim().toLowerCase());
-        if (found) {
-          loggedUser = found;
-        } else {
-          throw new Error('البريد الإلكتروني أو كلمة المرور غير صحيحة');
-        }
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: loginEmail.trim(), password: loginPassword }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.user || !data.token) {
+        throw new Error(data.error || 'البريد الإلكتروني أو كلمة المرور غير صحيحة');
       }
 
-      if (!loggedUser) {
-        throw new Error('البريد الإلكتروني أو كلمة المرور غير صحيحة');
-      }
-
-      // Synchronize with persistent store and Admin Portal
-      saveRegisteredStudent(loggedUser);
+      const loggedUser = data.user as User;
+      const token = data.token as string;
       triggerCelebration();
       setSuccessMsg('تم تسجيل الدخول بنجاح! مرحباً بك في المنصة 🎓');
       setTimeout(() => {
-        onLoginSuccess(loggedUser!, token);
+        onLoginSuccess(loggedUser, token);
         onClose();
       }, 700);
     } catch (err: any) {
-      setError(err.message || 'حدث خطأ أثناء تسجيل الدخول');
+      setError(err?.message || 'تعذر الاتصال بالخادم لتسجيل الدخول');
     } finally {
       setLoading(false);
     }
@@ -120,68 +95,44 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    setLoading(true);
-
-    if (regPassword.length < 6) {
-      setError('كلمة المرور يجب أن لا تقل عن 6 أحرف');
-      setLoading(false);
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setError('أنت غير متصل بالإنترنت — يتطلب إنشاء الحساب الاتصال بالخادم.');
       return;
     }
 
-    try {
-      let registeredUser: User | null = null;
-      let token = 'tok_usr_' + Date.now();
+    if (regPassword.length < 6) {
+      setError('كلمة المرور يجب أن لا تقل عن 6 أحرف');
+      return;
+    }
 
-      try {
-        const res = await fetch('/api/auth/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: regName,
-            email: regEmail,
-            password: regPassword,
-            academicStage: regStage,
-            avatar: regAvatar,
-          }),
-        });
-        const data = await res.json();
-        if (res.ok && data.user) {
-          registeredUser = data.user;
-          token = data.token || token;
-        } else if (data.error) {
-          throw new Error(data.error);
-        }
-      } catch (apiErr: any) {
-        // If server failed or serverless cold start, fallback create student
-        if (apiErr.message && apiErr.message.includes('مسجل بالفعل')) {
-          throw apiErr;
-        }
-        registeredUser = {
-          id: 'usr_' + Date.now(),
+    setLoading(true);
+    try {
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           name: regName.trim(),
-          email: regEmail.trim().toLowerCase(),
-          role: 'user',
-          status: 'active',
+          email: regEmail.trim(),
+          password: regPassword,
           academicStage: regStage,
           avatar: regAvatar,
-          createdAt: new Date().toISOString()
-        };
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.user || !data.token) {
+        throw new Error(data.error || 'فشل إنشاء الحساب في قاعدة البيانات، يرجى المحاولة مرة أخرى');
       }
 
-      if (!registeredUser) {
-        throw new Error('فشل إنشاء الحساب، يرجى المحاولة مرة أخرى');
-      }
-
-      // Save student so they appear in Admin Portal immediately!
-      saveRegisteredStudent(registeredUser);
+      const registeredUser = data.user as User;
+      const token = data.token as string;
       triggerCelebration();
       setSuccessMsg('تم إنشاء حسابك مجاناً بالكامل في المنصة! جميع الكتب والامتحانات مفتوحة لك 🚀');
       setTimeout(() => {
-        onLoginSuccess(registeredUser!, token);
+        onLoginSuccess(registeredUser, token);
         onClose();
       }, 800);
     } catch (err: any) {
-      setError(err.message || 'حدث خطأ أثناء إنشاء الحساب');
+      setError(err?.message || 'حدث خطأ أثناء الاتصال بالخادم لإنشاء الحساب');
     } finally {
       setLoading(false);
     }

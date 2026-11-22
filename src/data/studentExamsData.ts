@@ -1219,15 +1219,14 @@ export const getCustomStudentExams = (): Exam[] => {
 
 export const syncExamsFromServer = (customExams?: Exam[] | null, deletedExamIds?: string[] | null) => {
   try {
+    const serverDeleted = Array.isArray(deletedExamIds)
+      ? Array.from(new Set(deletedExamIds.map(String)))
+      : getDeletedExamIds();
     if (Array.isArray(deletedExamIds)) {
-      const mergedDeleted = Array.from(new Set([
-        ...getDeletedExamIds(),
-        ...deletedExamIds.map(String),
-      ]));
-      localStorage.setItem(LOCAL_STORAGE_DELETED_EXAMS, JSON.stringify(mergedDeleted));
+      localStorage.setItem(LOCAL_STORAGE_DELETED_EXAMS, JSON.stringify(serverDeleted));
     }
     if (Array.isArray(customExams)) {
-      const deletedSet = new Set(getDeletedExamIds());
+      const deletedSet = new Set(serverDeleted);
       const cleanCustom = customExams.filter(e => !deletedSet.has(e.id));
       localStorage.setItem(LOCAL_STORAGE_CUSTOM_EXAMS, JSON.stringify(cleanCustom));
     }
@@ -1245,7 +1244,7 @@ export const fetchExamsFromServer = async (): Promise<Exam[]> => {
       syncExamsFromServer(data.customExams, data.deletedExamIds);
     }
   } catch {
-    // offline fallback
+    // read-only cache fallback when unreachable
   }
   return getAllStudentExams();
 };
@@ -1254,7 +1253,6 @@ export const getAllStudentExams = (): Exam[] => {
   const deletedIds = new Set(getDeletedExamIds());
   const customExams = getCustomStudentExams();
   
-  // Merge custom exams with built-in exams, excluding deleted ones
   const combined = [...customExams, ...EGYPT_STUDENT_EXAMS];
   const uniqueMap = new Map<string, Exam>();
   
@@ -1270,68 +1268,89 @@ export const getAllStudentExams = (): Exam[] => {
 export const addCustomStudentExam = async (
   exam: Exam,
   adminTokenOverride?: string
-): Promise<{ exams: Exam[]; unauthorized?: boolean }> => {
-  let unauthorized = false;
-  try {
-    const currentCustom = getCustomStudentExams();
-    const updated = [exam, ...currentCustom.filter(e => e.id !== exam.id)];
-    localStorage.setItem(LOCAL_STORAGE_CUSTOM_EXAMS, JSON.stringify(updated));
-    const deleted = getDeletedExamIds().filter(id => id !== exam.id);
-    localStorage.setItem(LOCAL_STORAGE_DELETED_EXAMS, JSON.stringify(deleted));
+): Promise<{ ok: boolean; exams: Exam[]; unauthorized?: boolean; forbidden?: boolean; error?: string }> => {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return { ok: false, exams: getAllStudentExams(), error: 'أنت غير متصل بالإنترنت — تعذر نشر الامتحان' };
+  }
+  const token = adminTokenOverride || (typeof window !== 'undefined' ? (localStorage.getItem('arm_admin_token') || localStorage.getItem('arm_user_token') || '') : '');
+  if (!token) {
+    return { ok: false, exams: getAllStudentExams(), unauthorized: true, error: 'مطلوب صلاحية الأدمن أو المشرف لنشر الامتحان' };
+  }
 
-    if (typeof window !== 'undefined') {
-      const token = adminTokenOverride || localStorage.getItem('arm_admin_token') || '';
-      if (token) {
-        const res = await fetch('/api/exams', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify(exam),
-        }).catch(() => null);
-        if (res && res.status === 401) {
-          unauthorized = true;
-        }
-      }
+  try {
+    const res = await fetch('/api/exams', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(exam),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.exam) {
+      return {
+        ok: false,
+        exams: getAllStudentExams(),
+        unauthorized: res.status === 401,
+        forbidden: res.status === 403,
+        error: data.error || 'تعذر حفظ الامتحان في قاعدة البيانات',
+      };
     }
+
+    const savedExam = data.exam as Exam;
+    const currentCustom = getCustomStudentExams();
+    const updated = [savedExam, ...currentCustom.filter(e => e.id !== savedExam.id)];
+    localStorage.setItem(LOCAL_STORAGE_CUSTOM_EXAMS, JSON.stringify(updated));
+    const deleted = getDeletedExamIds().filter(id => id !== savedExam.id);
+    localStorage.setItem(LOCAL_STORAGE_DELETED_EXAMS, JSON.stringify(deleted));
     dispatchExamsUpdated();
+    return { ok: true, exams: getAllStudentExams() };
   } catch (e) {
     console.error('Failed to add custom exam', e);
+    return { ok: false, exams: getAllStudentExams(), error: 'تعذر الاتصال بالخادم لنشر الامتحان' };
   }
-  return { exams: getAllStudentExams(), unauthorized };
 };
 
 export const deleteStudentExam = async (
   examId: string,
   adminTokenOverride?: string
-): Promise<{ exams: Exam[]; unauthorized?: boolean }> => {
-  let unauthorized = false;
+): Promise<{ ok: boolean; exams: Exam[]; unauthorized?: boolean; forbidden?: boolean; error?: string }> => {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return { ok: false, exams: getAllStudentExams(), error: 'أنت غير متصل بالإنترنت — تعذر حذف الامتحان' };
+  }
+  const token = adminTokenOverride || (typeof window !== 'undefined' ? (localStorage.getItem('arm_admin_token') || localStorage.getItem('arm_user_token') || '') : '');
+  if (!token) {
+    return { ok: false, exams: getAllStudentExams(), unauthorized: true, error: 'مطلوب صلاحية الأدمن أو المشرف لحذف الامتحان' };
+  }
+
   try {
+    const res = await fetch(`/api/exams/${encodeURIComponent(examId)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return {
+        ok: false,
+        exams: getAllStudentExams(),
+        unauthorized: res.status === 401,
+        forbidden: res.status === 403,
+        error: data.error || 'تعذر حذف الامتحان من قاعدة البيانات',
+      };
+    }
+
     const deleted = getDeletedExamIds();
     if (!deleted.includes(examId)) {
       deleted.push(examId);
       localStorage.setItem(LOCAL_STORAGE_DELETED_EXAMS, JSON.stringify(deleted));
     }
-    const currentCustom = getCustomStudentExams();
-    const filtered = currentCustom.filter(e => e.id !== examId);
+    const filtered = getCustomStudentExams().filter(e => e.id !== examId);
     localStorage.setItem(LOCAL_STORAGE_CUSTOM_EXAMS, JSON.stringify(filtered));
-
-    if (typeof window !== 'undefined') {
-      const token = adminTokenOverride || localStorage.getItem('arm_admin_token') || '';
-      if (token) {
-        const res = await fetch(`/api/exams/${encodeURIComponent(examId)}`, {
-          method: 'DELETE',
-          headers: { Authorization: `Bearer ${token}` },
-        }).catch(() => null);
-        if (res && res.status === 401) {
-          unauthorized = true;
-        }
-      }
-    }
     dispatchExamsUpdated();
+    return { ok: true, exams: getAllStudentExams() };
   } catch (e) {
     console.error('Failed to delete student exam', e);
+    return { ok: false, exams: getAllStudentExams(), error: 'تعذر الاتصال بالخادم لحذف الامتحان' };
   }
-  return { exams: getAllStudentExams(), unauthorized };
 };
+

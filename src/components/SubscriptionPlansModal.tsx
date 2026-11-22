@@ -16,10 +16,8 @@ import {
   PAYMENT_ACCOUNTS, 
   DEVELOPER_WHATSAPP, 
   getAdminPlansConfig, 
-  submitPaymentRequest,
-  saveStudentSubscription 
+  submitPaymentRequest
 } from '../utils/subscriptionStore';
-import { saveRegisteredStudent } from '../utils/studentUserStore';
 
 interface SubscriptionPlansModalProps {
   isOpen: boolean;
@@ -86,12 +84,14 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
 
   useEffect(() => {
     if (isOpen) {
       setPlans(getAdminPlansConfig());
       setPaymentError(null);
       setSuccessMessage(null);
+      setPendingRequestId(null);
     }
   }, [isOpen]);
 
@@ -152,8 +152,8 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
     return `https://wa.me/${DEVELOPER_WHATSAPP}?text=${encodeURIComponent(text)}`;
   };
 
-  const handleConfirmSupport = () => {
-    if (!selectedPlan || !currentUser) return;
+  const handleConfirmSupport = async () => {
+    if (!selectedPlan || !currentUser || isProcessing) return;
 
     setPaymentError(null);
 
@@ -162,73 +162,46 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
       return;
     }
 
+    const reqId = pendingRequestId || ('req_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6));
+    setPendingRequestId(reqId);
     setIsProcessing(true);
 
+    const res = await submitPaymentRequest({
+      userId: currentUser.id,
+      userName: currentUser.name,
+      userEmail: currentUser.email,
+      planId: selectedPlan.id,
+      planName: `دعم المنصة المجانية (${supportAmount} ج.م)`,
+      amountEGP: supportAmount,
+      paymentMethod,
+      senderPhone: senderPhone.trim(),
+      transactionRef: transactionRef.trim(),
+      receiptImage: receiptImage || undefined,
+      notes: `مساهمة تطوعية لدعم المنصة من ${currentUser.name}`
+    }, reqId);
+
+    setIsProcessing(false);
+
+    if (!res.ok) {
+      setPaymentError(res.error || 'تعذر تسجيل مساهمتك في قاعدة البيانات المركزية. حاول مرة أخرى.');
+      return;
+    }
+
+    setPendingRequestId(null);
+    if (res.subscription) {
+      onSubscriptionUpdated(res.subscription);
+    }
+    setSuccessMessage(`شكراً من القلب يا ${currentUser.name}! تم حفظ تسجيل دعمك للمنصة بنجاح ❤️`);
+
     setTimeout(() => {
-      try {
-        const now = new Date();
-        const expiry = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
-
-        const supporterBadge: UserSubscription = {
-          planId: selectedPlan.id,
-          planName: 'داعم للمنصة المجانية ❤️',
-          status: 'active',
-          billingPeriod: 'monthly',
-          examsRemainingThisWeek: -1,
-          maxExamsPerWeek: -1,
-          startDate: now.toISOString(),
-          endDate: expiry.toISOString(),
-          isTrial: false,
-          pricePaid: supportAmount,
-          paymentMethod: paymentMethod === 'vodafone' ? 'فودافون كاش' : paymentMethod === 'etisalat' ? 'اتصالات كاش' : 'انستاباي',
-          paymentSenderPhone: senderPhone.trim(),
-          transactionRef: transactionRef.trim() || undefined,
-          approvedByAdmin: true
-        };
-
-        submitPaymentRequest({
-          userId: currentUser.id,
-          userName: currentUser.name,
-          userEmail: currentUser.email,
-          planId: selectedPlan.id,
-          planName: `دعم المنصة المجانية (${supportAmount} ج.م)`,
-          amountEGP: supportAmount,
-          paymentMethod,
-          senderPhone: senderPhone.trim(),
-          transactionRef: transactionRef.trim(),
-          receiptImage: receiptImage || undefined,
-          notes: `مساهمة تطوعية لدعم المنصة من ${currentUser.name}`
-        });
-
-        saveStudentSubscription(currentUser.id, supporterBadge);
-        saveRegisteredStudent({
-          ...currentUser,
-          subscription: supporterBadge
-        });
-        
-        onSubscriptionUpdated(supporterBadge);
-        setIsProcessing(false);
-        setSuccessMessage(`شكراً من القلب يا ${currentUser.name}! تم تسجيل دعمك للمنصة بنجاح ❤️`);
-
-        setTimeout(() => {
-          setSelectedPlan(null);
-          setSuccessMessage(null);
-          setSenderPhone('');
-          setTransactionRef('');
-          setReceiptImage('');
-          setReceiptFileName('');
-          onClose();
-        }, 2500);
-      } catch (err: any) {
-        setIsProcessing(false);
-        setSuccessMessage('تم تسجيل مساهمتك بنجاح! شكراً لدعمك استمرار المنصة المجانية ❤️');
-        setTimeout(() => {
-          setSelectedPlan(null);
-          setSuccessMessage(null);
-          onClose();
-        }, 3000);
-      }
-    }, 500);
+      setSelectedPlan(null);
+      setSuccessMessage(null);
+      setSenderPhone('');
+      setTransactionRef('');
+      setReceiptImage('');
+      setReceiptFileName('');
+      onClose();
+    }, 2500);
   };
 
   const isSupporter = Boolean(currentUser?.subscription?.approvedByAdmin || currentUser?.subscription?.pricePaid);

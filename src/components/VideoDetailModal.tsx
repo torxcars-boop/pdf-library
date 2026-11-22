@@ -5,7 +5,6 @@ import { RatingStars } from './RatingStars';
 import { CommentsSection } from './CommentsSection';
 import { ReviewsSection } from './ReviewsSection';
 import { ShareMenuButton } from './ShareMenuButton';
-import { getRealViews, incrementRealView } from '../utils/contentStore';
 import { getItemRatingStats } from '../utils/reviewsStore';
 
 interface VideoDetailModalProps {
@@ -32,15 +31,21 @@ export const VideoDetailModal: React.FC<VideoDetailModalProps> = ({
 
   useEffect(() => {
     if (video?.id) {
-      const views = incrementRealView('video', video.id, video.views || 0);
-      setViewCount(views);
-      fetch(`/api/items/video/${video.id}/view`, { method: 'POST' }).catch(() => {});
+      setViewCount(video.views || 0);
+      fetch(`/api/items/video/${video.id}/view`, { method: 'POST' })
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+          if (data && typeof data.views === 'number') {
+            setViewCount(data.views);
+          }
+        })
+        .catch(() => {});
     }
   }, [video?.id]);
 
   useEffect(() => {
     if (video?.id) {
-      setViewCount((prev) => Math.max(prev, getRealViews('video', video.id, video.views || 0), video.views || 0));
+      setViewCount((prev) => Math.max(prev, video.views || 0));
     }
   }, [video?.id, video?.views]);
 
@@ -188,9 +193,6 @@ export const VideoDetailModal: React.FC<VideoDetailModalProps> = ({
           user={user}
           onOpenAuth={onOpenAuth}
           title={`مراجعات وتقييمات الطلاب لشرح: ${video.title}`}
-          onRatingChanged={(newRating) => {
-            if (onRate) onRate(newRating);
-          }}
         />
 
         {/* Interactive Student Comments & Questions Section */}
