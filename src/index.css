@@ -1,0 +1,88 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-sans: 'Cairo', system-ui, -apple-system, sans-serif;
+    --font-display: 'Amiri', 'Cairo', serif;
+    --font-mono: 'IBM Plex Mono', monospace;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    font-family: var(--font-sans);
+    background-color: #06152f;
+    color: #ffffff;
+  }
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-mono-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom scrollbar for horizontal 3D bookshelves */
+.shelf-scroll::-webkit-scrollbar {
+  height: 6px;
+}
+
+.shelf-scroll::-webkit-scrollbar-track {
+  background: rgba(16, 39, 74, 0.4);
+  border-radius: 9999px;
+}
+
+.shelf-scroll::-webkit-scrollbar-thumb {
+  background: rgba(232, 185, 79, 0.35);
+  border-radius: 9999px;
+}
+
+.shelf-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(232, 185, 79, 0.7);
+}
+
+/* Realistic 3D Book Perspective & Spine */
+.book-stage {
+  perspective: 1300px;
+}
+
+.book-3d {
+  transform-style: preserve-3d;
+  transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), filter 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  transform: rotateY(-12deg) rotateX(2deg);
+}
+
+.book-stage:hover .book-3d,
+.book-stage:focus-within .book-3d {
+  transform: rotateY(-2deg) rotateX(0deg) translateY(-14px) scale(1.05);
+}
+
+.book-spine {
+  transform: rotateY(90deg) translateZ(-12px);
+  transform-origin: right center;
+}
+
+.book-pages {
+  background: repeating-linear-gradient(
+    to right,
+    #f3ead6 0px,
+    #f3ead6 2px,
+    #d6c8ad 2px,
+    #d6c8ad 3px
+  );
+  transform: rotateY(-90deg) translateZ(-10px);
+  transform-origin: left center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .book-3d {
+    transition: none;
+    transform: none;
+  }
+  .book-stage:hover .book-3d,
+  .book-stage:focus-within .book-3d {
+    transform: translateY(-4px);
+  }
+}

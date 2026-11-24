@@ -1,0 +1,6 @@
+{
+  "name": "المكتبة الرقمية الفاخرة",
+  "description": "منصة عربية متكاملة للكتب الرقمية PDF بتجربة أرفف ثلاثية الأبعاد فاخرة وقارئ فوري مدمج.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
