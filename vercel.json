@@ -1,4 +1,5 @@
 {
+<<<<<<< HEAD
   "version": 2,
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
@@ -19,5 +20,13 @@
       "source": "/(.*)",
       "destination": "/index.html"
     }
+=======
+  "framework": "vite",
+  "buildCommand": "vite build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api" },
+    { "source": "/(.*)", "destination": "/index.html" }
+>>>>>>> c05b6562d60cedf0c03364b88d720a6aad8e7821
   ]
 }

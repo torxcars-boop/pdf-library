@@ -1,4 +1,5 @@
 <!doctype html>
+<<<<<<< HEAD
 <html lang="ar" dir="rtl">
   <head>
     <meta charset="UTF-8" />
@@ -41,7 +42,56 @@
     </script>
   </head>
   <body class="bg-[#06152F] text-white antialiased selection:bg-[#E8B94F]/30 selection:text-[#FFD778]">
+=======
+<html lang="ar" dir="rtl" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>المكتبة الرقمية الفاخرة</title>
+    <meta name="description" content="منصة متكاملة للمناهج الدراسية والكتب والمقالات العلمية وملخصات الخرائط الذهنية ومقاطع الفيديو مع نظام حسابات مستخدمين ولوحة تحكم متطورة للأدمن والأمان." />
+    <meta property="og:title" content="المكتبة الرقمية الفاخرة" />
+    <meta property="og:description" content="منصة متكاملة للمناهج الدراسية والكتب والمقالات العلمية وملخصات الخرائط الذهنية ومقاطع الفيديو مع نظام حسابات مستخدمين ولوحة تحكم متطورة للأدمن والأمان." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Readex+Pro:wght@300;400;500;600;700;800&family=Amiri:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+    <script>
+      // Apply stored theme (dark or light) immediately to prevent FOUC
+      (function() {
+        try {
+          var savedTheme = localStorage.getItem('arm_theme_mode');
+          var isLight = savedTheme === 'light';
+          if (isLight) {
+            document.documentElement.classList.remove('dark');
+            document.documentElement.style.colorScheme = 'light';
+          } else {
+            document.documentElement.classList.add('dark');
+            document.documentElement.style.colorScheme = 'dark';
+          }
+        } catch (e) {}
+      })();
+      // Suppress dev-server WebSocket HMR notices in cloud iframe sandbox
+      window.addEventListener('error', function(e) {
+        if (e.message && (e.message.indexOf('WebSocket') !== -1 || e.message.indexOf('vite') !== -1)) {
+          e.stopImmediatePropagation();
+        }
+      });
+      window.addEventListener('unhandledrejection', function(e) {
+        var reason = e.reason && (e.reason.message || String(e.reason));
+        if (reason && (reason.indexOf('WebSocket') !== -1 || reason.indexOf('vite') !== -1)) {
+          e.stopImmediatePropagation();
+        }
+      });
+    </script>
+  </head>
+  <body class="bg-slate-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100 antialiased selection:bg-amber-500/30 selection:text-amber-900 dark:selection:text-amber-200 transition-colors duration-200">
+>>>>>>> c05b6562d60cedf0c03364b88d720a6aad8e7821
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
+<<<<<<< HEAD
+=======
+
+>>>>>>> c05b6562d60cedf0c03364b88d720a6aad8e7821

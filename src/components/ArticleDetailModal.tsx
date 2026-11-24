@@ -1,0 +1,225 @@
+import React, { useState, useEffect } from 'react';
+import { Article, User } from '../types';
+import { 
+  X, 
+  Bookmark, 
+  Eye, 
+  User as UserIcon, 
+  ThumbsUp, 
+  Clock 
+} from 'lucide-react';
+import { RatingStars } from './RatingStars';
+import { CommentsSection } from './CommentsSection';
+import { ReviewsSection } from './ReviewsSection';
+import { ShareMenuButton } from './ShareMenuButton';
+import { getItemRatingStats } from '../utils/reviewsStore';
+
+interface ArticleDetailModalProps {
+  article: Article | null;
+  onClose: () => void;
+  onToggleFavorite: (id: string, type: 'article', title: string, path: string) => void;
+  isBookmarked: boolean;
+  user: User | null;
+  onOpenAuth: () => void;
+  onRate?: (stars: number) => void;
+}
+
+export const ArticleDetailModal: React.FC<ArticleDetailModalProps> = ({
+  article,
+  onClose,
+  onToggleFavorite,
+  isBookmarked,
+  user,
+  onOpenAuth,
+  onRate,
+}) => {
+  const [viewCount, setViewCount] = useState<number>(0);
+  const [likes, setLikes] = useState(0);
+  const [hasLiked, setHasLiked] = useState(false);
+  const [ratingTick, setRatingTick] = useState(0);
+
+  useEffect(() => {
+    if (article?.id) {
+      setViewCount(article.views || 0);
+      fetch(`/api/items/article/${article.id}/view`, { method: 'POST' })
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+          if (data && typeof data.views === 'number') {
+            setViewCount(data.views);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [article?.id]);
+
+  useEffect(() => {
+    if (article?.id) {
+      setViewCount((prev) => Math.max(prev, article.views || 0));
+    }
+  }, [article?.id, article?.views]);
+
+  useEffect(() => {
+    const onRev = () => setRatingTick((t) => t + 1);
+    window.addEventListener('arm_reviews_updated', onRev);
+    return () => window.removeEventListener('arm_reviews_updated', onRev);
+  }, []);
+
+  if (!article) return null;
+
+  void ratingTick;
+  const reviewStats = getItemRatingStats(article.id, 'article');
+  const serverCount = article.ratingCount || 0;
+  const serverRating = article.rating || 0;
+  const effectiveRatingCount = Math.max(reviewStats.totalReviews, serverCount);
+  const effectiveAverageRating =
+    reviewStats.totalReviews > 0 && serverCount > reviewStats.totalReviews
+      ? Math.round((((reviewStats.averageRating * reviewStats.totalReviews) + (serverRating * (serverCount - reviewStats.totalReviews))) / serverCount) * 10) / 10
+      : serverCount > 0
+        ? serverRating
+        : reviewStats.averageRating;
+
+  const handleLike = () => {
+    if (!hasLiked) {
+      setLikes(likes + 1);
+      setHasLiked(true);
+    } else {
+      setLikes(likes - 1);
+      setHasLiked(false);
+    }
+  };
+
+  const handleBookmark = () => {
+    if (!user) {
+      onOpenAuth();
+      return;
+    }
+    onToggleFavorite(String(article.id), 'article', article.title, `/article/${article.id}`);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 dark:bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
+      <div 
+        className="relative w-full max-w-3xl bg-white dark:bg-zinc-900 border border-amber-500/30 rounded-3xl p-6 sm:p-8 shadow-2xl text-right max-h-[92vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Close Button */}
+        <button
+          onClick={onClose}
+          className="absolute top-5 left-5 p-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-200 dark:hover:bg-zinc-700 transition"
+        >
+          <X className="w-4 h-4" />
+        </button>
+
+        {/* Article Header */}
+        <div className="space-y-4 border-b border-zinc-200 dark:border-zinc-800 pb-6 mb-6">
+          <div className="flex flex-wrap items-center gap-3 text-xs text-zinc-600 dark:text-zinc-400">
+            <span className="px-2.5 py-0.5 rounded-lg bg-amber-500/15 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 font-bold border border-amber-500/30">
+              مقال إرشادي
+            </span>
+            <span className="flex items-center gap-1">
+              <UserIcon className="w-3.5 h-3.5 text-amber-500" />
+              الكاتب: <strong className="text-zinc-900 dark:text-zinc-200">{article.author}</strong>
+            </span>
+            <span className="flex items-center gap-1">
+              <Clock className="w-3.5 h-3.5 text-zinc-500" />
+              وقت القراءة: {article.readTime}
+            </span>
+            <span className="flex items-center gap-1 font-mono">
+              <Eye className="w-3.5 h-3.5 text-amber-500" />
+              {viewCount} مشاهدة
+            </span>
+          </div>
+
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-zinc-900 dark:text-amber-100 leading-snug">
+            {article.title}
+          </h1>
+
+          {article.imagepath && (
+            <div className="w-full h-64 sm:h-80 rounded-2xl overflow-hidden bg-zinc-100 dark:bg-black border border-zinc-200 dark:border-zinc-800 shadow-xl">
+              <img src={article.imagepath} alt={article.title} className="w-full h-full object-cover" />
+            </div>
+          )}
+        </div>
+
+        {/* Article Body */}
+        <div className="prose dark:prose-invert max-w-none text-zinc-700 dark:text-zinc-300 text-sm leading-relaxed space-y-4 whitespace-pre-line border-b border-zinc-200 dark:border-zinc-800 pb-8">
+          {article.content}
+        </div>
+
+        {/* Rating Bar */}
+        <div className="flex items-center justify-between p-3.5 bg-zinc-50 dark:bg-zinc-950/60 border border-zinc-200 dark:border-zinc-800 rounded-2xl my-4">
+          <div>
+            <span className="text-xs font-bold text-amber-700 dark:text-amber-300 block mb-1">
+              ⭐ تقييم المقال: {effectiveRatingCount > 0 ? `(${effectiveAverageRating} من 5)` : '(لم يُقيّم بعد)'}
+            </span>
+            <RatingStars
+              rating={effectiveAverageRating}
+              ratingCount={effectiveRatingCount}
+              size="md"
+              interactive={true}
+              onRate={onRate}
+            />
+          </div>
+          <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+            {effectiveRatingCount > 0 ? `${effectiveRatingCount} تقييم مسجل` : 'كن أول من يشارك تقييمه'}
+          </span>
+        </div>
+
+        {/* Reaction Bar */}
+        <div className="flex items-center justify-between py-4 border-b border-zinc-200 dark:border-zinc-800 my-4">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleLike}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold border transition ${
+                hasLiked 
+                  ? 'bg-amber-500 text-zinc-950 border-amber-400' 
+                  : 'bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 border-zinc-300 dark:border-zinc-700'
+              }`}
+            >
+              <ThumbsUp className="w-3.5 h-3.5" />
+              <span>إعجاب ({likes})</span>
+            </button>
+
+            <button
+              onClick={handleBookmark}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold border transition ${
+                isBookmarked 
+                  ? 'bg-amber-500 text-zinc-950 border-amber-400' 
+                  : 'bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 border-zinc-300 dark:border-zinc-700'
+              }`}
+            >
+              <Bookmark className="w-3.5 h-3.5" />
+              <span>{isBookmarked ? 'محفوظ في مفضلتك' : 'حفظ في المفضلة'}</span>
+            </button>
+          </div>
+
+          <ShareMenuButton
+            itemType="article"
+            itemId={article.id}
+            title={article.title}
+            subtitle={`مقال بقلم ${article.author} - المكتبة الرقمية الفاخرة`}
+          />
+        </div>
+
+        {/* Interactive Student Reviews and Text Ratings */}
+        <ReviewsSection
+          itemId={article.id}
+          itemType="article"
+          user={user}
+          onOpenAuth={onOpenAuth}
+          title={`مراجعات وتقييمات الطلاب للمقال: ${article.title}`}
+        />
+
+        {/* Unified Interactive Student & Teacher Comments System */}
+        <CommentsSection
+          itemId={article.id}
+          itemType="article"
+          user={user}
+          onOpenAuth={onOpenAuth}
+          title="نقاشات وملاحظات الطلاب حول المقال"
+        />
+
+      </div>
+    </div>
+  );
+};

@@ -1,0 +1,4343 @@
+import React, { useState, useEffect } from 'react';
+import { Book, Summary, Video, Article, User, AuditLog, AdminStats, Exam, ExamQuestion, SubscriptionPlan, SubscriptionPaymentRequest, UserSubscription } from '../types';
+import { 
+  getAllStudentExams, 
+  addCustomStudentExam, 
+  deleteStudentExam, 
+  fetchExamsFromServer, 
+  EXAMS_UPDATED_EVENT 
+} from '../data/studentExamsData';
+import { 
+  dispatchContentChanged,
+  syncDeletedStoreFromServer,
+  getRealDownloads,
+  getRealViews,
+  getTotalRealDownloads,
+  getTotalRealViews
+} from '../utils/contentStore';
+import { 
+  getAdminPlansConfig, 
+  saveAdminPlanStatus, 
+  getPaymentRequests, 
+  updatePaymentRequestStatus, 
+  getAllSavedSubscriptions, 
+  saveStudentSubscription, 
+  calculateStudentSubscription, 
+  fetchAdminSupportFromServer,
+  SUPPORT_UPDATED_EVENT,
+  PAYMENT_ACCOUNTS,
+  DEVELOPER_WHATSAPP
+} from '../utils/subscriptionStore';
+import { 
+  ShieldCheck, 
+  ShieldAlert, 
+  Lock, 
+  KeyRound, 
+  Users, 
+  Bell,
+  BookOpen, 
+  FileText, 
+  Image, 
+  Image as ImageIcon,
+  Video as VideoIcon, 
+  Plus, 
+  Trash2, 
+  Edit3, 
+  Eye, 
+  Download, 
+  BarChart3, 
+  Database, 
+  RefreshCw, 
+  CheckCircle, 
+  AlertTriangle, 
+  LogOut, 
+  X,
+  ExternalLink,
+  Save,
+  Sparkles,
+  Search,
+  UserCheck,
+  UserX,
+  ArrowRight,
+  GraduationCap,
+  Upload,
+  FileUp,
+  HelpCircle,
+  Check,
+  Zap,
+  CreditCard,
+  CheckCircle2,
+  Calendar,
+  Clock,
+  Crown,
+  Phone,
+  MessageCircle,
+  Star,
+  Heart
+} from 'lucide-react';
+import { 
+  getAllReviews, 
+  toggleReviewApproval, 
+  deleteReview, 
+  syncReviewsFromServer,
+  REVIEWS_UPDATED_EVENT 
+} from '../utils/reviewsStore';
+import { syncCommentsFromServer } from '../utils/commentsStore';
+import { REALTIME_SYNC_EVENT, syncBootstrapFromServer, invalidateBootstrapCache } from '../utils/realtimeSync';
+import { ItemReview } from '../types';
+import { resolveBookPdfUrl } from '../utils/pdfStorage';
+import { getStoredTheme, toggleThemeMode, THEME_CHANGED_EVENT, ThemeMode } from '../utils/themeStore';
+import { Sun, Moon } from 'lucide-react';
+
+interface AdminPortalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onDataChanged: () => void;
+}
+
+export const AdminPortal: React.FC<AdminPortalProps> = ({ isOpen, onClose, onDataChanged }) => {
+  // Authentication State
+  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(false);
+  const [adminToken, setAdminToken] = useState<string>('');
+  const [adminUser, setAdminUser] = useState('ARM');
+  const [adminPassInput, setAdminPassInput] = useState('');
+  const [adminUsernameInput, setAdminUsernameInput] = useState('');
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [authLoading, setAuthLoading] = useState(false);
+
+  // Active Admin View Tab
+  const [activeAdminTab, setActiveAdminTab] = useState<'dashboard' | 'subscriptions' | 'books' | 'summaries' | 'videos' | 'articles' | 'exams' | 'users' | 'reviews' | 'security'>('dashboard');
+
+  // Subscriptions & Payment Requests States
+  const [adminPlans, setAdminPlans] = useState<SubscriptionPlan[]>(getAdminPlansConfig);
+  const [paymentRequests, setPaymentRequests] = useState<SubscriptionPaymentRequest[]>(getPaymentRequests);
+  const [studentSubscriptionsMap, setStudentSubscriptionsMap] = useState<Record<string, UserSubscription>>(getAllSavedSubscriptions);
+  const [selectedReceiptPreview, setSelectedReceiptPreview] = useState<string | null>(null);
+
+  // Reviews Moderation State
+  const [allReviews, setAllReviews] = useState<ItemReview[]>(getAllReviews);
+
+  // Data States
+  const [stats, setStats] = useState<AdminStats | null>(null);
+  const [books, setBooks] = useState<Book[]>([]);
+  const [summaries, setSummaries] = useState<Summary[]>([]);
+  const [videos, setVideos] = useState<Video[]>([]);
+  const [articles, setArticles] = useState<Article[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [studentExams, setStudentExams] = useState<Exam[]>(getAllStudentExams);
+  const [loadingData, setLoadingData] = useState(false);
+
+  // Theme state for AdminPortal
+  const [theme, setTheme] = useState<ThemeMode>(getStoredTheme);
+  useEffect(() => {
+    const syncTheme = () => setTheme(getStoredTheme());
+    window.addEventListener(THEME_CHANGED_EVENT, syncTheme);
+    return () => window.removeEventListener(THEME_CHANGED_EVENT, syncTheme);
+  }, []);
+
+  // Form States - Book (with real PDF upload progress, IndexedDB fallback & Cover compression)
+  const [showBookModal, setShowBookModal] = useState(false);
+  const [editingBookId, setEditingBookId] = useState<number | null>(null);
+  const [bookTitle, setBookTitle] = useState('');
+  const [bookCategory, setBookCategory] = useState('كتب الطلاب');
+  const [bookFilePath, setBookFilePath] = useState('');
+  const [selectedPdfFile, setSelectedPdfFile] = useState<File | null>(null);
+  const [bookPdfFileName, setBookPdfFileName] = useState('');
+  const [bookPdfSize, setBookPdfSize] = useState('');
+  const [bookCoverPath, setBookCoverPath] = useState('');
+  const [bookCoverPreview, setBookCoverPreview] = useState('');
+  const [bookIsStudent, setBookIsStudent] = useState(1);
+  const [bookGrade, setBookGrade] = useState('الثانوية العامة');
+  const [bookDescription, setBookDescription] = useState('');
+  const [isPublishingBook, setIsPublishingBook] = useState(false);
+  const [bookPublishProgress, setBookPublishProgress] = useState(0);
+  const [bookPublishStage, setBookPublishStage] = useState('');
+  const [bookPublishError, setBookPublishError] = useState<string | null>(null);
+  const [adminToastMessage, setAdminToastMessage] = useState<{ title: string; subtitle?: string; isError?: boolean } | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{ title: string; message: string; onConfirm: () => Promise<void> | void } | null>(null);
+  const [previewPdfBook, setPreviewPdfBook] = useState<{ title: string; url: string; isObjectUrl: boolean } | null>(null);
+  const [examFormError, setExamFormError] = useState<string | null>(null);
+
+  // Security & Idempotency helpers
+  const makeClientRequestId = () => `req_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  const [pendingBookRequestId, setPendingBookRequestId] = useState<string>('');
+  const [pendingSummaryRequestId, setPendingSummaryRequestId] = useState<string>('');
+  const [pendingVideoRequestId, setPendingVideoRequestId] = useState<string>('');
+  const [pendingArticleRequestId, setPendingArticleRequestId] = useState<string>('');
+  const [pendingExamId, setPendingExamId] = useState<string>('');
+  const [summaryFormError, setSummaryFormError] = useState<string | null>(null);
+  const [videoFormError, setVideoFormError] = useState<string | null>(null);
+  const [articleFormError, setArticleFormError] = useState<string | null>(null);
+
+  // Form States - Student Exam (Target audience controls per package or per student)
+  const [showExamModal, setShowExamModal] = useState(false);
+  const [examTitle, setExamTitle] = useState('');
+  const [examSubject, setExamSubject] = useState('كيمياء');
+  const [examGrade, setExamGrade] = useState('الصف الثالث الثانوي');
+  const [examDuration, setExamDuration] = useState(25);
+  const [examTotalMarks, setExamTotalMarks] = useState(30);
+  const [examPassMarks, setExamPassMarks] = useState(18);
+  const [examDifficulty, setExamDifficulty] = useState<'متوسط' | 'متقدم' | 'نموذج وزاري'>('نموذج وزاري');
+  const [examBadge, setExamBadge] = useState('بنك أسئلة الوزارة');
+  const [examDescription, setExamDescription] = useState('');
+  const [examTargetScope, setExamTargetScope] = useState<'all' | 'specific_students'>('all');
+  const [examTargetStudentEmails, setExamTargetStudentEmails] = useState<string>('');
+  const [examQuestions, setExamQuestions] = useState<ExamQuestion[]>([
+    {
+      id: 1,
+      question: '',
+      options: ['', '', '', ''],
+      correctIndex: 0,
+      explanation: '',
+      topic: 'الوحدة الأولى'
+    }
+  ]);
+
+  // Form States - Summary
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
+  const [editingSummaryId, setEditingSummaryId] = useState<number | null>(null);
+  const [summaryTitle, setSummaryTitle] = useState('');
+  const [summaryImagePath, setSummaryImagePath] = useState('');
+  const [summaryCategory, setSummaryCategory] = useState('عام');
+  const [summaryImageFilePreview, setSummaryImageFilePreview] = useState('');
+
+  // Form States - Video
+  const [showVideoModal, setShowVideoModal] = useState(false);
+  const [editingVideoId, setEditingVideoId] = useState<number | null>(null);
+  const [videoTitle, setVideoTitle] = useState('');
+  const [videoUrl, setVideoUrl] = useState('');
+  const [videoCategory, setVideoCategory] = useState('شروحات');
+  const [videoChannel, setVideoChannel] = useState('المكتبة الرقمية');
+  const [videoDuration, setVideoDuration] = useState('20:00');
+
+  // Form States - Article
+  const [showArticleModal, setShowArticleModal] = useState(false);
+  const [editingArticleId, setEditingArticleId] = useState<number | null>(null);
+  const [articleTitle, setArticleTitle] = useState('');
+  const [articleContent, setArticleContent] = useState('');
+  const [articleImagePath, setArticleImagePath] = useState('');
+  const [articleImageFilePreview, setArticleImageFilePreview] = useState('');
+  const [articleAuthor, setArticleAuthor] = useState('ARM');
+  const [articleReadTime, setArticleReadTime] = useState('5 دقائق');
+  const [isSavingContent, setIsSavingContent] = useState(false);
+
+  // Security - Password Change State
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [pwdMsg, setPwdMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  const [changingPwd, setChangingPwd] = useState(false);
+
+  // Search in tables
+  const [tableSearch, setTableSearch] = useState('');
+
+  const adminSessionRef = React.useRef({ loggedIn: isAdminLoggedIn, token: adminToken, open: isOpen });
+  useEffect(() => {
+    adminSessionRef.current = { loggedIn: isAdminLoggedIn, token: adminToken, open: isOpen };
+  }, [isAdminLoggedIn, adminToken, isOpen]);
+
+  // Check stored admin session on mount & listen to live student, exam, support, review, and WebSocket updates
+  useEffect(() => {
+    const savedToken = localStorage.getItem('arm_admin_token');
+    if (savedToken) {
+      verifyAdminToken(savedToken);
+    }
+
+    const handleReviewsSync = () => {
+      setAllReviews(getAllReviews());
+    };
+    const handleExamsSync = () => {
+      setStudentExams(getAllStudentExams());
+    };
+    const handleSupportSync = () => {
+      setPaymentRequests(getPaymentRequests());
+      setStudentSubscriptionsMap(getAllSavedSubscriptions());
+      setAdminPlans(getAdminPlansConfig());
+    };
+    const handleRealtimeSync = () => {
+      if (adminSessionRef.current.open && adminSessionRef.current.loggedIn && adminSessionRef.current.token) {
+        void fetchAdminData(adminSessionRef.current.token);
+      }
+    };
+
+    window.addEventListener(REVIEWS_UPDATED_EVENT, handleReviewsSync);
+    window.addEventListener(EXAMS_UPDATED_EVENT, handleExamsSync);
+    window.addEventListener(SUPPORT_UPDATED_EVENT, handleSupportSync);
+    window.addEventListener(REALTIME_SYNC_EVENT, handleRealtimeSync);
+
+    return () => {
+      window.removeEventListener(REVIEWS_UPDATED_EVENT, handleReviewsSync);
+      window.removeEventListener(EXAMS_UPDATED_EVENT, handleExamsSync);
+      window.removeEventListener(SUPPORT_UPDATED_EVENT, handleSupportSync);
+      window.removeEventListener(REALTIME_SYNC_EVENT, handleRealtimeSync);
+    };
+  }, []);
+
+  const handleAdminAuthExpired = () => {
+    localStorage.removeItem('arm_admin_token');
+    setIsAdminLoggedIn(false);
+    setAdminToken('');
+    setShowBookModal(false);
+    setShowSummaryModal(false);
+    setShowVideoModal(false);
+    setShowArticleModal(false);
+    setShowExamModal(false);
+    setLoginError('انتهت صلاحية جلسة الأدمن، يرجى إعادة تسجيل الدخول لتنفيذ التعديلات.');
+  };
+
+  const verifyAdminToken = async (token: string) => {
+    try {
+      const res = await fetch('/api/admin/verify', {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (res.ok) {
+        setIsAdminLoggedIn(true);
+        setAdminToken(token);
+        void fetchAdminData(token, true);
+      } else if (res.status === 401 || res.status === 403) {
+        localStorage.removeItem('arm_admin_token');
+      }
+    } catch {
+      // keep token on transient network error
+    }
+  };
+
+  const handleAdminLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError(null);
+    setAuthLoading(true);
+
+    try {
+      const res = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: adminUsernameInput,
+          password: adminPassInput,
+        }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || 'فشل التحقق من هوية الأدمن');
+      }
+
+      setIsAdminLoggedIn(true);
+      setAdminToken(data.token);
+      setAdminUser(data.username);
+      setAdminPassInput('');
+      localStorage.setItem('arm_admin_token', data.token);
+      void fetchAdminData(data.token, true);
+    } catch (err: any) {
+      setLoginError(err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleAdminLogout = () => {
+    localStorage.removeItem('arm_admin_token');
+    setIsAdminLoggedIn(false);
+    setAdminToken('');
+  };
+
+  const handleDownloadBackup = async () => {
+    if (!adminToken) {
+      handleAdminAuthExpired();
+      return;
+    }
+    try {
+      const res = await fetch('/api/admin/backup', {
+        headers: { 'Authorization': `Bearer ${adminToken}` },
+      });
+      if (res.status === 401) {
+        handleAdminAuthExpired();
+        return;
+      }
+      if (!res.ok) {
+        throw new Error('تعذر تحميل النسخة الاحتياطية');
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `luxury_library_backup_${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setAdminToastMessage({ title: 'تم تنزيل النسخة الاحتياطية بنجاح' });
+    } catch (err: any) {
+      setAdminToastMessage({ title: err?.message || 'فشل تحميل النسخة الاحتياطية', isError: true });
+    }
+  };
+
+  const fetchAdminData = async (token = adminToken, forceBootstrap = false) => {
+    if (!token) return;
+    setLoadingData(true);
+    try {
+      const headers = { 'Authorization': `Bearer ${token}` };
+
+      const [statsRes, usersRes, logsRes, bootstrap] = await Promise.all([
+        fetch('/api/admin/stats', { headers, cache: 'no-store' }).catch(() => null),
+        fetch('/api/admin/users', { headers, cache: 'no-store' }).catch(() => null),
+        fetch('/api/admin/security/logs', { headers, cache: 'no-store' }).catch(() => null),
+        syncBootstrapFromServer(forceBootstrap),
+        fetchAdminSupportFromServer(token),
+        syncCommentsFromServer(),
+      ]);
+
+      if (
+        statsRes?.status === 401 || statsRes?.status === 403 ||
+        usersRes?.status === 401 || usersRes?.status === 403 ||
+        logsRes?.status === 401 || logsRes?.status === 403
+      ) {
+        handleAdminAuthExpired();
+        return;
+      }
+
+      if (statsRes && statsRes.ok) setStats(await statsRes.json());
+
+      if (bootstrap) {
+        syncDeletedStoreFromServer(bootstrap.deletedIds);
+        setBooks(bootstrap.books || []);
+        setSummaries(bootstrap.summaries || []);
+        setVideos(bootstrap.videos || []);
+        setArticles(bootstrap.articles || []);
+      } else {
+        const [booksRes, sumRes, vidRes, artRes] = await Promise.all([
+          fetch('/api/books', { cache: 'no-store' }).catch(() => null),
+          fetch('/api/summaries', { cache: 'no-store' }).catch(() => null),
+          fetch('/api/videos', { cache: 'no-store' }).catch(() => null),
+          fetch('/api/articles', { cache: 'no-store' }).catch(() => null),
+        ]);
+        await Promise.all([fetchExamsFromServer(), syncReviewsFromServer()]);
+
+        if (booksRes && booksRes.ok) {
+          const b = await booksRes.json();
+          setBooks(b.books || []);
+        }
+        if (sumRes && sumRes.ok) {
+          const s = await sumRes.json();
+          setSummaries(s.summaries || []);
+        }
+        if (vidRes && vidRes.ok) {
+          const v = await vidRes.json();
+          setVideos(v.videos || []);
+        }
+        if (artRes && artRes.ok) {
+          const a = await artRes.json();
+          setArticles(a.articles || []);
+        }
+      }
+
+      if (usersRes && usersRes.ok) {
+        const u = await usersRes.json();
+        setUsers(u.users || []);
+      }
+
+      if (logsRes && logsRes.ok) {
+        const l = await logsRes.json();
+        setLogs(l.logs || []);
+      }
+
+      setPaymentRequests(getPaymentRequests());
+      setStudentSubscriptionsMap(getAllSavedSubscriptions());
+      setAdminPlans(getAdminPlansConfig());
+      setAllReviews(getAllReviews());
+      setStudentExams(getAllStudentExams());
+    } catch (err) {
+      console.error('Error fetching admin data:', err);
+    } finally {
+      setLoadingData(false);
+    }
+  };
+
+  // Upload PDF via XMLHttpRequest directly to the central server (strictly DB/server backed)
+  const uploadPdfWithProgress = async (
+    file: File,
+    token: string,
+    onProgress: (pct: number) => void
+  ): Promise<string> => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      throw new Error('لا يوجد اتصال بالإنترنت، تعذر رفع ملف PDF إلى الخادم.');
+    }
+
+    return new Promise<string>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      const formData = new FormData();
+      formData.append('file', file);
+      xhr.timeout = 60000;
+
+      xhr.upload.onprogress = (ev) => {
+        if (ev.lengthComputable && ev.total > 0) {
+          const pct = Math.min(78, Math.max(15, Math.round((ev.loaded / ev.total) * 63) + 15));
+          onProgress(pct);
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status === 401 || xhr.status === 403) {
+          reject(new Error('UNAUTHORIZED_ADMIN'));
+          return;
+        }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            if (data.url) {
+              onProgress(82);
+              resolve(data.url);
+              return;
+            }
+          } catch {
+            // fall through to error
+          }
+        }
+        reject(new Error(`فشل رفع ملف PDF إلى الخادم (${xhr.status})`));
+      };
+
+      xhr.ontimeout = () => reject(new Error('انتهت مهلة رفع ملف PDF، يرجى المحاولة مرة أخرى.'));
+      xhr.onerror = () => reject(new Error('تعذر الاتصال بالخادم أثناء رفع ملف PDF.'));
+      xhr.open('POST', '/api/admin/upload-pdf');
+      if (token) {
+        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      }
+      xhr.send(formData);
+    });
+  };
+
+  // BOOK ACTIONS
+  const handleSaveBook = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isPublishingBook) return;
+    setBookPublishError(null);
+
+    if (!bookTitle.trim()) {
+      setBookPublishError('يرجى كتابة عنوان الكتاب أولاً.');
+      return;
+    }
+
+    if (!selectedPdfFile && !bookFilePath.trim()) {
+      setBookPublishError('يرجى اختيار ملف PDF من جهازك أو إدخال رابط مباشر للكتاب.');
+      return;
+    }
+
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setBookPublishError('لا يوجد اتصال بالإنترنت حالياً. لا يمكن حفظ أو نشر الكتاب قبل الاتصال بالخادم.');
+      return;
+    }
+
+    const requestId = editingBookId ? '' : (pendingBookRequestId || makeClientRequestId());
+    if (!editingBookId && !pendingBookRequestId) {
+      setPendingBookRequestId(requestId);
+    }
+
+    setIsPublishingBook(true);
+    setBookPublishProgress(15);
+    setBookPublishStage('جاري تجهيز الكتاب للنشر الفوري...');
+
+    try {
+      let finalFilePath = bookFilePath.trim();
+
+      if (selectedPdfFile) {
+        setBookPublishStage(`جاري معالجة ورفع "${selectedPdfFile.name}" (${bookPdfSize})...`);
+        setBookPublishProgress(22);
+        finalFilePath = await uploadPdfWithProgress(selectedPdfFile, adminToken, (pct) => {
+          setBookPublishProgress(pct);
+        });
+      } else {
+        setBookPublishProgress(72);
+      }
+
+      setBookPublishStage('جاري حفظ الكتاب في قاعدة البيانات المركزية...');
+      setBookPublishProgress(88);
+
+      const url = editingBookId ? `/api/books/${editingBookId}` : '/api/books';
+      const method = editingBookId ? 'PUT' : 'POST';
+
+      const payload: Record<string, any> = {
+        title: bookTitle.trim(),
+        category: bookCategory,
+        filepath: finalFilePath,
+        coverpath: bookCoverPath || 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=600&auto=format&fit=crop&q=80',
+        is_student: bookIsStudent,
+        grade: bookGrade,
+        description: bookDescription,
+      };
+      if (requestId) payload.clientRequestId = requestId;
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      let res: Response;
+      try {
+        res = await fetch(url, {
+          method,
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${adminToken}`,
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      if (res.status === 401 || res.status === 403) {
+        handleAdminAuthExpired();
+        return;
+      }
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.book) {
+        throw new Error(data.error || 'تعذر حفظ الكتاب في قاعدة البيانات المركزية.');
+      }
+
+      const savedBookFromServer: Book = data.book;
+      const publishedTitle = savedBookFromServer.title || bookTitle.trim();
+      const isEditMode = Boolean(editingBookId);
+
+      if (editingBookId) {
+        setBooks(prev => prev.map(b => (Number(b.id) === Number(editingBookId) ? savedBookFromServer : b)));
+      } else {
+        setBooks(prev => [savedBookFromServer, ...prev.filter(b => Number(b.id) !== Number(savedBookFromServer.id))]);
+      }
+
+      invalidateBootstrapCache();
+      setBookPublishProgress(100);
+      setBookPublishStage('تم حفظ الكتاب ونشره لجميع الطلاب بنجاح!');
+
+      setPendingBookRequestId('');
+      setShowBookModal(false);
+      resetBookForm();
+      setIsPublishingBook(false);
+      setBookPublishProgress(0);
+      setBookPublishStage('');
+      setAdminToastMessage({
+        title: isEditMode
+          ? `تم تحديث ونشر الكتاب "${publishedTitle}" بنجاح`
+          : `تم نشر الكتاب "${publishedTitle}" وإتاحته لجميع الطلاب بنجاح`,
+        subtitle: 'تم الحفظ في قاعدة البيانات المركزية ومزامنته مع جميع المستخدمين.'
+      });
+      await fetchAdminData(adminToken, true);
+      dispatchContentChanged();
+      onDataChanged();
+    } catch (err: any) {
+      if (err?.message === 'UNAUTHORIZED_ADMIN') {
+        handleAdminAuthExpired();
+        return;
+      }
+      setIsPublishingBook(false);
+      setBookPublishProgress(0);
+      setBookPublishStage('');
+      setBookPublishError(
+        err?.name === 'AbortError'
+          ? 'انتهت مهلة الاتصال بالخادم. يرجى المحاولة مرة أخرى.'
+          : (err?.message || 'حدث خطأ أثناء رفع ونشر الكتاب، لم يتم الحفظ.')
+      );
+    }
+  };
+
+  const handlePdfFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBookPublishError(null);
+    setSelectedPdfFile(file);
+    setBookPdfFileName(file.name);
+    const sizeMb = file.size < 1024 * 1024
+      ? `${Math.max(1, Math.round(file.size / 1024))} كيلوبايت`
+      : `${(file.size / (1024 * 1024)).toFixed(1)} ميجابايت`;
+    setBookPdfSize(sizeMb);
+    if (!bookTitle.trim()) {
+      setBookTitle(file.name.replace(/\.[^/.]+$/, ''));
+    }
+    if (!bookFilePath.trim()) {
+      setBookFilePath(`ملف محلي جاهز للرفع: ${file.name}`);
+    }
+  };
+
+  const handleCoverFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const compressed = await compressLocalImage(file, 600);
+      setBookCoverPath(compressed);
+      setBookCoverPreview(compressed);
+    } catch {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result) {
+          const url = event.target.result as string;
+          setBookCoverPath(url);
+          setBookCoverPreview(url);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleDeleteBook = (id: number) => {
+    setConfirmDialog({
+      title: 'حذف الكتاب نهائياً',
+      message: 'هل أنت متأكد من حذف هذا الكتاب نهائياً من قاعدة البيانات للجميع؟',
+      onConfirm: async () => {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          setAdminToastMessage({ title: 'لا يوجد اتصال بالإنترنت، تعذر حذف الكتاب', isError: true });
+          return;
+        }
+        try {
+          const res = await fetch(`/api/books/${id}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${adminToken}` },
+          });
+
+          if (res.status === 401 || res.status === 403) {
+            handleAdminAuthExpired();
+            return;
+          }
+
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            setAdminToastMessage({ title: data.error || 'تعذر حذف الكتاب من قاعدة البيانات', isError: true });
+            return;
+          }
+
+          setBooks(prev => prev.filter(b => Number(b.id) !== Number(id)));
+          invalidateBootstrapCache();
+          await fetchAdminData(adminToken, true);
+          dispatchContentChanged();
+          onDataChanged();
+          setAdminToastMessage({ title: 'تم حذف الكتاب نهائياً من قاعدة البيانات لجميع المستخدمين بنجاح' });
+        } catch {
+          setAdminToastMessage({ title: 'تعذر الاتصال بالخادم لحذف الكتاب، يرجى المحاولة مرة أخرى', isError: true });
+        }
+      },
+    });
+  };
+
+  const handlePreviewBookFile = async (filepath: string, title = 'معاينة ملف الكتاب') => {
+    const { url, isObjectUrl } = await resolveBookPdfUrl(filepath);
+    if (url) {
+      setPreviewPdfBook({ title, url, isObjectUrl });
+    } else {
+      setAdminToastMessage({ title: 'ملف PDF غير متاح للمعاينة حالياً', isError: true });
+    }
+  };
+
+  const openEditBook = (b: Book) => {
+    setEditingBookId(b.id);
+    setBookTitle(b.title);
+    setBookCategory(b.category);
+    setBookFilePath(b.filepath);
+    setSelectedPdfFile(null);
+    setBookPdfFileName('');
+    setBookPdfSize('');
+    setBookCoverPath(b.coverpath);
+    setBookCoverPreview(b.coverpath);
+    setBookIsStudent(b.is_student);
+    setBookGrade(b.grade || '');
+    setBookDescription(b.description || '');
+    setBookPublishError(null);
+    setBookPublishProgress(0);
+    setBookPublishStage('');
+    setShowBookModal(true);
+  };
+
+  const resetBookForm = () => {
+    setEditingBookId(null);
+    setPendingBookRequestId('');
+    setBookTitle('');
+    setBookCategory('كتب الطلاب');
+    setBookFilePath('');
+    setSelectedPdfFile(null);
+    setBookPdfFileName('');
+    setBookPdfSize('');
+    setBookCoverPath('');
+    setBookCoverPreview('');
+    setBookIsStudent(1);
+    setBookGrade('الثانوية العامة');
+    setBookDescription('');
+    setBookPublishError(null);
+    setBookPublishProgress(0);
+    setBookPublishStage('');
+    setIsPublishingBook(false);
+  };
+
+  // STUDENT EXAMS ACTIONS
+  const handleDeleteExam = (id: string) => {
+    setConfirmDialog({
+      title: 'حذف الامتحان',
+      message: 'هل أنت متأكد من حذف هذا الامتحان بالكامل من المنصة للجميع؟',
+      onConfirm: async () => {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          setAdminToastMessage({ title: 'لا يوجد اتصال بالإنترنت، تعذر حذف الامتحان', isError: true });
+          return;
+        }
+        const res = await deleteStudentExam(id, adminToken);
+        if (res.unauthorized || res.forbidden) {
+          handleAdminAuthExpired();
+          return;
+        }
+        if (!res.ok) {
+          setAdminToastMessage({ title: res.error || 'تعذر حذف الامتحان من قاعدة البيانات', isError: true });
+          return;
+        }
+        setStudentExams(res.exams);
+        invalidateBootstrapCache();
+        await fetchAdminData(adminToken, true);
+        onDataChanged();
+        setAdminToastMessage({ title: 'تم حذف الامتحان من قاعدة البيانات للجميع بنجاح' });
+      },
+    });
+  };
+
+  const handleSaveExam = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setExamFormError(null);
+    if (!examTitle.trim()) {
+      setExamFormError('يرجى إدخال عنوان الامتحان.');
+      return;
+    }
+    const totalMarksNum = Number(examTotalMarks);
+    const passMarksNum = Number(examPassMarks);
+    if (!Number.isFinite(totalMarksNum) || totalMarksNum <= 0) {
+      setExamFormError('يجب أن تكون الدرجة الكلية أكبر من صفر.');
+      return;
+    }
+    if (!Number.isFinite(passMarksNum) || passMarksNum < 0 || passMarksNum > totalMarksNum) {
+      setExamFormError('يجب أن تكون درجة النجاح بين 0 والدرجة الكلية للامتحان.');
+      return;
+    }
+    if (examQuestions.length === 0) {
+      setExamFormError('يرجى إضافة سؤال واحد على الأقل للامتحان.');
+      return;
+    }
+    for (let i = 0; i < examQuestions.length; i++) {
+      const q = examQuestions[i];
+      if (!q.question.trim()) {
+        setExamFormError(`يرجى كتابة نص السؤال رقم ${i + 1}.`);
+        return;
+      }
+      if (q.options.some(opt => !opt.trim())) {
+        setExamFormError(`يرجى ملء جميع الخيارات الأربعة للسؤال رقم ${i + 1}.`);
+        return;
+      }
+    }
+
+    const studentEmailsList = examTargetStudentEmails
+      .split(/[\n,]+/)
+      .map(s => s.trim().toLowerCase())
+      .filter(Boolean);
+
+    if (examTargetScope === 'specific_students' && studentEmailsList.length === 0) {
+      setExamFormError('يرجى إدخال بريد إلكتروني واحد على الأقل للطلاب المحددين.');
+      return;
+    }
+
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setExamFormError('لا يوجد اتصال بالإنترنت، تعذر حفظ الامتحان في الخادم.');
+      return;
+    }
+
+    const examIdToSave = pendingExamId || ('exam_' + Date.now());
+    if (!pendingExamId) {
+      setPendingExamId(examIdToSave);
+    }
+
+    const newExam: Exam = {
+      id: examIdToSave,
+      title: examTitle.trim(),
+      subject: examSubject,
+      grade: examGrade,
+      durationMinutes: Number(examDuration) || 25,
+      difficulty: examDifficulty,
+      totalMarks: totalMarksNum,
+      passMarks: passMarksNum,
+      questionsCount: examQuestions.length,
+      badge: examBadge || 'امتحان مدرسي',
+      description: examDescription || `امتحان تدريبي في مادة ${examSubject} لطلاب ${examGrade}`,
+      allowedPlans: ['all'],
+      assignedStudentEmails: examTargetScope === 'specific_students' ? studentEmailsList : [],
+      createdByAdmin: true,
+      questions: examQuestions.map((q, idx) => ({ ...q, id: idx + 1 }))
+    };
+
+    if (isSavingContent) return;
+    setIsSavingContent(true);
+    try {
+      const res = await addCustomStudentExam(newExam, adminToken);
+      if (res.unauthorized || res.forbidden) {
+        handleAdminAuthExpired();
+        return;
+      }
+      if (!res.ok) {
+        setExamFormError(res.error || 'تعذر حفظ الامتحان في قاعدة البيانات المركزية.');
+        return;
+      }
+      setStudentExams(res.exams);
+      setPendingExamId('');
+      setShowExamModal(false);
+      resetExamForm();
+      invalidateBootstrapCache();
+      await fetchAdminData(adminToken, true);
+      onDataChanged();
+      setAdminToastMessage({
+        title: `تمت إضافة ونشر الامتحان "${newExam.title}" بنجاح! 🎉`,
+        subtitle: 'تم الحفظ في قاعدة البيانات المركزية وأصبح متاحاً للجميع فوراً.'
+      });
+    } finally {
+      setIsSavingContent(false);
+    }
+  };
+
+  const resetExamForm = () => {
+    setExamFormError(null);
+    setPendingExamId('');
+    setExamTitle('');
+    setExamSubject('كيمياء');
+    setExamGrade('الصف الثالث الثانوي');
+    setExamDuration(25);
+    setExamTotalMarks(30);
+    setExamPassMarks(18);
+    setExamDifficulty('نموذج وزاري');
+    setExamBadge('بنك أسئلة الوزارة');
+    setExamDescription('');
+    setExamTargetScope('all');
+    setExamTargetStudentEmails('');
+    setExamQuestions([
+      {
+        id: 1,
+        question: '',
+        options: ['', '', '', ''],
+        correctIndex: 0,
+        explanation: '',
+        topic: 'الوحدة الأولى'
+      }
+    ]);
+  };
+
+  const handleAddQuestionToExam = () => {
+    setExamFormError(null);
+    setExamQuestions(prev => [
+      ...prev,
+      {
+        id: prev.length + 1,
+        question: '',
+        options: ['', '', '', ''],
+        correctIndex: 0,
+        explanation: '',
+        topic: `سؤال ${prev.length + 1}`
+      }
+    ]);
+  };
+
+  const handleRemoveQuestionFromExam = (index: number) => {
+    if (examQuestions.length <= 1) {
+      setExamFormError('يجب أن يحتوي الامتحان على سؤال واحد على الأقل.');
+      return;
+    }
+    setExamFormError(null);
+    setExamQuestions(prev => prev.filter((_, idx) => idx !== index));
+  };
+
+  const handleUpdateQuestionField = (index: number, field: keyof ExamQuestion, value: any) => {
+    setExamQuestions(prev => {
+      const updated = [...prev];
+      updated[index] = { ...updated[index], [field]: value };
+      return updated;
+    });
+  };
+
+  const handleUpdateQuestionOption = (qIndex: number, optIndex: number, value: string) => {
+    setExamQuestions(prev => {
+      const updated = [...prev];
+      const newOptions = [...updated[qIndex].options];
+      newOptions[optIndex] = value;
+      updated[qIndex] = { ...updated[qIndex], options: newOptions };
+      return updated;
+    });
+  };
+
+  // Helper for Summary and Article local image upload with canvas compression
+  const compressLocalImage = (file: File, maxDim = 800): Promise<string> => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new (window as any).Image();
+        img.onload = () => {
+          let width = img.width;
+          let height = img.height;
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            resolve(canvas.toDataURL('image/jpeg', 0.82));
+          } else {
+            resolve(e.target?.result as string);
+          }
+        };
+        img.onerror = () => resolve(e.target?.result as string);
+        img.src = e.target?.result as string;
+      };
+      reader.onerror = () => resolve('');
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleSummaryFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const compressed = await compressLocalImage(file);
+      setSummaryImagePath(compressed);
+      setSummaryImageFilePreview(compressed);
+    } catch (err) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (reader.result) {
+          setSummaryImagePath(reader.result as string);
+          setSummaryImageFilePreview(reader.result as string);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleArticleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const compressed = await compressLocalImage(file);
+      setArticleImagePath(compressed);
+      setArticleImageFilePreview(compressed);
+    } catch (err) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (reader.result) {
+          setArticleImagePath(reader.result as string);
+          setArticleImageFilePreview(reader.result as string);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const resetSummaryForm = () => {
+    setEditingSummaryId(null);
+    setPendingSummaryRequestId('');
+    setSummaryFormError(null);
+    setSummaryTitle('');
+    setSummaryImagePath('');
+    setSummaryImageFilePreview('');
+    setSummaryCategory('عام');
+  };
+
+  const resetVideoForm = () => {
+    setEditingVideoId(null);
+    setPendingVideoRequestId('');
+    setVideoFormError(null);
+    setVideoTitle('');
+    setVideoUrl('');
+    setVideoCategory('شروحات');
+    setVideoChannel('المكتبة الرقمية');
+    setVideoDuration('20:00');
+  };
+
+  const resetArticleForm = () => {
+    setEditingArticleId(null);
+    setPendingArticleRequestId('');
+    setArticleFormError(null);
+    setArticleTitle('');
+    setArticleContent('');
+    setArticleImagePath('');
+    setArticleImageFilePreview('');
+    setArticleAuthor('ARM');
+    setArticleReadTime('5 دقائق');
+  };
+
+  const openEditSummary = (s: Summary) => {
+    setEditingSummaryId(s.id);
+    setPendingSummaryRequestId('');
+    setSummaryFormError(null);
+    setSummaryTitle(s.title);
+    setSummaryImagePath(s.imagepath);
+    setSummaryImageFilePreview(s.imagepath);
+    setSummaryCategory(s.category);
+    setShowSummaryModal(true);
+  };
+
+  const handleSaveSummary = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSavingContent) return;
+    setSummaryFormError(null);
+
+    const cleanTitle = summaryTitle.trim();
+    const cleanImage = summaryImagePath.trim();
+    if (!cleanTitle || !cleanImage) {
+      setSummaryFormError('يرجى إدخال عنوان الملخص ورابط أو صورة الملخص.');
+      return;
+    }
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setSummaryFormError('لا يوجد اتصال بالإنترنت، تعذر حفظ الملخص في قاعدة البيانات.');
+      return;
+    }
+
+    const requestId = editingSummaryId ? '' : (pendingSummaryRequestId || makeClientRequestId());
+    if (!editingSummaryId && !pendingSummaryRequestId) {
+      setPendingSummaryRequestId(requestId);
+    }
+
+    setIsSavingContent(true);
+    try {
+      const payload: Record<string, any> = {
+        title: cleanTitle,
+        imagepath: cleanImage,
+        category: summaryCategory.trim() || 'عام',
+      };
+      if (requestId) payload.clientRequestId = requestId;
+
+      const url = editingSummaryId ? `/api/summaries/${editingSummaryId}` : '/api/summaries';
+      const method = editingSummaryId ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.status === 401 || res.status === 403) {
+        handleAdminAuthExpired();
+        return;
+      }
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.summary) {
+        throw new Error(data.error || 'تعذر حفظ الملخص في قاعدة البيانات المركزية.');
+      }
+
+      const savedSumFromServer: Summary = data.summary;
+      if (editingSummaryId) {
+        setSummaries(prev => prev.map(s => (Number(s.id) === Number(editingSummaryId) ? savedSumFromServer : s)));
+      } else {
+        setSummaries(prev => [savedSumFromServer, ...prev.filter(s => Number(s.id) !== Number(savedSumFromServer.id))]);
+      }
+
+      invalidateBootstrapCache();
+      setAdminToastMessage({
+        title: editingSummaryId ? `تم تحديث الملخص "${cleanTitle}" بنجاح` : `تم نشر الملخص "${cleanTitle}" وإتاحته للجميع فوراً`,
+        subtitle: 'تم الحفظ في قاعدة البيانات المركزية ومزامنته مع جميع المستخدمين.'
+      });
+      setPendingSummaryRequestId('');
+      setShowSummaryModal(false);
+      resetSummaryForm();
+      await fetchAdminData(adminToken, true);
+      dispatchContentChanged();
+      onDataChanged();
+    } catch (err: any) {
+      setSummaryFormError(err?.message || 'حدث خطأ أثناء حفظ الملخص في الخادم.');
+    } finally {
+      setIsSavingContent(false);
+    }
+  };
+
+  const handleDeleteSummary = (id: number) => {
+    setConfirmDialog({
+      title: 'حذف الملخص نهائياً',
+      message: 'هل أنت متأكد من حذف صورة الملخص نهائياً للجميع؟',
+      onConfirm: async () => {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          setAdminToastMessage({ title: 'لا يوجد اتصال بالإنترنت، تعذر حذف الملخص', isError: true });
+          return;
+        }
+        try {
+          const res = await fetch(`/api/summaries/${id}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${adminToken}` },
+          });
+
+          if (res.status === 401 || res.status === 403) {
+            handleAdminAuthExpired();
+            return;
+          }
+
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            setAdminToastMessage({ title: data.error || 'تعذر حذف الملخص من قاعدة البيانات', isError: true });
+            return;
+          }
+
+          setSummaries(prev => prev.filter(s => Number(s.id) !== Number(id)));
+          invalidateBootstrapCache();
+          await fetchAdminData(adminToken, true);
+          dispatchContentChanged();
+          onDataChanged();
+          setAdminToastMessage({ title: 'تم حذف الملخص نهائياً من قاعدة البيانات بنجاح' });
+        } catch {
+          setAdminToastMessage({ title: 'تعذر حذف الملخص، يرجى المحاولة مرة أخرى', isError: true });
+        }
+      },
+    });
+  };
+
+  const openEditVideo = (v: Video) => {
+    setEditingVideoId(v.id);
+    setPendingVideoRequestId('');
+    setVideoFormError(null);
+    setVideoTitle(v.title);
+    setVideoUrl(v.videourl);
+    setVideoCategory(v.category);
+    setVideoChannel(v.channel || 'المكتبة الرقمية');
+    setVideoDuration(v.duration || '20:00');
+    setShowVideoModal(true);
+  };
+
+  const handleSaveVideo = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSavingContent) return;
+    setVideoFormError(null);
+
+    const cleanTitle = videoTitle.trim();
+    const cleanUrl = videoUrl.trim();
+    if (!cleanTitle || !cleanUrl) {
+      setVideoFormError('يرجى إدخال عنوان الفيديو ورابطه.');
+      return;
+    }
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setVideoFormError('لا يوجد اتصال بالإنترنت، تعذر حفظ الفيديو في قاعدة البيانات.');
+      return;
+    }
+
+    const requestId = editingVideoId ? '' : (pendingVideoRequestId || makeClientRequestId());
+    if (!editingVideoId && !pendingVideoRequestId) {
+      setPendingVideoRequestId(requestId);
+    }
+
+    setIsSavingContent(true);
+    try {
+      const payload: Record<string, any> = {
+        title: cleanTitle,
+        videourl: cleanUrl,
+        category: videoCategory.trim() || 'شروحات',
+        channel: videoChannel.trim() || 'المكتبة الرقمية',
+        duration: videoDuration.trim() || '20:00',
+      };
+      if (requestId) payload.clientRequestId = requestId;
+
+      const url = editingVideoId ? `/api/videos/${editingVideoId}` : '/api/videos';
+      const method = editingVideoId ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.status === 401 || res.status === 403) {
+        handleAdminAuthExpired();
+        return;
+      }
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.video) {
+        throw new Error(data.error || 'تعذر حفظ الفيديو في قاعدة البيانات المركزية.');
+      }
+
+      const savedVidFromServer: Video = data.video;
+      if (editingVideoId) {
+        setVideos(prev => prev.map(v => (Number(v.id) === Number(editingVideoId) ? savedVidFromServer : v)));
+      } else {
+        setVideos(prev => [savedVidFromServer, ...prev.filter(v => Number(v.id) !== Number(savedVidFromServer.id))]);
+      }
+
+      invalidateBootstrapCache();
+      setAdminToastMessage({
+        title: editingVideoId ? `تم تحديث الفيديو "${cleanTitle}" بنجاح` : `تم نشر الفيديو "${cleanTitle}" وإتاحته للجميع فوراً`,
+        subtitle: 'تم الحفظ في قاعدة البيانات المركزية ومزامنته مع جميع المستخدمين.'
+      });
+      setPendingVideoRequestId('');
+      setShowVideoModal(false);
+      resetVideoForm();
+      await fetchAdminData(adminToken, true);
+      dispatchContentChanged();
+      onDataChanged();
+    } catch (err: any) {
+      setVideoFormError(err?.message || 'حدث خطأ أثناء حفظ الفيديو في الخادم.');
+    } finally {
+      setIsSavingContent(false);
+    }
+  };
+
+  const handleDeleteVideo = (id: number) => {
+    setConfirmDialog({
+      title: 'حذف مقطع الفيديو نهائياً',
+      message: 'هل أنت متأكد من حذف مقطع الفيديو نهائياً للجميع؟',
+      onConfirm: async () => {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          setAdminToastMessage({ title: 'لا يوجد اتصال بالإنترنت، تعذر حذف الفيديو', isError: true });
+          return;
+        }
+        try {
+          const res = await fetch(`/api/videos/${id}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${adminToken}` },
+          });
+
+          if (res.status === 401 || res.status === 403) {
+            handleAdminAuthExpired();
+            return;
+          }
+
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            setAdminToastMessage({ title: data.error || 'تعذر حذف الفيديو من قاعدة البيانات', isError: true });
+            return;
+          }
+
+          setVideos(prev => prev.filter(v => Number(v.id) !== Number(id)));
+          invalidateBootstrapCache();
+          await fetchAdminData(adminToken, true);
+          dispatchContentChanged();
+          onDataChanged();
+          setAdminToastMessage({ title: 'تم حذف الفيديو نهائياً من قاعدة البيانات بنجاح' });
+        } catch {
+          setAdminToastMessage({ title: 'تعذر حذف الفيديو، يرجى المحاولة مرة أخرى', isError: true });
+        }
+      },
+    });
+  };
+
+  // ARTICLE ACTIONS
+  const handleSaveArticle = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSavingContent) return;
+    setArticleFormError(null);
+
+    const cleanTitle = articleTitle.trim();
+    const cleanContent = articleContent.trim();
+    if (!cleanTitle || !cleanContent) {
+      setArticleFormError('يرجى إدخال عنوان المقال ومحتواه بالكامل.');
+      return;
+    }
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setArticleFormError('لا يوجد اتصال بالإنترنت، تعذر حفظ المقال في قاعدة البيانات.');
+      return;
+    }
+
+    const requestId = editingArticleId ? '' : (pendingArticleRequestId || makeClientRequestId());
+    if (!editingArticleId && !pendingArticleRequestId) {
+      setPendingArticleRequestId(requestId);
+    }
+
+    setIsSavingContent(true);
+    try {
+      const payload: Record<string, any> = {
+        title: cleanTitle,
+        content: cleanContent,
+        imagepath: articleImagePath.trim() || 'https://images.unsplash.com/photo-1456513080510-7bf3a84b82f8?w=600&auto=format&fit=crop&q=80',
+        author: articleAuthor.trim() || 'ARM',
+        readTime: articleReadTime.trim() || '5 دقائق',
+      };
+      if (requestId) payload.clientRequestId = requestId;
+
+      const url = editingArticleId ? `/api/articles/${editingArticleId}` : '/api/articles';
+      const method = editingArticleId ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.status === 401 || res.status === 403) {
+        handleAdminAuthExpired();
+        return;
+      }
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.article) {
+        throw new Error(data.error || 'تعذر حفظ المقال في قاعدة البيانات المركزية.');
+      }
+
+      const savedArtFromServer: Article = data.article;
+      if (editingArticleId) {
+        setArticles(prev => prev.map(a => (Number(a.id) === Number(editingArticleId) ? savedArtFromServer : a)));
+      } else {
+        setArticles(prev => [savedArtFromServer, ...prev.filter(a => Number(a.id) !== Number(savedArtFromServer.id))]);
+      }
+
+      invalidateBootstrapCache();
+      setAdminToastMessage({
+        title: editingArticleId ? `تم تحديث المقال "${cleanTitle}" بنجاح` : `تم نشر المقال "${cleanTitle}" وإتاحته للجميع فوراً`,
+        subtitle: 'تم الحفظ في قاعدة البيانات المركزية ومزامنته مع جميع المستخدمين.'
+      });
+      setPendingArticleRequestId('');
+      setShowArticleModal(false);
+      resetArticleForm();
+      await fetchAdminData(adminToken, true);
+      dispatchContentChanged();
+      onDataChanged();
+    } catch (err: any) {
+      setArticleFormError(err?.message || 'حدث خطأ أثناء حفظ المقال في الخادم.');
+    } finally {
+      setIsSavingContent(false);
+    }
+  };
+
+  const handleDeleteArticle = (id: number) => {
+    setConfirmDialog({
+      title: 'حذف المقال نهائياً',
+      message: 'هل أنت متأكد من حذف هذا المقال نهائياً للجميع؟',
+      onConfirm: async () => {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          setAdminToastMessage({ title: 'لا يوجد اتصال بالإنترنت، تعذر حذف المقال', isError: true });
+          return;
+        }
+        try {
+          const res = await fetch(`/api/articles/${id}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${adminToken}` },
+          });
+
+          if (res.status === 401 || res.status === 403) {
+            handleAdminAuthExpired();
+            return;
+          }
+
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            setAdminToastMessage({ title: data.error || 'تعذر حذف المقال من قاعدة البيانات', isError: true });
+            return;
+          }
+
+          setArticles(prev => prev.filter(a => Number(a.id) !== Number(id)));
+          invalidateBootstrapCache();
+          await fetchAdminData(adminToken, true);
+          dispatchContentChanged();
+          onDataChanged();
+          setAdminToastMessage({ title: 'تم حذف المقال نهائياً من قاعدة البيانات بنجاح' });
+        } catch {
+          setAdminToastMessage({ title: 'تعذر حذف المقال، يرجى المحاولة مرة أخرى', isError: true });
+        }
+      },
+    });
+  };
+
+  // SECURITY: CHANGE PASSWORD
+  const handleChangeAdminPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPwdMsg(null);
+    setChangingPwd(true);
+
+    try {
+      const res = await fetch('/api/admin/security/change-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify({
+          currentPassword,
+          newPassword,
+          confirmPassword,
+        }),
+      });
+      if (res.status === 401 || res.status === 403) {
+        handleAdminAuthExpired();
+        return;
+      }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'فشل تحديث كلمة المرور');
+
+      if (data.token) {
+        setAdminToken(data.token);
+        localStorage.setItem('arm_admin_token', data.token);
+      }
+
+      setPwdMsg({ text: data.message, type: 'success' });
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      await fetchAdminData(data.token || adminToken, true);
+    } catch (err: any) {
+      setPwdMsg({ text: err.message, type: 'error' });
+    } finally {
+      setChangingPwd(false);
+    }
+  };
+
+  // USER MANAGEMENT ACTIONS
+  const handleToggleUserStatus = async (user: User) => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setAdminToastMessage({ title: 'لا يوجد اتصال بالإنترنت، تعذر تعديل حالة الحساب', isError: true });
+      return;
+    }
+    const newStatus = user.status === 'active' ? 'suspended' : 'active';
+    try {
+      const res = await fetch(`/api/admin/users/${user.id}/status`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify({ status: newStatus }),
+      });
+      if (res.status === 401 || res.status === 403) {
+        handleAdminAuthExpired();
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setAdminToastMessage({ title: data.error || 'تعذر تحديث حالة المستخدم في الخادم', isError: true });
+        return;
+      }
+      setUsers(prev => prev.map(u => u.id === user.id ? { ...u, status: newStatus } : u));
+      invalidateBootstrapCache();
+      await fetchAdminData(adminToken, true);
+      setAdminToastMessage({
+        title: newStatus === 'suspended' ? `تم تجميد حساب ${user.name}` : `تم تنشيط حساب ${user.name}`
+      });
+    } catch {
+      setAdminToastMessage({ title: 'تعذر الاتصال بالخادم لتحديث حالة الحساب', isError: true });
+    }
+  };
+
+  const handleDeleteUser = (id: string) => {
+    setConfirmDialog({
+      title: 'حذف حساب المستخدم',
+      message: 'هل أنت متأكد من حذف هذا المستخدم وسجلاته نهائياً من قاعدة البيانات؟',
+      onConfirm: async () => {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          setAdminToastMessage({ title: 'لا يوجد اتصال بالإنترنت، تعذر حذف المستخدم', isError: true });
+          return;
+        }
+        try {
+          const res = await fetch(`/api/admin/users/${id}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${adminToken}` },
+          });
+
+          if (res.status === 401 || res.status === 403) {
+            handleAdminAuthExpired();
+            return;
+          }
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            setAdminToastMessage({ title: data.error || 'تعذر حذف المستخدم من قاعدة البيانات', isError: true });
+            return;
+          }
+
+          setUsers(prev => prev.filter(u => String(u.id) !== String(id)));
+          invalidateBootstrapCache();
+          await fetchAdminData(adminToken, true);
+          dispatchContentChanged();
+          setAdminToastMessage({ title: 'تم حذف المستخدم نهائياً من قاعدة البيانات بنجاح' });
+        } catch {
+          setAdminToastMessage({ title: 'تعذر الاتصال بالخادم لحذف المستخدم', isError: true });
+        }
+      },
+    });
+  };
+
+  const handleClearLogs = () => {
+    setConfirmDialog({
+      title: 'تصفير سجلات الأمان',
+      message: 'هل تريد تصفير سجلات الأمان وبدء دورة أمنية جديدة؟',
+      onConfirm: async () => {
+        try {
+          const res = await fetch('/api/admin/security/clear-logs', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${adminToken}` },
+          });
+          if (res.status === 401) {
+            handleAdminAuthExpired();
+            return;
+          }
+          if (!res.ok) {
+            throw new Error('فشل تصفير السجلات');
+          }
+          await fetchAdminData(adminToken, true);
+          setAdminToastMessage({ title: 'تم تصفير سجلات الأمان بنجاح' });
+        } catch {
+          setAdminToastMessage({ title: 'فشل تصفير السجلات', isError: true });
+        }
+      },
+    });
+  };
+
+  if (!isOpen) return null;
+
+  // -------------------------------------------------------------------------
+  // IF NOT LOGGED IN AS ADMIN: SHOW HIGH-SECURITY ADMIN LOGIN SCREEN
+  // -------------------------------------------------------------------------
+  if (!isAdminLoggedIn) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-xl animate-in fade-in duration-200">
+        <div 
+          className="relative w-full max-w-md bg-white dark:bg-zinc-950 border border-amber-500/40 rounded-3xl p-8 shadow-2xl text-right overflow-hidden"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Close */}
+          <button
+            onClick={onClose}
+            className="absolute top-5 left-5 p-2 rounded-xl bg-zinc-100 dark:bg-zinc-900 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-200 dark:hover:bg-zinc-800 transition"
+          >
+            <X className="w-4 h-4" />
+          </button>
+
+          <div className="text-center mb-6">
+            <div className="w-16 h-16 mx-auto rounded-3xl bg-gradient-to-tr from-amber-600 via-amber-500 to-amber-300 flex items-center justify-center text-zinc-950 shadow-xl mb-3">
+              <ShieldCheck className="w-8 h-8 stroke-[2.3]" />
+            </div>
+            <h2 className="text-xl font-bold text-amber-800 dark:text-amber-100">بوابة تحكم المدير والأمان</h2>
+            <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
+              الرجاء إدخال بيانات الاعتماد الإدارية المصرح بها للوصول إلى لوحة الأمان والتحكم.
+            </p>
+          </div>
+
+          {loginError && (
+            <div className="mb-4 p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-700 dark:text-rose-300 text-xs flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+              <span>{loginError}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleAdminLogin} className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5">اسم مستخدم الأدمن</label>
+              <div className="relative">
+                <input
+                  type="text"
+                  required
+                  value={adminUsernameInput}
+                  onChange={(e) => setAdminUsernameInput(e.target.value)}
+                  placeholder="ARM"
+                  className="w-full py-2.5 pr-10 pl-4 bg-slate-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                />
+                <KeyRound className="w-4 h-4 text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5">كلمة مرور الأدمن</label>
+              <div className="relative">
+                <input
+                  type="password"
+                  required
+                  value={adminPassInput}
+                  onChange={(e) => setAdminPassInput(e.target.value)}
+                  placeholder="•••••••••"
+                  className="w-full py-2.5 pr-10 pl-4 bg-slate-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                />
+                <Lock className="w-4 h-4 text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={authLoading}
+              className="w-full py-3 bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400 text-zinc-950 font-bold text-xs rounded-xl shadow-lg shadow-amber-500/20 hover:brightness-110 active:scale-95 transition disabled:opacity-50"
+            >
+              {authLoading ? 'جاري التحقق من الصلاحيات...' : 'التحقق والدخول إلى لوحة الأمان 🛡️'}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // FULL-FEATURED ADMIN & SECURITY MANAGEMENT INTERFACE
+  // -------------------------------------------------------------------------
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col bg-slate-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 overflow-hidden animate-in fade-in duration-200">
+      
+      {/* Top Admin Security Bar */}
+      <header className="bg-white/95 dark:bg-zinc-900/90 border-b border-amber-500/30 px-6 py-3.5 flex flex-wrap items-center justify-between gap-4 shadow-sm dark:shadow-none">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-amber-500 text-zinc-950 flex items-center justify-center font-bold shadow-lg">
+            <ShieldCheck className="w-5 h-5 stroke-[2.3]" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-base font-bold text-amber-800 dark:text-amber-200">مركز إدارة المنصة والأمان</h2>
+              <span className="text-[10px] bg-emerald-500/15 border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 animate-pulse"></span>
+                الأمان نشط ومحمي
+              </span>
+            </div>
+            <p className="text-[11px] text-zinc-600 dark:text-zinc-400">
+              جلسة المدير: <span className="text-amber-700 dark:text-amber-400 font-bold">{adminUser}</span> | محرك البيانات: {stats?.analytics.database || 'Local High-Speed Engine'}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2.5 flex-wrap">
+          {/* Theme Switcher Button */}
+          <button
+            onClick={() => setTheme(toggleThemeMode())}
+            className="p-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-amber-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 border border-zinc-200 dark:border-zinc-700 transition flex items-center gap-1.5 text-xs font-bold"
+            title={theme === 'dark' ? 'التبديل للوضع النهاري' : 'التبديل للوضع الداكن'}
+          >
+            {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-amber-700" />}
+            <span className="hidden md:inline">{theme === 'dark' ? 'نهاري' : 'داكن'}</span>
+          </button>
+
+          {/* Real-time Platform Support Notifications Bell */}
+          <button
+            onClick={() => setActiveAdminTab('subscriptions')}
+            className={`relative px-3 py-1.5 rounded-xl transition flex items-center gap-2 border text-xs font-bold ${
+              paymentRequests.filter(p => p.status === 'pending').length > 0
+                ? 'bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/50 hover:bg-amber-500/25 animate-pulse'
+                : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:text-amber-600 dark:hover:text-amber-400'
+            }`}
+            title="إشعارات مساهمات دعم المنصة الواردة"
+          >
+            <Bell className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+            <span className="hidden sm:inline">إشعارات الداعمين</span>
+            {paymentRequests.filter(p => p.status === 'pending').length > 0 ? (
+              <span className="px-2 py-0.5 rounded-full bg-rose-500 text-white text-[10px] font-black animate-bounce">
+                {paymentRequests.filter(p => p.status === 'pending').length} مساهمة جديدة
+              </span>
+            ) : (
+              <span className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                ({paymentRequests.length})
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void fetchAdminData(adminToken, true)}
+            className="p-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-zinc-200 dark:hover:bg-zinc-700 border border-zinc-200 dark:border-zinc-700 transition"
+            title="تحديث البيانات"
+          >
+            <RefreshCw className={`w-4 h-4 ${loadingData ? 'animate-spin text-amber-500' : ''}`} />
+          </button>
+
+          <button
+            type="button"
+            onClick={handleDownloadBackup}
+            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-amber-800 dark:text-amber-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-xs font-semibold border border-zinc-200 dark:border-zinc-700 transition"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>نسخة احتياطية JSON</span>
+          </button>
+
+          <button
+            onClick={onClose}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:text-zinc-950 dark:hover:text-white text-xs font-semibold border border-zinc-200 dark:border-zinc-700 transition"
+          >
+            <ArrowRight className="w-3.5 h-3.5" />
+            <span>عرض المنصة الرئيسية</span>
+          </button>
+
+          <button
+            onClick={handleAdminLogout}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-700 dark:text-rose-300 text-xs font-bold border border-rose-500/30 transition"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span>خروج المدير</span>
+          </button>
+        </div>
+      </header>
+
+      {/* Admin Navigation Tabs */}
+      <nav className="bg-white/80 dark:bg-zinc-900/60 border-b border-zinc-200 dark:border-zinc-800 px-6 flex flex-wrap gap-2 py-2 overflow-x-auto">
+        {[
+          { id: 'dashboard', label: '📊 لوحة المؤشرات والإحصائيات', icon: BarChart3 },
+          { id: 'subscriptions', label: `❤️ دعم المنصة والداعمون ${paymentRequests.filter(p => p.status === 'pending').length ? `(${paymentRequests.filter(p => p.status === 'pending').length} معلق)` : ''}`, icon: Heart },
+          { id: 'exams', label: `🎓 امتحانات الطلاب (${studentExams.length})`, icon: GraduationCap },
+          { id: 'books', label: `📚 الكتب والمناهج (${books.length})`, icon: BookOpen },
+          { id: 'summaries', label: `🖼️ ملخصات الصور (${summaries.length})`, icon: Image },
+          { id: 'videos', label: `🎬 مقاطع الفيديو (${videos.length})`, icon: VideoIcon },
+          { id: 'articles', label: `📝 المقالات (${articles.length})`, icon: FileText },
+          { id: 'reviews', label: `⭐ مراجعات وتقييمات المواد (${allReviews.length})`, icon: Star },
+          { id: 'users', label: `👥 إدارة المستخدمين (${users.length})`, icon: Users },
+          { id: 'security', label: '🛡️ مركز الأمان وكلمة المرور والسجلات', icon: KeyRound },
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => { setActiveAdminTab(tab.id as any); setTableSearch(''); }}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 whitespace-nowrap ${
+              activeAdminTab === tab.id
+                ? 'bg-amber-500 text-zinc-950 shadow-md shadow-amber-500/20 font-extrabold'
+                : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800/60'
+            }`}
+          >
+            <span>{tab.label}</span>
+          </button>
+        ))}
+      </nav>
+
+      {/* Main Content Area */}
+      <main className="flex-1 overflow-y-auto p-6 max-w-7xl mx-auto w-full space-y-6">
+
+        {/* Global Admin Confirmation Toast Banner */}
+        {adminToastMessage && (
+          <div className={`p-4 rounded-2xl flex items-center justify-between gap-4 shadow-lg animate-in fade-in slide-in-from-top-2 border ${
+            adminToastMessage.isError
+              ? 'bg-rose-500/15 border-rose-500/40 text-rose-800 dark:text-rose-200'
+              : 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
+          }`}>
+            <div className="flex items-center gap-3">
+              <div className={`w-9 h-9 rounded-xl text-zinc-950 flex items-center justify-center flex-shrink-0 shadow ${
+                adminToastMessage.isError ? 'bg-rose-500 text-white' : 'bg-emerald-500'
+              }`}>
+                {adminToastMessage.isError ? <AlertTriangle className="w-5 h-5" /> : <CheckCircle2 className="w-5 h-5" />}
+              </div>
+              <div>
+                <p className="text-xs sm:text-sm font-extrabold">{adminToastMessage.title}</p>
+                {adminToastMessage.subtitle && (
+                  <p className="text-[11px] opacity-85 mt-0.5">{adminToastMessage.subtitle}</p>
+                )}
+              </div>
+            </div>
+            <button
+              onClick={() => setAdminToastMessage(null)}
+              className={`p-1.5 rounded-lg transition ${adminToastMessage.isError ? 'hover:bg-rose-500/20' : 'hover:bg-emerald-500/20'}`}
+              title="إغلاق الإشعار"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {/* ------------------------------------------------------------------- */}
+        {/* 1. DASHBOARD OVERVIEW */}
+        {/* ------------------------------------------------------------------- */}
+        {activeAdminTab === 'dashboard' && (
+          <div className="space-y-6 animate-in fade-in">
+
+            {/* REAL-TIME SUPPORTER NOTIFICATIONS FEED */}
+            <div className="bg-gradient-to-r from-amber-50 via-white to-amber-50/70 dark:from-zinc-900 dark:via-amber-950/40 dark:to-zinc-900 border-2 border-amber-500/40 rounded-3xl p-6 shadow-md dark:shadow-2xl relative overflow-hidden">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-zinc-200 dark:border-zinc-800 pb-4">
+                <div className="flex items-center gap-3">
+                  <span className={`w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg ${
+                    paymentRequests.filter(p => p.status === 'pending').length > 0
+                      ? 'bg-amber-500 text-zinc-950 animate-bounce'
+                      : 'bg-amber-100 dark:bg-zinc-800 text-amber-600 dark:text-amber-400'
+                  }`}>
+                    <Bell className="w-6 h-6 stroke-[2.5]" />
+                  </span>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-base font-black text-amber-800 dark:text-amber-200">
+                        إشعارات مساهمات دعم المنصة المجانية ❤️
+                      </h3>
+                      {paymentRequests.filter(p => p.status === 'pending').length > 0 ? (
+                        <span className="px-2.5 py-0.5 rounded-full bg-rose-500 text-white text-[11px] font-black animate-pulse">
+                          {paymentRequests.filter(p => p.status === 'pending').length} مساهمات بانتظار المراجعة ⏳
+                        </span>
+                      ) : (
+                        <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40 text-[11px] font-bold">
+                          جميع المساهمات موثقة (المنصة مجانية 100%) ✅
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
+                      إشعارات فورية بكل مساهمة دعم اختيارية على فودافون كاش (+201092467818)، اتصالات كاش (+201107093454)، أو انستاباي.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => setActiveAdminTab('subscriptions')}
+                    className="px-4 py-2 rounded-xl bg-amber-500 text-zinc-950 font-black text-xs hover:brightness-110 transition flex items-center gap-1.5 shadow"
+                  >
+                    <span>إدارة مساهمات الدعم ({paymentRequests.length})</span>
+                    <ArrowRight className="w-3.5 h-3.5 rotate-180" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Notification Items List */}
+              <div className="mt-4 space-y-3">
+                {paymentRequests.length === 0 ? (
+                  <div className="p-6 text-center bg-white/80 dark:bg-zinc-950/50 rounded-2xl border border-zinc-200 dark:border-zinc-800/80">
+                    <p className="text-xs text-zinc-600 dark:text-zinc-400">
+                      لا توجد مساهمات دعم اختيارية مسجلة بعد. كافة الكتب والامتحانات متاحة مجاناً للجميع، وعند إرسال أي مساهمة دعم سيظهر إشعارها هنا فوراً.
+                    </p>
+                  </div>
+                ) : (
+                  paymentRequests.slice(0, 3).map((req) => (
+                    <div 
+                      key={req.id}
+                      className={`p-4 rounded-2xl border transition flex flex-col md:flex-row items-start md:items-center justify-between gap-4 ${
+                        req.status === 'pending'
+                          ? 'bg-amber-50 dark:bg-amber-950/30 border-amber-500/60 shadow-sm dark:shadow-lg'
+                          : 'bg-white dark:bg-zinc-950/60 border-zinc-200 dark:border-zinc-800/80'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3.5">
+                        <span className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 flex items-center justify-center text-base flex-shrink-0">
+                          {req.paymentMethod === 'vodafone' ? '📱' : req.paymentMethod === 'etisalat' ? '💚' : '⚡'}
+                        </span>
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-sm text-zinc-900 dark:text-zinc-100">{req.userName}</span>
+                            <span className="text-xs text-zinc-500 font-mono">({req.userEmail})</span>
+                            <span className="px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/30 text-[11px] font-bold">
+                              {req.planName} - {req.amountEGP} ج.م
+                            </span>
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                              req.status === 'approved' 
+                                ? 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40' 
+                                : req.status === 'rejected'
+                                ? 'bg-rose-500/20 text-rose-700 dark:text-rose-300'
+                                : 'bg-amber-500 text-zinc-950 font-bold'
+                            }`}>
+                              {req.status === 'approved' ? 'تم توثيق الدعم ✅' : req.status === 'rejected' ? 'غير مؤكد ✕' : 'مساهمة بانتظار التأكيد ⏳'}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-4 text-[11px] text-zinc-600 dark:text-zinc-400 mt-1 flex-wrap font-mono">
+                            <span>وسيلة التحويل: <strong className="text-zinc-900 dark:text-zinc-200">{req.paymentMethod === 'vodafone' ? 'فودافون كاش' : req.paymentMethod === 'etisalat' ? 'اتصالات كاش' : 'انستاباي'}</strong></span>
+                            <span>رقم المحوّل: <strong className="text-amber-700 dark:text-amber-400">{req.senderPhone || 'غير مدخل'}</strong></span>
+                            <span>كود العملية: <strong className="text-zinc-800 dark:text-zinc-300">{req.transactionRef || '-'}</strong></span>
+                            <span>التوقيت: {new Date(req.submittedAt).toLocaleTimeString('ar-EG')} - {new Date(req.submittedAt).toLocaleDateString('ar-EG')}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 flex-shrink-0 w-full md:w-auto justify-end">
+                        {req.receiptImage && (
+                          <button
+                            onClick={() => setSelectedReceiptPreview(req.receiptImage as string)}
+                            className="px-3 py-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-amber-700 dark:text-amber-300 border border-zinc-200 dark:border-zinc-700 text-xs font-bold transition flex items-center gap-1"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>معاينة الإيصال</span>
+                          </button>
+                        )}
+
+                        <a
+                          href={`https://wa.me/${req.senderPhone ? req.senderPhone.replace(/[^0-9]/g, '') : DEVELOPER_WHATSAPP}?text=${encodeURIComponent(
+                            `مرحباً بك يا ${req.userName}، شكراً لدعمك الكريم لاستمرار المنصة التعليمية المجانية (${req.planName}).`
+                          )}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-3 py-1.5 rounded-xl bg-emerald-600/15 dark:bg-emerald-600/20 hover:bg-emerald-600/25 dark:hover:bg-emerald-600/30 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40 text-xs font-bold transition flex items-center gap-1"
+                          title="شكر وتواصل مع الداعم عبر واتساب"
+                        >
+                          <MessageCircle className="w-3.5 h-3.5" />
+                          <span>واتساب</span>
+                        </a>
+
+                        {req.status !== 'approved' && (
+                          <button
+                            onClick={async () => {
+                              const res = await updatePaymentRequestStatus(req.id, 'approved', adminToken);
+                              if (res.unauthorized) {
+                                handleAdminAuthExpired();
+                                return;
+                              }
+                              if (!res.ok) {
+                                setAdminToastMessage({ title: res.error || 'تعذر توثيق المساهمة في قاعدة البيانات', isError: true });
+                                return;
+                              }
+                              invalidateBootstrapCache();
+                              setPaymentRequests(getPaymentRequests());
+                              setStudentSubscriptionsMap(getAllSavedSubscriptions());
+                              setAdminToastMessage({
+                                title: `تم تأكيد مساهمة الدعم ومنح وسام الداعم للطالب ${req.userName} ❤️`,
+                                subtitle: 'تم الحفظ في قاعدة البيانات المركزية'
+                              });
+                            }}
+                            className="px-3 py-1.5 rounded-xl bg-emerald-500 text-zinc-950 font-black text-xs hover:brightness-110 transition flex items-center gap-1 shadow"
+                          >
+                            <CheckCircle className="w-3.5 h-3.5" />
+                            <span>تأكيد الدعم</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Real Stat Cards (100% Genuine Data) */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-5 relative overflow-hidden shadow-sm dark:shadow-none">
+                <span className="text-2xl font-black text-amber-600 dark:text-amber-400 font-mono">{books.length}</span>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 font-semibold">إجمالي الكتب والمناهج</p>
+                <div className="text-[11px] text-amber-700 dark:text-amber-500 mt-2 font-bold">
+                  {books.filter(b => b.is_student === 1).length} مناهج دراسية معتمدة
+                </div>
+              </div>
+
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-5 relative overflow-hidden shadow-sm dark:shadow-none">
+                <span className="text-2xl font-black text-emerald-600 dark:text-emerald-400 font-mono">{users.length}</span>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 font-semibold">الطلاب والمستخدمون</p>
+                <div className="text-[11px] text-emerald-700 dark:text-emerald-500 mt-2 font-bold">
+                  {users.filter(u => u.status === 'active').length} حسابات نشطة حالياً
+                </div>
+              </div>
+
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-5 relative overflow-hidden shadow-sm dark:shadow-none">
+                <span className="text-2xl font-black text-amber-700 dark:text-amber-300 font-mono">
+                  {getTotalRealDownloads(books)}
+                </span>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 font-semibold">إجمالي التنزيلات الحقيقية</p>
+                <div className="text-[11px] text-amber-700 dark:text-amber-500 mt-2 font-bold">تحميلات PDF فعلية من الطلاب</div>
+              </div>
+
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-5 relative overflow-hidden shadow-sm dark:shadow-none">
+                <span className="text-2xl font-black text-cyan-600 dark:text-cyan-400 font-mono">
+                  {getTotalRealViews(books, summaries, videos, articles)}
+                </span>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 font-semibold">إجمالي المشاهدات الحقيقية</p>
+                <div className="text-[11px] text-cyan-700 dark:text-cyan-500 mt-2 font-bold">مشاهدات حقيقية لكافة المواد</div>
+              </div>
+
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-5 relative overflow-hidden shadow-sm dark:shadow-none">
+                <span className="text-2xl font-black text-purple-600 dark:text-purple-400 font-mono">{studentExams.length}</span>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 font-semibold">الامتحانات والنماذج</p>
+                <div className="text-[11px] text-purple-700 dark:text-purple-400 mt-2 font-bold">بنك أسئلة متاح للطلاب</div>
+              </div>
+
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-5 relative overflow-hidden shadow-sm dark:shadow-none">
+                <span className="text-2xl font-black text-blue-600 dark:text-blue-400 font-mono">{allReviews.length}</span>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 font-semibold">تقييمات ومراجعات الطلاب</p>
+                <div className="text-[11px] text-blue-700 dark:text-blue-400 mt-2 font-bold">
+                  {allReviews.filter(r => r.isApproved).length} مراجعات معتمدة
+                </div>
+              </div>
+
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-5 relative overflow-hidden shadow-sm dark:shadow-none">
+                <span className="text-2xl font-black text-emerald-600 dark:text-emerald-400 font-mono">
+                  {paymentRequests.filter(r => r.status === 'approved').reduce((acc, r) => acc + (r.amountEGP || 50), 0)} ج.م
+                </span>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 font-semibold">مساهمات دعم المنصة المؤكدة</p>
+                <div className="text-[11px] text-emerald-700 dark:text-emerald-500 mt-2 font-bold">
+                  {paymentRequests.filter(r => r.status === 'approved').length} مساهمات دعم اختيارية
+                </div>
+              </div>
+
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-5 relative overflow-hidden shadow-sm dark:shadow-none">
+                <span className="text-2xl font-black text-zinc-800 dark:text-zinc-300 font-mono">
+                  {logs.length}
+                </span>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 font-semibold">سجلات العمليات الإدارية</p>
+                <div className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-2 font-bold">أحداث أمنية موثقة</div>
+              </div>
+            </div>
+
+            {/* Quick Actions & Security Banner */}
+            <div className="bg-gradient-to-r from-amber-50 via-white to-slate-50 dark:from-amber-950/40 dark:via-zinc-900 dark:to-zinc-900 border border-amber-500/30 rounded-3xl p-6 flex flex-col md:flex-row items-center justify-between gap-6 shadow-sm dark:shadow-none">
+              <div>
+                <h3 className="text-lg font-bold text-amber-800 dark:text-amber-200 flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                  <span>التحكم السريع في المنصة</span>
+                </h3>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
+                  يمكنك إضافة أي كتاب جديد، مقال تفصيلي، ملخص مصور، أو فحص سجل الأمان بضغطة زر واحدة.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap gap-2.5">
+                <button
+                  onClick={() => { resetBookForm(); setShowBookModal(true); }}
+                  className="px-4 py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-xl shadow-lg hover:brightness-110 transition flex items-center gap-1.5"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>إضافة كتاب جديد</span>
+                </button>
+                <button
+                  onClick={() => { resetArticleForm(); setShowArticleModal(true); }}
+                  className="px-4 py-2.5 bg-white dark:bg-zinc-800 text-amber-700 dark:text-amber-300 font-bold text-xs rounded-xl border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-700 transition flex items-center gap-1.5"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>نشر مقال</span>
+                </button>
+                <button
+                  onClick={() => { resetSummaryForm(); setShowSummaryModal(true); }}
+                  className="px-4 py-2.5 bg-white dark:bg-zinc-800 text-amber-700 dark:text-amber-300 font-bold text-xs rounded-xl border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-700 transition flex items-center gap-1.5"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>إضافة خريطة ذهنية</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Recent Audit Activity Snapshot */}
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm dark:shadow-none">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-bold text-amber-700 dark:text-amber-300 flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                  <span>أحدث العمليات الأمنية والإدارية الموثقة</span>
+                </h3>
+                <button
+                  onClick={() => setActiveAdminTab('security')}
+                  className="text-xs text-amber-700 dark:text-amber-400 hover:underline font-semibold"
+                >
+                  عرض كافة السجلات ({logs.length}) ←
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                {logs.slice(0, 5).map((log) => (
+                  <div key={log.id} className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-zinc-950/60 border border-zinc-200 dark:border-zinc-800/80 text-xs">
+                    <div className="flex items-center gap-3">
+                      <span className={`w-2 h-2 rounded-full ${
+                        log.status === 'success' ? 'bg-emerald-500' : log.status === 'warning' ? 'bg-amber-500' : 'bg-rose-500'
+                      }`} />
+                      <span className="font-bold text-zinc-900 dark:text-zinc-200">{log.user}:</span>
+                      <span className="text-zinc-600 dark:text-zinc-400">{log.details}</span>
+                    </div>
+                    <span className="text-[10px] text-zinc-500">
+                      {new Date(log.timestamp).toLocaleTimeString('ar-EG')} - {new Date(log.timestamp).toLocaleDateString('ar-EG')}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ------------------------------------------------------------------- */}
+        {/* 1.5 PLATFORM SUPPORT & SUPPORTERS MANAGEMENT */}
+        {/* ------------------------------------------------------------------- */}
+        {activeAdminTab === 'subscriptions' && (
+          <div className="space-y-8 animate-in fade-in">
+            
+            {/* 1. Toggle & Control Voluntary Support Visibility */}
+            <div className="p-6 rounded-3xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 space-y-4 shadow-sm dark:shadow-none">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-zinc-200 dark:border-zinc-800 pb-4">
+                <div>
+                  <h3 className="text-base font-bold text-amber-800 dark:text-amber-200 flex items-center gap-2">
+                    <Heart className="w-5 h-5 text-rose-500" />
+                    <span>إعدادات الدعم الاختياري للمنصة (جميع الخدمات مجانية 100%)</span>
+                  </h3>
+                  <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
+                    جميع الكتب والامتحانات متاحة مجاناً بالكامل لجميع الطلاب. يمكنك إظهار أو إخفاء بوابة المساهمات الاختيارية لدعم استمرار المنصة.
+                  </p>
+                </div>
+                <span className="text-xs font-bold px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                  المنصة مجانية للجميع ❤️
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {adminPlans.map((plan) => {
+                  const isActive = plan.isActive !== false;
+                  return (
+                    <div 
+                      key={plan.id}
+                      className={`p-5 rounded-2xl border transition ${
+                        isActive 
+                          ? 'bg-slate-50 dark:bg-zinc-950/80 border-amber-500/30 shadow-sm dark:shadow-md' 
+                          : 'bg-slate-100/70 dark:bg-zinc-950/40 border-zinc-200 dark:border-zinc-800 opacity-60'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="text-xs font-black text-zinc-900 dark:text-zinc-200">{plan.name}</span>
+                        <span className="text-xs font-bold text-amber-700 dark:text-amber-400 font-mono">اختياري ({plan.priceEGP} ج.م)</span>
+                      </div>
+
+                      <p className="text-[11px] text-zinc-600 dark:text-zinc-400 mb-4 min-h-[30px]">{plan.tagline}</p>
+
+                      <div className="flex items-center justify-between pt-3 border-t border-zinc-200 dark:border-zinc-800/80">
+                        <span className={`text-xs font-bold flex items-center gap-1.5 ${
+                          isActive ? 'text-emerald-600 dark:text-emerald-400' : 'text-zinc-500'
+                        }`}>
+                          <span className={`w-2 h-2 rounded-full ${isActive ? 'bg-emerald-500' : 'bg-zinc-400 dark:bg-zinc-600'}`} />
+                          <span>{isActive ? 'بوابة الدعم مفعلة' : 'موقوفة مؤقتاً'}</span>
+                        </span>
+
+                        <button
+                          onClick={async () => {
+                            const newStatus = !isActive;
+                            const res = await saveAdminPlanStatus(plan.id, newStatus, adminToken);
+                            if (res.unauthorized) {
+                              handleAdminAuthExpired();
+                              return;
+                            }
+                            if (!res.ok) {
+                              setAdminToastMessage({ title: res.error || 'تعذر تحديث إعدادات الدعم في الخادم', isError: true });
+                              return;
+                            }
+                            invalidateBootstrapCache();
+                            setAdminPlans(getAdminPlansConfig());
+                            setAdminToastMessage({ title: 'تم تحديث إعدادات بوابة الدعم في قاعدة البيانات' });
+                          }}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                            isActive
+                              ? 'bg-rose-500/15 dark:bg-rose-500/20 hover:bg-rose-500/25 dark:hover:bg-rose-500/30 text-rose-700 dark:text-rose-300 border border-rose-500/40'
+                              : 'bg-emerald-500/15 dark:bg-emerald-500/20 hover:bg-emerald-500/25 dark:hover:bg-emerald-500/30 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40'
+                          }`}
+                        >
+                          {isActive ? 'إخفاء مؤقتاً ⛔' : 'تفعيل استقبال الدعم ✅'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 2. Support Proof Verification & Approvals */}
+            <div className="p-6 rounded-3xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 space-y-4 shadow-sm dark:shadow-none">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-zinc-200 dark:border-zinc-800 pb-4">
+                <div>
+                  <h3 className="text-base font-bold text-amber-800 dark:text-amber-200 flex items-center gap-2">
+                    <CreditCard className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                    <span>سجل مساهمات الدعم وإثباتات التحويل</span>
+                  </h3>
+                  <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
+                    راجع مساهمات الدعم الواردة على فودافون كاش (+201092467818)، اتصالات كاش (+201107093454)، وانستاباي (mostafarafat2007@instapay).
+                  </p>
+                </div>
+                <span className="text-xs font-bold px-3 py-1 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300">
+                  إجمالي المساهمات: {paymentRequests.length}
+                </span>
+              </div>
+
+              {paymentRequests.length === 0 ? (
+                <div className="text-center py-10 bg-slate-50 dark:bg-zinc-950/40 border border-zinc-200 dark:border-zinc-800/80 rounded-2xl p-4">
+                  <CreditCard className="w-10 h-10 text-zinc-400 dark:text-zinc-600 mx-auto mb-2" />
+                  <p className="text-xs text-zinc-600 dark:text-zinc-400">لا توجد مساهمات دعم مسجلة حالياً.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-right text-xs">
+                    <thead>
+                      <tr className="border-b border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400">
+                        <th className="py-2.5 px-3">الداعم</th>
+                        <th className="py-2.5 px-3">المساهمة والمبلغ</th>
+                        <th className="py-2.5 px-3">وسيلة التحويل</th>
+                        <th className="py-2.5 px-3">رقم الهاتف المحول منه</th>
+                        <th className="py-2.5 px-3">كود التحويل</th>
+                        <th className="py-2.5 px-3 text-center">إثبات التحويل</th>
+                        <th className="py-2.5 px-3">الحالة</th>
+                        <th className="py-2.5 px-3 text-center">الإجراءات</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800/60">
+                      {paymentRequests.map((req) => (
+                        <tr key={req.id} className="hover:bg-slate-50 dark:hover:bg-zinc-950/40 transition">
+                          <td className="py-3 px-3">
+                            <span className="font-bold text-zinc-900 dark:text-zinc-200 block">{req.userName}</span>
+                            <span className="text-[11px] text-zinc-500 font-mono">{req.userEmail}</span>
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className="font-bold text-amber-700 dark:text-amber-300 block">{req.planName}</span>
+                            <span className="text-[11px] text-zinc-600 dark:text-zinc-400">{req.amountEGP} ج.م</span>
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className="px-2 py-0.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 font-bold text-[11px]">
+                              {req.paymentMethod === 'vodafone' ? 'فودافون كاش' : req.paymentMethod === 'etisalat' ? 'اتصالات كاش' : 'انستاباي'}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 font-mono text-zinc-700 dark:text-zinc-300">
+                            {req.senderPhone || '-'}
+                          </td>
+                          <td className="py-3 px-3 font-mono text-zinc-600 dark:text-zinc-400">
+                            {req.transactionRef || '-'}
+                          </td>
+                          <td className="py-3 px-3 text-center">
+                            {req.receiptImage ? (
+                              <button
+                                onClick={() => setSelectedReceiptPreview(req.receiptImage as string)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-[11px] font-bold transition"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                                <span>عرض الإيصال</span>
+                              </button>
+                            ) : (
+                              <span className="text-zinc-500 text-[11px]">لا يوجد صورة</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className={`px-2.5 py-1 rounded-full text-[10px] font-black inline-flex items-center gap-1 ${
+                              req.status === 'approved' 
+                                ? 'bg-emerald-500/15 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40' 
+                                : req.status === 'rejected'
+                                ? 'bg-rose-500/15 dark:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/40'
+                                : 'bg-amber-500/15 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/40'
+                            }`}>
+                              {req.status === 'approved' && 'تم تأكيد الدعم ✅'}
+                              {req.status === 'rejected' && 'غير مؤكد ✕'}
+                              {req.status === 'pending' && 'معلق قيد المراجعة ⏳'}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-center">
+                            <div className="flex items-center justify-center gap-1.5">
+                              {req.status !== 'approved' && (
+                                <button
+                                  onClick={async () => {
+                                    const res = await updatePaymentRequestStatus(req.id, 'approved', adminToken);
+                                    if (res.unauthorized) {
+                                      handleAdminAuthExpired();
+                                      return;
+                                    }
+                                    if (!res.ok) {
+                                      setAdminToastMessage({ title: res.error || 'تعذر توثيق مساهمة الدعم', isError: true });
+                                      return;
+                                    }
+                                    invalidateBootstrapCache();
+                                    setPaymentRequests(getPaymentRequests());
+                                    setStudentSubscriptionsMap(getAllSavedSubscriptions());
+                                    setAdminToastMessage({
+                                      title: `تم توثيق مساهمة الدعم ومنح وسام الداعم للطالب ${req.userName} ❤️`
+                                    });
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white dark:text-zinc-950 font-bold text-[11px] transition"
+                                >
+                                  تأكيد الدعم
+                                </button>
+                              )}
+                              {req.status !== 'rejected' && (
+                                <button
+                                  onClick={async () => {
+                                    const res = await updatePaymentRequestStatus(req.id, 'rejected', adminToken);
+                                    if (res.unauthorized) {
+                                      handleAdminAuthExpired();
+                                      return;
+                                    }
+                                    if (!res.ok) {
+                                      setAdminToastMessage({ title: res.error || 'تعذر تحديث حالة المساهمة', isError: true });
+                                      return;
+                                    }
+                                    invalidateBootstrapCache();
+                                    setPaymentRequests(getPaymentRequests());
+                                    setStudentSubscriptionsMap(getAllSavedSubscriptions());
+                                    setAdminToastMessage({ title: 'تم تحديث حالة مساهمة الدعم بنجاح' });
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 font-bold text-[11px] border border-zinc-200 dark:border-zinc-700 transition"
+                                >
+                                  إلغاء
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* 3. Individual Student Accounts & Supporter Badge Management */}
+            <div className="p-6 rounded-3xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 space-y-4 shadow-sm dark:shadow-none">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-zinc-200 dark:border-zinc-800 pb-4">
+                <div>
+                  <h3 className="text-base font-bold text-amber-800 dark:text-amber-200 flex items-center gap-2">
+                    <Users className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                    <span>حسابات الطلاب وأوسمة داعمي المنصة (الجميع مجاني بالكامل)</span>
+                  </h3>
+                  <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
+                    جميع الطلاب يمتلكون صلاحية وصول مجانية وكاملة لكل الكتب والامتحانات بلا حدود. يمكنك منح وسام داعم المنصة تقديراً للمساهمين.
+                  </p>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-right text-xs">
+                  <thead>
+                    <tr className="border-b border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400">
+                      <th className="py-2.5 px-3">الطالب المسجل</th>
+                      <th className="py-2.5 px-3">المرحلة</th>
+                      <th className="py-2.5 px-3">حالة العضوية</th>
+                      <th className="py-2.5 px-3">الامتحانات والكتب</th>
+                      <th className="py-2.5 px-3 text-center">إدارة وسام الداعم</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800/60">
+                    {users.map((student) => {
+                      const sub = calculateStudentSubscription(student.id, student.createdAt, studentSubscriptionsMap[student.id]);
+                      const isSupporter = sub.planId === 'supporter' || sub.planId === 'basic_50';
+
+                      return (
+                        <tr key={student.id} className="hover:bg-slate-50 dark:hover:bg-zinc-950/40 transition">
+                          <td className="py-3 px-3">
+                            <span className="font-bold text-zinc-900 dark:text-zinc-200 block">{student.name}</span>
+                            <span className="text-[11px] text-zinc-500 font-mono">{student.email}</span>
+                          </td>
+                          <td className="py-3 px-3 text-zinc-600 dark:text-zinc-400">
+                            {student.academicStage || 'الصف الثالث الثانوي'}
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className={`px-2.5 py-1 rounded-xl text-[11px] font-bold inline-block ${
+                              isSupporter
+                                ? 'bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/40'
+                                : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
+                            }`}>
+                              {sub.planName}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className="font-bold text-emerald-700 dark:text-emerald-400">
+                              مفتوح بالكامل مجاناً 🌟
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-center">
+                            <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                              <button
+                                onClick={async () => {
+                                  const now = new Date();
+                                  const updatedSub: UserSubscription = {
+                                    planId: 'supporter',
+                                    planName: 'داعم للمنصة المجانية ❤️',
+                                    status: 'active',
+                                    billingPeriod: 'monthly',
+                                    examsRemainingThisWeek: 9999,
+                                    maxExamsPerWeek: -1,
+                                    startDate: now.toISOString(),
+                                    endDate: new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+                                    isTrial: false,
+                                    approvedByAdmin: true
+                                  };
+                                  const res = await saveStudentSubscription(student.id, updatedSub, adminToken);
+                                  if (res.unauthorized) {
+                                    handleAdminAuthExpired();
+                                    return;
+                                  }
+                                  if (!res.ok) {
+                                    setAdminToastMessage({ title: res.error || 'تعذر منح وسام الداعم في الخادم', isError: true });
+                                    return;
+                                  }
+                                  invalidateBootstrapCache();
+                                  setStudentSubscriptionsMap(getAllSavedSubscriptions());
+                                  setAdminToastMessage({
+                                    title: `تم منح وسام داعم المنصة للطالب ${student.name}! ❤️`
+                                  });
+                                }}
+                                className="px-3 py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-800 dark:text-amber-300 border border-amber-500/40 text-xs font-bold transition flex items-center gap-1 shadow-sm"
+                                title="منح وسام داعم المنصة المجانية"
+                              >
+                                <Heart className="w-3.5 h-3.5" />
+                                <span>منح وسام داعم ❤️</span>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+          </div>
+        )}
+
+        {/* ------------------------------------------------------------------- */}
+        {/* 2. BOOKS & CURRICULUMS MANAGEMENT */}
+        {/* ------------------------------------------------------------------- */}
+        {activeAdminTab === 'books' && (
+          <div className="space-y-4 animate-in fade-in">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+              <button
+                onClick={() => { resetBookForm(); setShowBookModal(true); }}
+                className="px-4 py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-2xl shadow-md hover:brightness-110 transition flex items-center gap-2"
+              >
+                <Plus className="w-4 h-4" />
+                <span>إضافة كتاب أو منهج دراسي جديد</span>
+              </button>
+
+              <div className="relative w-full sm:w-64">
+                <input
+                  type="text"
+                  placeholder="بحث في الكتب..."
+                  value={tableSearch}
+                  onChange={(e) => setTableSearch(e.target.value)}
+                  className="w-full py-2 pr-9 pl-3 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                />
+                <Search className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
+              </div>
+            </div>
+
+            {/* Books Table */}
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl overflow-hidden shadow-sm dark:shadow-xl">
+              <div className="overflow-x-auto">
+                <table className="w-full text-right text-xs">
+                  <thead className="bg-slate-100 dark:bg-zinc-950 text-zinc-600 dark:text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
+                    <tr>
+                      <th className="py-3 px-4">الغلاف</th>
+                      <th className="py-3 px-4">العنوان</th>
+                      <th className="py-3 px-4">التصنيف</th>
+                      <th className="py-3 px-4">المرحلة</th>
+                      <th className="py-3 px-4">التنزيلات</th>
+                      <th className="py-3 px-4">المشاهدات</th>
+                      <th className="py-3 px-4 text-center">إجراءات</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800/60">
+                    {books
+                      .filter(b => {
+                        if (!tableSearch.trim()) return true;
+                        const q = tableSearch.trim().toLowerCase();
+                        return b.title.toLowerCase().includes(q) || b.category.toLowerCase().includes(q) || (b.grade || '').toLowerCase().includes(q);
+                      })
+                      .map((book) => (
+                        <tr key={book.id} className="hover:bg-slate-50 dark:hover:bg-zinc-800/30 transition">
+                          <td className="py-3 px-4">
+                            <img src={book.coverpath} alt="" className="w-10 h-14 object-cover rounded-lg border border-zinc-200 dark:border-zinc-800" />
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className="font-bold text-zinc-900 dark:text-zinc-100 block">{book.title}</span>
+                            <span className="text-[10px] text-zinc-500 truncate max-w-xs block">{book.description}</span>
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className={`px-2 py-0.5 rounded-lg text-[10px] font-bold ${
+                              book.is_student ? 'bg-amber-500/20 text-amber-800 dark:text-amber-300' : 'bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
+                            }`}>
+                              {book.is_student ? '🎓 كتب الطلاب' : book.category}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">{book.grade || 'عام'}</td>
+                          <td className="py-3 px-4 font-bold text-amber-700 dark:text-amber-400">{getRealDownloads(book.id, book.downloads || 0)}</td>
+                          <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">{getRealViews('book', book.id, book.views || 0)}</td>
+                          <td className="py-3 px-4 text-center">
+                            <div className="flex items-center justify-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handlePreviewBookFile(book.filepath, book.title)}
+                                className="p-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 hover:text-amber-600 dark:hover:text-amber-300 transition"
+                                title="معاينة الملف"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => openEditBook(book)}
+                                className="p-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-amber-500 hover:text-zinc-950 text-amber-700 dark:text-amber-400 transition"
+                                title="تعديل الكتاب"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteBook(book.id)}
+                                className="p-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 transition"
+                                title="حذف الكتاب"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ------------------------------------------------------------------- */}
+        {/* 3. SUMMARIES MANAGEMENT */}
+        {/* ------------------------------------------------------------------- */}
+        {activeAdminTab === 'summaries' && (
+          <div className="space-y-4 animate-in fade-in">
+            <div className="flex justify-between items-center">
+              <button
+                onClick={() => {
+                  resetSummaryForm();
+                  setShowSummaryModal(true);
+                }}
+                className="px-4 py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-2xl shadow-md hover:brightness-110 transition flex items-center gap-2"
+              >
+                <Plus className="w-4 h-4" />
+                <span>إضافة ملخص صورة أو خريطة ذهنية</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {summaries.map((sum) => (
+                <div key={sum.id} className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-4 flex flex-col justify-between space-y-3 shadow-sm dark:shadow-none">
+                  <div className="h-44 rounded-2xl overflow-hidden bg-slate-100 dark:bg-black border border-zinc-200 dark:border-zinc-800 relative group">
+                    <img src={sum.imagepath} alt={sum.title} className="w-full h-full object-cover group-hover:scale-105 transition" />
+                    <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg bg-black/70 text-amber-300 text-[10px] font-bold">
+                      {sum.category}
+                    </span>
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-xs text-zinc-900 dark:text-zinc-100 line-clamp-1">{sum.title}</h4>
+                  </div>
+                  <div className="flex items-center justify-between pt-2 border-t border-zinc-200 dark:border-zinc-800">
+                    <a
+                      href={sum.imagepath}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-amber-700 dark:text-amber-400 font-bold hover:underline flex items-center gap-1"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      عرض بدقة كاملة
+                    </a>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => openEditSummary(sum)}
+                        className="px-2.5 py-1 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-amber-500 hover:text-zinc-950 text-amber-700 dark:text-amber-300 text-xs font-bold transition flex items-center gap-1"
+                        title="تعديل الملخص"
+                      >
+                        <Edit3 className="w-3 h-3" />
+                        <span>تعديل</span>
+                      </button>
+                      <button
+                        onClick={() => handleDeleteSummary(sum.id)}
+                        className="p-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 transition"
+                        title="حذف الملخص"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ------------------------------------------------------------------- */}
+        {/* 4. VIDEOS MANAGEMENT */}
+        {/* ------------------------------------------------------------------- */}
+        {activeAdminTab === 'videos' && (
+          <div className="space-y-4 animate-in fade-in">
+            <div className="flex justify-between items-center">
+              <button
+                onClick={() => {
+                  resetVideoForm();
+                  setShowVideoModal(true);
+                }}
+                className="px-4 py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-2xl shadow-md hover:brightness-110 transition flex items-center gap-2"
+              >
+                <Plus className="w-4 h-4" />
+                <span>إضافة فيديو أو شرح دراسي</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {videos.map((vid) => (
+                <div key={vid.id} className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-4 flex flex-col justify-between space-y-3 shadow-sm dark:shadow-none">
+                  <div className="aspect-video w-full rounded-2xl overflow-hidden bg-black border border-zinc-200 dark:border-zinc-800">
+                    <iframe
+                      src={vid.videourl.replace('watch?v=', 'embed/')}
+                      className="w-full h-full"
+                      allowFullScreen
+                    />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-xs text-zinc-900 dark:text-zinc-100 line-clamp-2">{vid.title}</h4>
+                    <div className="flex items-center justify-between text-[10px] text-zinc-600 dark:text-zinc-400 mt-2">
+                      <span>{vid.channel || 'المكتبة'}</span>
+                      <span>⏱️ {vid.duration || '20 دقيقة'}</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between pt-2 border-t border-zinc-200 dark:border-zinc-800">
+                    <span className="text-[10px] bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 rounded text-amber-700 dark:text-amber-400 font-bold">
+                      {vid.category}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => openEditVideo(vid)}
+                        className="px-2.5 py-1 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-amber-500 hover:text-zinc-950 text-amber-700 dark:text-amber-300 text-xs font-bold transition flex items-center gap-1"
+                        title="تعديل الفيديو"
+                      >
+                        <Edit3 className="w-3 h-3" />
+                        <span>تعديل</span>
+                      </button>
+                      <button
+                        onClick={() => handleDeleteVideo(vid.id)}
+                        className="p-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 transition"
+                        title="حذف الفيديو"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ------------------------------------------------------------------- */}
+        {/* 5. ARTICLES MANAGEMENT */}
+        {/* ------------------------------------------------------------------- */}
+        {activeAdminTab === 'articles' && (
+          <div className="space-y-4 animate-in fade-in">
+            <div className="flex justify-between items-center">
+              <button
+                onClick={() => {
+                  resetArticleForm();
+                  setShowArticleModal(true);
+                }}
+                className="px-4 py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-2xl shadow-md hover:brightness-110 transition flex items-center gap-2"
+              >
+                <Plus className="w-4 h-4" />
+                <span>نشر مقال علمي أو إرشادي جديد</span>
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {articles.map((art) => (
+                <div key={art.id} className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm dark:shadow-none">
+                  <div className="flex items-center gap-4 w-full sm:w-auto">
+                    <img src={art.imagepath} alt="" className="w-20 h-20 rounded-2xl object-cover border border-zinc-200 dark:border-zinc-800 flex-shrink-0" />
+                    <div>
+                      <h4 className="font-bold text-sm text-zinc-900 dark:text-zinc-100">{art.title}</h4>
+                      <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 line-clamp-2 max-w-xl">{art.content.replace(/[\#\*\>]/g, '')}</p>
+                      <div className="flex items-center gap-3 text-[11px] text-amber-700 dark:text-amber-500 mt-2 font-semibold">
+                        <span>الكاتب: {art.author}</span>
+                        <span>•</span>
+                        <span>وقت القراءة: {art.readTime}</span>
+                        <span>•</span>
+                        <span>👁️ {getRealViews('article', art.id, art.views || 0)} مشاهدة</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <button
+                      onClick={() => {
+                        setEditingArticleId(art.id);
+                        setArticleTitle(art.title);
+                        setArticleContent(art.content);
+                        setArticleImagePath(art.imagepath);
+                        setArticleImageFilePreview(art.imagepath);
+                        setArticleAuthor(art.author);
+                        setArticleReadTime(art.readTime);
+                        setShowArticleModal(true);
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-amber-500 hover:text-zinc-950 text-amber-700 dark:text-amber-300 text-xs font-bold border border-zinc-200 dark:border-zinc-700 transition"
+                    >
+                      تعديل
+                    </button>
+                    <button
+                      onClick={() => handleDeleteArticle(art.id)}
+                      className="p-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-zinc-200 dark:border-zinc-700 transition"
+                      title="حذف المقال"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ------------------------------------------------------------------- */}
+        {/* 6. USERS MANAGEMENT (حسابات المستخدمين المسجلين) */}
+        {/* ------------------------------------------------------------------- */}
+        {activeAdminTab === 'users' && (
+          <div className="space-y-4 animate-in fade-in">
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-5 flex items-center justify-between shadow-sm dark:shadow-none">
+              <div>
+                <h3 className="text-sm font-bold text-amber-800 dark:text-amber-200">إدارة حسابات المستفيدين والطلاب المسجلين</h3>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5">يمكنك تجميد الحسابات المشبوهة، تغيير الصلاحيات، أو إزالة المستخدمين.</p>
+              </div>
+              <span className="text-xs font-bold px-3 py-1 rounded-xl bg-amber-500/15 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30">
+                إجمالي المسجلين: {users.length}
+              </span>
+            </div>
+
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl overflow-hidden shadow-sm dark:shadow-xl">
+              <div className="overflow-x-auto">
+                <table className="w-full text-right text-xs">
+                  <thead className="bg-slate-100 dark:bg-zinc-950 text-zinc-600 dark:text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
+                    <tr>
+                      <th className="py-3 px-4">المستخدم</th>
+                      <th className="py-3 px-4">البريد الإلكتروني</th>
+                      <th className="py-3 px-4">المرحلة الدراسية</th>
+                      <th className="py-3 px-4">الرتبة</th>
+                      <th className="py-3 px-4">الحالة</th>
+                      <th className="py-3 px-4">تاريخ الانضمام</th>
+                      <th className="py-3 px-4 text-center">إجراءات</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800/60">
+                    {users.map((u) => (
+                      <tr key={u.id} className="hover:bg-slate-50 dark:hover:bg-zinc-800/30 transition">
+                        <td className="py-3 px-4 flex items-center gap-2">
+                          <img src={u.avatar} alt="" className="w-8 h-8 rounded-full object-cover border border-zinc-200 dark:border-zinc-700" />
+                          <span className="font-bold text-zinc-900 dark:text-zinc-200">{u.name}</span>
+                        </td>
+                        <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">{u.email}</td>
+                        <td className="py-3 px-4 text-zinc-700 dark:text-zinc-300">{u.academicStage || 'غير محدد'}</td>
+                        <td className="py-3 px-4">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            u.role === 'moderator' ? 'bg-amber-500/20 text-amber-800 dark:text-amber-300' : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400'
+                          }`}>
+                            {u.role === 'moderator' ? 'مشرف' : 'مستخدم'}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            u.status === 'active' 
+                              ? 'bg-emerald-500/15 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30' 
+                              : 'bg-rose-500/15 dark:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/30'
+                          }`}>
+                            {u.status === 'active' ? 'نشط' : 'محظور / مجمّد'}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 text-zinc-500">{new Date(u.createdAt).toLocaleDateString('ar-EG')}</td>
+                        <td className="py-3 px-4 text-center">
+                          <div className="flex items-center justify-center gap-2">
+                            <button
+                              onClick={() => handleToggleUserStatus(u)}
+                              className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition ${
+                                u.status === 'active'
+                                  ? 'bg-zinc-100 dark:bg-zinc-800 text-rose-600 dark:text-rose-400 border-zinc-200 dark:border-zinc-700 hover:bg-rose-500/20'
+                                  : 'bg-emerald-500/15 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30'
+                              }`}
+                            >
+                              {u.status === 'active' ? 'تجميد 🚫' : 'تنشيط ✅'}
+                            </button>
+                            <button
+                              onClick={() => handleDeleteUser(u.id)}
+                              className="p-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 transition"
+                              title="حذف نهائي"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ------------------------------------------------------------------- */}
+        {/* 6.3 REVIEWS MODERATION (مراجعات وتقييمات الطلاب) */}
+        {/* ------------------------------------------------------------------- */}
+        {activeAdminTab === 'reviews' && (
+          <div className="space-y-6 animate-in fade-in">
+            {/* Header & Metrics */}
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm dark:shadow-none">
+              <div>
+                <h3 className="text-base font-black text-amber-800 dark:text-amber-200 flex items-center gap-2">
+                  <Star className="w-5 h-5 text-amber-500 fill-amber-500" />
+                  <span>إدارة مراجعات وتقييمات الطلاب للمواد والكتب</span>
+                </h3>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
+                  يمكنك مراجعة آراء الطلاب، منح شارة الاعتماد الذهبية "معتمد من الإدارة ⭐" للمراجعات المفيدة، وحذف أي مراجعة غير لائقة.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="text-xs font-bold px-3 py-1.5 rounded-xl bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/30">
+                  إجمالي المراجعات: {allReviews.length}
+                </span>
+                <span className="text-xs font-bold px-3 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                  معتمد: {allReviews.filter(r => r.isApproved || r.approved).length}
+                </span>
+              </div>
+            </div>
+
+            {/* Reviews List */}
+            {allReviews.length === 0 ? (
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-12 text-center text-zinc-500 dark:text-zinc-400 text-xs">
+                لا توجد مراجعات مكتوبة بعد. عند كتابة أي طالب لمراجعة ستظهر هنا مباشرة للإدارة.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {allReviews.map((rev) => {
+                  const isApp = rev.isApproved || rev.approved;
+                  const stage = rev.academicStage || rev.userStage;
+                  return (
+                    <div 
+                      key={rev.id}
+                      className={`p-5 rounded-3xl border transition relative flex flex-col justify-between shadow-sm dark:shadow-none ${
+                        isApp
+                          ? 'bg-white dark:bg-zinc-900/90 border-amber-500/40 shadow-amber-500/5'
+                          : 'bg-slate-50/70 dark:bg-zinc-900/60 border-zinc-200 dark:border-zinc-800'
+                      }`}
+                    >
+                      <div>
+                        {/* Top Row: User & Item info */}
+                        <div className="flex items-start justify-between gap-3 mb-3">
+                          <div className="flex items-center gap-3">
+                            <img 
+                              src={rev.userAvatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80'} 
+                              alt={rev.userName} 
+                              className="w-10 h-10 rounded-full object-cover border border-amber-500/30"
+                            />
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <h4 className="font-bold text-xs text-zinc-900 dark:text-zinc-100">{rev.userName}</h4>
+                                {stage && (
+                                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-400 font-medium">
+                                    {stage}
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-[10px] text-zinc-500">{new Date(rev.createdAt).toLocaleDateString('ar-EG')}</span>
+                            </div>
+                          </div>
+
+                          {/* Star Rating Display */}
+                          <div className="flex items-center gap-1 bg-slate-100 dark:bg-zinc-950/80 px-2.5 py-1 rounded-xl border border-zinc-200 dark:border-zinc-800">
+                            <div className="flex text-amber-500 text-xs">
+                              {[1, 2, 3, 4, 5].map((s) => (
+                                <span key={s} className={s <= rev.rating ? 'text-amber-500' : 'text-zinc-300 dark:text-zinc-700'}>★</span>
+                              ))}
+                            </div>
+                            <span className="font-bold text-xs text-amber-700 dark:text-amber-300 font-mono mr-1">{rev.rating}</span>
+                          </div>
+                        </div>
+
+                        {/* Material Reference Badge */}
+                        <div className="mb-3 flex items-center gap-1.5 text-[11px] text-amber-700 dark:text-amber-400/90 bg-amber-500/10 dark:bg-amber-500/5 px-2.5 py-1 rounded-lg border border-amber-500/20 w-fit">
+                          <span>المادة:</span>
+                          <span className="font-bold">{rev.itemTitle || `مادة #${rev.itemId}`}</span>
+                          <span className="text-zinc-500">({rev.itemType === 'book' ? 'كتاب/منهج' : rev.itemType === 'video' ? 'شرح فيديو' : rev.itemType === 'summary' ? 'ملخص/خريطة' : 'مقال'})</span>
+                        </div>
+
+                        {/* Review Comment Text */}
+                        <p className="text-xs text-zinc-800 dark:text-zinc-200 leading-relaxed bg-slate-50 dark:bg-zinc-950/50 p-3 rounded-2xl border border-zinc-200 dark:border-zinc-800/60 mb-4 whitespace-pre-wrap">
+                          {rev.comment}
+                        </p>
+                      </div>
+
+                      {/* Footer Actions: Approve / Delete */}
+                      <div className="flex items-center justify-between pt-3 border-t border-zinc-200 dark:border-zinc-800/80">
+                        <div>
+                          {isApp ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700 dark:text-amber-400 bg-amber-500/10 px-2.5 py-1 rounded-full border border-amber-500/30">
+                              <Star className="w-3 h-3 fill-amber-500" />
+                              <span>معتمد من الإدارة ⭐</span>
+                            </span>
+                          ) : (
+                            <span className="text-[11px] text-zinc-500">بانتظار الاعتماد</span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={async () => {
+                              const res = await toggleReviewApproval(rev.id, adminToken);
+                              if (res.unauthorized || res.forbidden) {
+                                handleAdminAuthExpired();
+                                return;
+                              }
+                              if (!res.ok) {
+                                setAdminToastMessage({ title: res.error || 'تعذر تحديث حالة المراجعة', isError: true });
+                                return;
+                              }
+                              invalidateBootstrapCache();
+                              setAllReviews(getAllReviews());
+                            }}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                              isApp
+                                ? 'bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700'
+                                : 'bg-amber-500 hover:bg-amber-400 text-zinc-950 font-black shadow-md shadow-amber-500/20'
+                            }`}
+                          >
+                            <Star className={`w-3.5 h-3.5 ${isApp ? '' : 'fill-zinc-950'}`} />
+                            <span>{isApp ? 'إلغاء الاعتماد' : 'اعتماد المراجعة ⭐'}</span>
+                          </button>
+
+                          <button
+                            onClick={async () => {
+                              const res = await deleteReview(rev.id, adminToken);
+                              if (res.unauthorized || res.forbidden) {
+                                handleAdminAuthExpired();
+                                return;
+                              }
+                              if (!res.ok) {
+                                setAdminToastMessage({ title: res.error || 'تعذر حذف المراجعة من الخادم', isError: true });
+                                return;
+                              }
+                              invalidateBootstrapCache();
+                              setAllReviews(getAllReviews());
+                              setAdminToastMessage({ title: 'تم حذف المراجعة نهائياً من قاعدة البيانات' });
+                            }}
+                            className="p-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-zinc-200 dark:border-zinc-700 transition"
+                            title="حذف المراجعة"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ------------------------------------------------------------------- */}
+        {/* 6.5 EXAMS MANAGEMENT FOR STUDENTS */}
+        {/* ------------------------------------------------------------------- */}
+        {activeAdminTab === 'exams' && (
+          <div className="space-y-4 animate-in fade-in">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+              <button
+                onClick={() => { resetExamForm(); setShowExamModal(true); }}
+                className="px-4 py-2.5 bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400 text-zinc-950 font-bold text-xs rounded-2xl shadow-md hover:brightness-110 transition flex items-center gap-2 active:scale-95"
+              >
+                <Plus className="w-4 h-4" />
+                <span>إضافة امتحان أو اختبار إلكتروني جديد للطلاب 🎓</span>
+              </button>
+
+              <div className="relative w-full sm:w-64">
+                <input
+                  type="text"
+                  placeholder="بحث في الامتحانات..."
+                  value={tableSearch}
+                  onChange={(e) => setTableSearch(e.target.value)}
+                  className="w-full py-2 pr-9 pl-3 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                />
+                <Search className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2" />
+              </div>
+            </div>
+
+            {/* Exams Table */}
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl overflow-hidden shadow-sm dark:shadow-xl">
+              <div className="overflow-x-auto">
+                <table className="w-full text-right text-xs">
+                  <thead className="bg-slate-100 dark:bg-zinc-950 text-zinc-600 dark:text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
+                    <tr>
+                      <th className="py-3 px-4">عنوان الامتحان</th>
+                      <th className="py-3 px-4">المادة</th>
+                      <th className="py-3 px-4">المرحلة الدراسية</th>
+                      <th className="py-3 px-4">المدة</th>
+                      <th className="py-3 px-4">عدد الأسئلة</th>
+                      <th className="py-3 px-4">الدرجة الكلية</th>
+                      <th className="py-3 px-4">مستوى الصعوبة</th>
+                      <th className="py-3 px-4 text-center">إجراءات</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800/60">
+                    {studentExams
+                      .filter(e => {
+                        if (!tableSearch.trim()) return true;
+                        const q = tableSearch.trim().toLowerCase();
+                        return e.title.toLowerCase().includes(q) || e.subject.toLowerCase().includes(q) || e.grade.toLowerCase().includes(q);
+                      })
+                      .map((exam) => (
+                        <tr key={exam.id} className="hover:bg-slate-50 dark:hover:bg-zinc-800/30 transition">
+                          <td className="py-3 px-4 font-bold text-zinc-900 dark:text-zinc-100">
+                            <span>{exam.title}</span>
+                            <span className="text-[10px] text-zinc-500 block truncate max-w-xs">{exam.description}</span>
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-amber-500/20 text-amber-800 dark:text-amber-300">
+                              {exam.subject}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-zinc-700 dark:text-zinc-300 font-semibold">{exam.grade}</td>
+                          <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">{exam.durationMinutes} دقيقة</td>
+                          <td className="py-3 px-4 text-zinc-800 dark:text-zinc-200 font-bold">{exam.questions.length} أسئلة</td>
+                          <td className="py-3 px-4 text-emerald-700 dark:text-emerald-400 font-bold">{exam.totalMarks} (نجاح {exam.passMarks})</td>
+                          <td className="py-3 px-4">
+                            <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300">
+                              {exam.difficulty}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            <div className="flex items-center justify-center gap-2">
+                              <button
+                                onClick={() => handleDeleteExam(exam.id)}
+                                className="p-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 transition"
+                                title="حذف الامتحان بالكامل"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ------------------------------------------------------------------- */}
+        {/* 7. SECURITY & PASSWORD HUB (تحسين صفحة الأمان) */}
+        {/* ------------------------------------------------------------------- */}
+        {activeAdminTab === 'security' && (
+          <div className="space-y-6 animate-in fade-in">
+            {/* Top Security Status Banner */}
+            <div className="bg-white dark:bg-zinc-900 border border-amber-500/30 rounded-3xl p-6 shadow-sm dark:shadow-none">
+              <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+                <div className="flex items-center gap-4">
+                  <div className="w-14 h-14 rounded-2xl bg-amber-500/15 dark:bg-amber-500/20 border border-amber-500/40 text-amber-600 dark:text-amber-400 flex items-center justify-center">
+                    <ShieldCheck className="w-8 h-8" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-amber-800 dark:text-amber-200">حالة جدار الحماية ونظام الأمان المتقدم</h3>
+                    <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
+                      النظام محمي بجلسات مشفرة، تقييد محاولات الدخول الخاطئة (Brute-force protection)، وتسجيل تدقيقي لكافة العمليات.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="px-3 py-1.5 rounded-xl bg-emerald-500/15 dark:bg-emerald-500/20 border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 text-xs font-bold">
+                    🛡️ الجدار الناري: مُفعل 100%
+                  </span>
+                  <span className="px-3 py-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 text-xs font-bold">
+                    تشفير الجلسات: نشط
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              
+              {/* CHANGE ADMIN PASSWORD FORM */}
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 space-y-4 shadow-sm dark:shadow-none">
+                <h4 className="font-bold text-sm text-amber-700 dark:text-amber-300 flex items-center gap-2">
+                  <KeyRound className="w-4 h-4" />
+                  <span>تغيير كلمة مرور المدير (الأدمن)</span>
+                </h4>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400">
+                  قم بتعيين كلمة مرور قوية تتضمن حروفاً وأرقاماً لمنع أي وصول غير مصرح به.
+                </p>
+
+                {pwdMsg && (
+                  <div className={`p-3 rounded-2xl text-xs flex items-center gap-2 ${
+                    pwdMsg.type === 'success' 
+                      ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300' 
+                      : 'bg-rose-500/10 border border-rose-500/30 text-rose-700 dark:text-rose-300'
+                  }`}>
+                    {pwdMsg.type === 'success' ? <CheckCircle className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
+                    <span>{pwdMsg.text}</span>
+                  </div>
+                )}
+
+                <form onSubmit={handleChangeAdminPassword} className="space-y-3.5">
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">كلمة المرور الحالية</label>
+                    <input
+                      type="password"
+                      required
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                      placeholder="أدخل كلمة المرور الحالية"
+                      className="w-full py-2.5 px-3 bg-slate-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">كلمة المرور الجديدة</label>
+                    <input
+                      type="password"
+                      required
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="كلمة مرور جديدة (6 خانات فأكثر)"
+                      className="w-full py-2.5 px-3 bg-slate-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">تأكيد كلمة المرور الجديدة</label>
+                    <input
+                      type="password"
+                      required
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      placeholder="أعد إدخال كلمة المرور للتأكيد"
+                      className="w-full py-2.5 px-3 bg-slate-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={changingPwd}
+                    className="w-full py-3 bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400 text-zinc-950 font-bold text-xs rounded-xl shadow-lg hover:brightness-110 transition disabled:opacity-50"
+                  >
+                    {changingPwd ? 'جاري الحفظ والتدقيق الأمني...' : 'تأكيد وحفظ كلمة المرور الجديدة 🔐'}
+                  </button>
+                </form>
+              </div>
+
+              {/* SYSTEM HEALTH & BACKUP */}
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 space-y-4 flex flex-col justify-between shadow-sm dark:shadow-none">
+                <div>
+                  <h4 className="font-bold text-sm text-amber-700 dark:text-amber-300 flex items-center gap-2">
+                    <Database className="w-4 h-4" />
+                    <span>سلامة البيانات والنسخ الاحتياطي</span>
+                  </h4>
+                  <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
+                    احرص على أخذ نسخة احتياطية بشكل دوري لحماية بيانات الطلاب والكتب.
+                  </p>
+
+                  <div className="mt-4 space-y-2.5">
+                    <div className="flex justify-between items-center p-3 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 text-xs">
+                      <span className="text-zinc-600 dark:text-zinc-400">قاعدة البيانات:</span>
+                      <span className="font-bold text-amber-700 dark:text-amber-400">{stats?.analytics.database || 'Local Store'}</span>
+                    </div>
+                    <div className="flex justify-between items-center p-3 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 text-xs">
+                      <span className="text-zinc-600 dark:text-zinc-400">مجموع السجلات:</span>
+                      <span className="font-bold text-zinc-900 dark:text-zinc-200">
+                        {books.length + summaries.length + videos.length + articles.length + users.length} سجل
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center p-3 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 text-xs">
+                      <span className="text-zinc-600 dark:text-zinc-400">حالة السيرفر:</span>
+                      <span className="font-bold text-emerald-600 dark:text-emerald-400">يعمل بكفاءة 100%</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-4 border-t border-zinc-200 dark:border-zinc-800 flex flex-col gap-2">
+                  <button
+                    type="button"
+                    onClick={handleDownloadBackup}
+                    className="w-full text-center py-2.5 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-amber-700 dark:text-amber-300 text-xs font-bold rounded-xl border border-zinc-200 dark:border-zinc-700 transition flex items-center justify-center gap-2"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>تنزيل نسخة احتياطية من قاعدة البيانات (.json)</span>
+                  </button>
+                </div>
+              </div>
+
+            </div>
+
+            {/* AUDIT LOGS TABLE */}
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 space-y-4 shadow-sm dark:shadow-none">
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+                <div>
+                  <h4 className="font-bold text-sm text-amber-800 dark:text-amber-200 flex items-center gap-2">
+                    <ShieldAlert className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                    <span>سجل الرقابة الأمنية والعمليات الموثقة (Audit Security Logs)</span>
+                  </h4>
+                  <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5">
+                    كل تسجيل دخول، تعديل، حذف، أو محاولة مشبوهة يتم تسجيلها تلقائياً مع عنوان IP والتوقيت.
+                  </p>
+                </div>
+
+                <button
+                  onClick={handleClearLogs}
+                  className="px-3 py-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-rose-500/20 text-zinc-600 dark:text-zinc-400 hover:text-rose-600 dark:hover:text-rose-300 text-xs font-semibold border border-zinc-200 dark:border-zinc-700 transition"
+                >
+                  تصفير السجلات 🔄
+                </button>
+              </div>
+
+              <div className="overflow-x-auto border border-zinc-200 dark:border-zinc-800 rounded-2xl">
+                <table className="w-full text-right text-xs">
+                  <thead className="bg-slate-100 dark:bg-zinc-950 text-zinc-600 dark:text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
+                    <tr>
+                      <th className="py-2.5 px-3">الحالة</th>
+                      <th className="py-2.5 px-3">المستخدم / الفاعل</th>
+                      <th className="py-2.5 px-3">تفاصيل العملية</th>
+                      <th className="py-2.5 px-3">عنوان IP</th>
+                      <th className="py-2.5 px-3">التوقيت والتاريخ</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800/60">
+                    {logs.map((log) => (
+                      <tr key={log.id} className="hover:bg-slate-50 dark:hover:bg-zinc-800/30 transition">
+                        <td className="py-2.5 px-3">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            log.status === 'success' 
+                              ? 'bg-emerald-500/15 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300' 
+                              : log.status === 'warning' 
+                              ? 'bg-amber-500/15 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300' 
+                              : 'bg-rose-500/15 dark:bg-rose-500/20 text-rose-700 dark:text-rose-300'
+                          }`}>
+                            {log.status === 'success' ? 'نجاح ✅' : log.status === 'warning' ? 'تنبيه ⚠️' : 'خطر 🛑'}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 font-bold text-zinc-900 dark:text-zinc-200">{log.user}</td>
+                        <td className="py-2.5 px-3 text-zinc-700 dark:text-zinc-300">{log.details}</td>
+                        <td className="py-2.5 px-3 text-zinc-500 font-mono text-[11px]">{log.ip}</td>
+                        <td className="py-2.5 px-3 text-zinc-600 dark:text-zinc-400 text-[11px]">
+                          {new Date(log.timestamp).toLocaleString('ar-EG')}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+          </div>
+        )}
+
+      </main>
+
+      {/* ------------------------------------------------------------------- */}
+      {/* MODAL: ADD / EDIT BOOK */}
+      {/* ------------------------------------------------------------------- */}
+      {showBookModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+          <div className="relative w-full max-w-xl bg-white dark:bg-zinc-900 border border-amber-500/40 rounded-3xl p-6 text-right max-h-[90vh] overflow-y-auto shadow-2xl">
+            <button
+              type="button"
+              disabled={isPublishingBook}
+              onClick={() => setShowBookModal(false)}
+              className="absolute top-5 left-5 p-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 disabled:opacity-40"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <h3 className="text-lg font-bold text-amber-800 dark:text-amber-200 mb-4">
+              {editingBookId ? 'تعديل بيانات الكتاب' : 'إضافة كتاب أو منهج دراسي جديد'}
+            </h3>
+
+            <form onSubmit={handleSaveBook} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">عنوان الكتاب</label>
+                <input
+                  type="text"
+                  required
+                  disabled={isPublishingBook}
+                  value={bookTitle}
+                  onChange={(e) => setBookTitle(e.target.value)}
+                  placeholder="مثال: كتاب الفيزياء الحديثة 2026"
+                  className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">التصنيف</label>
+                  <select
+                    disabled={isPublishingBook}
+                    value={bookCategory}
+                    onChange={(e) => setBookCategory(e.target.value)}
+                    className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                  >
+                    <option value="كتب الطلاب">كتب الطلاب</option>
+                    <option value="برمجة">برمجة</option>
+                    <option value="تقنية">تقنية</option>
+                    <option value="علوم">علوم</option>
+                    <option value="أدب">أدب</option>
+                    <option value="تعليم">تعليم</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">المرحلة / الصف</label>
+                  <input
+                    type="text"
+                    disabled={isPublishingBook}
+                    value={bookGrade}
+                    onChange={(e) => setBookGrade(e.target.value)}
+                    placeholder="مثال: الصف الثالث الثانوي"
+                    className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+              </div>
+
+              {/* PDF File Picker (Local upload from device or URL) */}
+              <div className="space-y-1.5 p-3 rounded-2xl bg-slate-50 dark:bg-zinc-950/80 border border-zinc-200 dark:border-zinc-800">
+                <label className="block text-xs font-bold text-amber-700 dark:text-amber-300">
+                  ملف الكتاب PDF (اختر ملفاً من جهازك أو أدخل الرابط) 📄
+                </label>
+                
+                <div className="flex flex-col sm:flex-row items-center gap-2">
+                  <label
+                    htmlFor="adminLocalPdfInput"
+                    className="w-full sm:flex-1 py-3 px-4 bg-white dark:bg-zinc-900 border-2 border-dashed border-amber-500/40 hover:border-amber-500 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition text-xs font-bold text-amber-700 dark:text-amber-300 group"
+                  >
+                    <FileUp className="w-4 h-4 text-amber-600 dark:text-amber-400 group-hover:scale-110 transition" />
+                    <span>{bookPdfFileName ? `تم اختيار: ${bookPdfFileName} (${bookPdfSize})` : 'اختر ملف PDF من جهازك'}</span>
+                  </label>
+                  <input
+                    id="adminLocalPdfInput"
+                    type="file"
+                    accept="application/pdf"
+                    disabled={isPublishingBook}
+                    onChange={handlePdfFileChange}
+                    className="hidden"
+                  />
+                </div>
+
+                <div className="relative">
+                  <input
+                    type="text"
+                    disabled={isPublishingBook}
+                    value={bookFilePath}
+                    onChange={(e) => {
+                      setSelectedPdfFile(null);
+                      setBookPdfFileName('');
+                      setBookFilePath(e.target.value);
+                    }}
+                    placeholder="أو أدخل رابط PDF مباشر (URL)"
+                    className="w-full py-2 px-3 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                  />
+                  {(selectedPdfFile || bookFilePath) && (
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">
+                      جاهز ✓
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Cover Image Picker (Local upload from device or URL) */}
+              <div className="space-y-1.5 p-3 rounded-2xl bg-slate-50 dark:bg-zinc-950/80 border border-zinc-200 dark:border-zinc-800">
+                <label className="block text-xs font-bold text-amber-700 dark:text-amber-300">
+                  صورة غلاف الكتاب (اختر من جهازك أو ضع رابطاً) 🖼️
+                </label>
+
+                <div className="flex items-center gap-3">
+                  <label
+                    htmlFor="adminLocalCoverInput"
+                    className="flex-1 py-2.5 px-3 bg-white dark:bg-zinc-900 border-2 border-dashed border-zinc-300 dark:border-zinc-700 hover:border-amber-500 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition text-xs font-semibold text-zinc-700 dark:text-zinc-300 group"
+                  >
+                    <Upload className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 group-hover:scale-110 transition" />
+                    <span>{bookCoverPreview ? 'تغيير صورة الغلاف من جهازك' : 'رفع صورة غلاف من جهازك'}</span>
+                  </label>
+                  <input
+                    id="adminLocalCoverInput"
+                    type="file"
+                    accept="image/*"
+                    disabled={isPublishingBook}
+                    onChange={handleCoverFileChange}
+                    className="hidden"
+                  />
+
+                  {bookCoverPreview && (
+                    <img 
+                      src={bookCoverPreview} 
+                      alt="Cover Preview" 
+                      className="w-10 h-14 object-cover rounded-lg border border-amber-500/50 shadow flex-shrink-0" 
+                    />
+                  )}
+                </div>
+
+                <input
+                  type="text"
+                  disabled={isPublishingBook}
+                  value={bookCoverPath}
+                  onChange={(e) => {
+                    setBookCoverPath(e.target.value);
+                    setBookCoverPreview(e.target.value);
+                  }}
+                  placeholder="أو أدخل رابط صورة الغلاف (URL)"
+                  className="w-full py-2 px-3 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 p-3 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800">
+                <input
+                  type="checkbox"
+                  id="studentBookCheck"
+                  disabled={isPublishingBook}
+                  checked={bookIsStudent === 1}
+                  onChange={(e) => setBookIsStudent(e.target.checked ? 1 : 0)}
+                  className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500"
+                />
+                <label htmlFor="studentBookCheck" className="text-xs font-semibold text-zinc-800 dark:text-zinc-200 cursor-pointer">
+                  تحديد هذا الكتاب كـ "منهج مدرسي للطلاب" 🎓
+                </label>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">وصف مختصر للكتاب</label>
+                <textarea
+                  rows={3}
+                  disabled={isPublishingBook}
+                  value={bookDescription}
+                  onChange={(e) => setBookDescription(e.target.value)}
+                  placeholder="اكتب نبذة عن محتويات الكتاب وأهميته..."
+                  className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              {/* Error Alert */}
+              {bookPublishError && (
+                <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-700 dark:text-rose-300 text-xs font-bold flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                  <span>{bookPublishError}</span>
+                </div>
+              )}
+
+              {/* Upload & Publish Progress Bar */}
+              {(isPublishingBook || bookPublishProgress > 0) && (
+                <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 space-y-2 animate-in fade-in">
+                  <div className="flex items-center justify-between text-xs font-bold">
+                    <span className="text-amber-800 dark:text-amber-200 flex items-center gap-1.5">
+                      {bookPublishProgress === 100 ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                      ) : (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-500" />
+                      )}
+                      <span>{bookPublishStage || 'جاري النشر...'}</span>
+                    </span>
+                    <span className="font-mono text-amber-700 dark:text-amber-300">{bookPublishProgress}%</span>
+                  </div>
+                  <div className="w-full h-2.5 bg-zinc-200 dark:bg-zinc-800 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-300 ${
+                        bookPublishProgress === 100
+                          ? 'bg-gradient-to-r from-emerald-500 to-emerald-400'
+                          : 'bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400'
+                      }`}
+                      style={{ width: `${bookPublishProgress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end pt-2">
+                <button
+                  type="submit"
+                  disabled={isPublishingBook}
+                  className="px-6 py-2.5 bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400 text-zinc-950 font-bold text-xs rounded-xl hover:brightness-110 transition shadow-lg shadow-amber-500/20 active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {isPublishingBook ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>جاري نشر الكتاب ({bookPublishProgress}%)...</span>
+                    </>
+                  ) : (
+                    <span>حفظ الكتاب وإتاحته للطلاب 💾</span>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------------- */}
+      {/* MODAL: ADD / EDIT SUMMARY */}
+      {/* ------------------------------------------------------------------- */}
+      {showSummaryModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 dark:bg-black/80 backdrop-blur-md">
+          <div className="relative w-full max-w-lg bg-white dark:bg-zinc-900 border border-amber-500/40 rounded-3xl p-6 text-right shadow-2xl">
+            <button
+              type="button"
+              onClick={() => { resetSummaryForm(); setShowSummaryModal(false); }}
+              className="absolute top-5 left-5 p-2 rounded-xl bg-slate-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <h3 className="text-lg font-bold text-amber-700 dark:text-amber-200 mb-4">
+              {editingSummaryId ? 'تعديل الملخص / الخريطة الذهنية' : 'إضافة ملخص بصري / خريطة ذهنية'}
+            </h3>
+
+            <form onSubmit={handleSaveSummary} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">عنوان الملخص</label>
+                <input
+                  type="text"
+                  required
+                  value={summaryTitle}
+                  onChange={(e) => setSummaryTitle(e.target.value)}
+                  placeholder="مثال: خريطة ذهنية لقواعد النحو والإعراب"
+                  className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">التصنيف</label>
+                <input
+                  type="text"
+                  value={summaryCategory}
+                  onChange={(e) => setSummaryCategory(e.target.value)}
+                  placeholder="مثال: لغة عربية، برمجة، فيزياء..."
+                  className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              {/* Summary Image Picker: Device Upload or Direct URL */}
+              <div className="space-y-2 p-3 rounded-2xl bg-slate-50 dark:bg-zinc-950/80 border border-slate-200 dark:border-zinc-800">
+                <label className="block text-xs font-bold text-amber-700 dark:text-amber-300">
+                  صورة الملخص أو الخريطة الذهنية (رفع من جهازك أو وضع رابط) 🖼️
+                </label>
+
+                <div className="flex items-center gap-3">
+                  <label
+                    htmlFor="adminLocalSummaryInput"
+                    className="flex-1 py-2.5 px-3 bg-white dark:bg-zinc-900 border-2 border-dashed border-slate-300 dark:border-zinc-700 hover:border-amber-500 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition text-xs font-semibold text-zinc-700 dark:text-zinc-300 group"
+                  >
+                    <Upload className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 group-hover:scale-110 transition" />
+                    <span>{summaryImageFilePreview ? 'تغيير صورة الملخص من جهازك' : 'رفع صورة ملخص من جهازك'}</span>
+                  </label>
+                  <input
+                    id="adminLocalSummaryInput"
+                    type="file"
+                    accept="image/*"
+                    onChange={handleSummaryFileChange}
+                    className="hidden"
+                  />
+
+                  {summaryImageFilePreview && (
+                    <img 
+                      src={summaryImageFilePreview} 
+                      alt="Summary Preview" 
+                      className="w-12 h-12 object-cover rounded-xl border border-amber-500/50 shadow flex-shrink-0" 
+                    />
+                  )}
+                </div>
+
+                <input
+                  type="text"
+                  required
+                  value={summaryImagePath}
+                  onChange={(e) => {
+                    setSummaryImagePath(e.target.value);
+                    setSummaryImageFilePreview(e.target.value);
+                  }}
+                  placeholder="أو ضع رابط صورة مباشر (URL)..."
+                  className="w-full py-2 px-3 bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              {summaryFormError && (
+                <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-700 dark:text-rose-300 text-xs font-bold flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                  <span>{summaryFormError}</span>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={isSavingContent}
+                className="w-full py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-xl hover:brightness-110 transition shadow-md disabled:opacity-60"
+              >
+                {isSavingContent ? 'جاري الحفظ...' : (editingSummaryId ? 'تحديث الملخص 🖼️' : 'حفظ الملخص 🖼️')}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------------- */}
+      {/* MODAL: ADD / EDIT VIDEO */}
+      {/* ------------------------------------------------------------------- */}
+      {showVideoModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 dark:bg-black/80 backdrop-blur-md">
+          <div className="relative w-full max-w-lg bg-white dark:bg-zinc-900 border border-amber-500/40 rounded-3xl p-6 text-right shadow-2xl">
+            <button
+              type="button"
+              onClick={() => { resetVideoForm(); setShowVideoModal(false); }}
+              className="absolute top-5 left-5 p-2 rounded-xl bg-slate-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <h3 className="text-lg font-bold text-amber-700 dark:text-amber-200 mb-4">
+              {editingVideoId ? 'تعديل مقطع الفيديو التعليمي' : 'إضافة مقطع فيديو تعليمي'}
+            </h3>
+
+            <form onSubmit={handleSaveVideo} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">عنوان الفيديو</label>
+                <input
+                  type="text"
+                  required
+                  value={videoTitle}
+                  onChange={(e) => setVideoTitle(e.target.value)}
+                  placeholder="مثال: شرح درس التفاضل والتكامل كاملاً"
+                  className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">رابط الفيديو (YouTube)</label>
+                <input
+                  type="url"
+                  required
+                  value={videoUrl}
+                  onChange={(e) => setVideoUrl(e.target.value)}
+                  placeholder="https://www.youtube.com/watch?v=..."
+                  className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">التصنيف</label>
+                  <input
+                    type="text"
+                    value={videoCategory}
+                    onChange={(e) => setVideoCategory(e.target.value)}
+                    className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">القناة</label>
+                  <input
+                    type="text"
+                    value={videoChannel}
+                    onChange={(e) => setVideoChannel(e.target.value)}
+                    className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">المدة</label>
+                  <input
+                    type="text"
+                    value={videoDuration}
+                    onChange={(e) => setVideoDuration(e.target.value)}
+                    className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100"
+                  />
+                </div>
+              </div>
+
+              {videoFormError && (
+                <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-700 dark:text-rose-300 text-xs font-bold flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                  <span>{videoFormError}</span>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={isSavingContent}
+                className="w-full py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-xl hover:brightness-110 transition shadow-md disabled:opacity-60"
+              >
+                {isSavingContent ? 'جاري الحفظ...' : (editingVideoId ? 'تحديث الفيديو 🎬' : 'حفظ الفيديو 🎬')}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------------- */}
+      {/* MODAL: ADD / EDIT ARTICLE */}
+      {/* ------------------------------------------------------------------- */}
+      {showArticleModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 dark:bg-black/85 backdrop-blur-md">
+          <div className="relative w-full max-w-2xl bg-white dark:bg-zinc-900 border border-amber-500/40 rounded-3xl p-6 text-right max-h-[90vh] overflow-y-auto shadow-2xl">
+            <button
+              type="button"
+              onClick={() => { resetArticleForm(); setShowArticleModal(false); }}
+              className="absolute top-5 left-5 p-2 rounded-xl bg-slate-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <h3 className="text-lg font-bold text-amber-700 dark:text-amber-200 mb-4">
+              {editingArticleId ? 'تعديل المقال' : 'نشر مقال علمي جديد'}
+            </h3>
+
+            <form onSubmit={handleSaveArticle} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">عنوان المقال</label>
+                <input
+                  type="text"
+                  required
+                  value={articleTitle}
+                  onChange={(e) => setArticleTitle(e.target.value)}
+                  placeholder="مثال: استراتيجيات التعلم السريع والتفوق الدراسي"
+                  className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">اسم الكاتب</label>
+                  <input
+                    type="text"
+                    value={articleAuthor}
+                    onChange={(e) => setArticleAuthor(e.target.value)}
+                    className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">مدة القراءة التقديرية</label>
+                  <input
+                    type="text"
+                    value={articleReadTime}
+                    onChange={(e) => setArticleReadTime(e.target.value)}
+                    className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100"
+                  />
+                </div>
+              </div>
+
+              {/* Article Image: Upload from Device or Direct URL */}
+              <div className="space-y-2 p-3 rounded-2xl bg-slate-50 dark:bg-zinc-950/80 border border-slate-200 dark:border-zinc-800">
+                <label className="block text-xs font-bold text-amber-700 dark:text-amber-300">
+                  صورة غلاف المقال (رفع من جهازك أو وضع رابط صورة) 🖼️
+                </label>
+
+                <div className="flex items-center gap-3">
+                  <label
+                    htmlFor="adminLocalArticleInput"
+                    className="flex-1 py-2.5 px-3 bg-white dark:bg-zinc-900 border-2 border-dashed border-slate-300 dark:border-zinc-700 hover:border-amber-500 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition text-xs font-semibold text-zinc-700 dark:text-zinc-300 group"
+                  >
+                    <Upload className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 group-hover:scale-110 transition" />
+                    <span>{articleImageFilePreview ? 'تغيير صورة المقال من جهازك' : 'رفع صورة المقال من جهازك'}</span>
+                  </label>
+                  <input
+                    id="adminLocalArticleInput"
+                    type="file"
+                    accept="image/*"
+                    onChange={handleArticleFileChange}
+                    className="hidden"
+                  />
+
+                  {articleImageFilePreview && (
+                    <img 
+                      src={articleImageFilePreview} 
+                      alt="Article Preview" 
+                      className="w-16 h-12 object-cover rounded-xl border border-amber-500/50 shadow flex-shrink-0" 
+                    />
+                  )}
+                </div>
+
+                <input
+                  type="text"
+                  value={articleImagePath}
+                  onChange={(e) => {
+                    setArticleImagePath(e.target.value);
+                    setArticleImageFilePreview(e.target.value);
+                  }}
+                  placeholder="أو أدخل رابط صورة مباشر (URL)..."
+                  className="w-full py-2 px-3 bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
+                  نص ومحتوى المقال (اكتب الشرح والملاحظات بالتفصيل) ✍️
+                </label>
+                <textarea
+                  rows={8}
+                  required
+                  value={articleContent}
+                  onChange={(e) => setArticleContent(e.target.value)}
+                  placeholder="اكتب المقال هنا باستخدام تنسيق الماركداون: ## للعناوين، **للنص العريض**..."
+                  className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500 font-mono"
+                />
+              </div>
+
+              {articleFormError && (
+                <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-700 dark:text-rose-300 text-xs font-bold flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                  <span>{articleFormError}</span>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={isSavingContent}
+                className="w-full py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-xl hover:brightness-110 transition shadow-md disabled:opacity-60"
+              >
+                {isSavingContent ? 'جاري النشر...' : (editingArticleId ? 'تحديث المقال 📝' : 'حفظ ونشر المقال 📝')}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------------- */}
+      {/* MODAL: ADD / EDIT STUDENT EXAM */}
+      {/* ------------------------------------------------------------------- */}
+      {showExamModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 dark:bg-black/85 backdrop-blur-md">
+          <div className="relative w-full max-w-3xl bg-white dark:bg-zinc-900 border border-amber-500/40 rounded-3xl p-6 text-right max-h-[90vh] overflow-y-auto shadow-2xl">
+            <button
+              type="button"
+              onClick={() => { resetExamForm(); setShowExamModal(false); }}
+              className="absolute top-5 left-5 p-2 rounded-xl bg-slate-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="border-b border-slate-200 dark:border-zinc-800 pb-3 mb-5">
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/15 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300">
+                منظومة الاختبارات الذكية
+              </span>
+              <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mt-1">
+                إضافة امتحان إلكتروني جديد للطلاب 🎓
+              </h3>
+              <p className="text-xs text-zinc-600 dark:text-zinc-400">
+                أدخل بيانات الامتحان وأسئلته، وسيتاح فوراً في لوحة الطالب وبنك الامتحانات مع التصحيح التلقائي.
+              </p>
+            </div>
+
+            <form onSubmit={handleSaveExam} className="space-y-4">
+              {examFormError && (
+                <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-500/10 border border-rose-300 dark:border-rose-500/30 text-rose-700 dark:text-rose-300 text-xs font-bold flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  <span>{examFormError}</span>
+                </div>
+              )}
+              <div>
+                <label className="block text-xs font-bold text-zinc-700 dark:text-zinc-300 mb-1">عنوان الامتحان</label>
+                <input
+                  type="text"
+                  required
+                  value={examTitle}
+                  onChange={(e) => setExamTitle(e.target.value)}
+                  placeholder="مثال: امتحان الأحياء والوراثة - الصف الثالث الثانوي 2026"
+                  className="w-full py-2.5 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">المادة</label>
+                  <select
+                    value={examSubject}
+                    onChange={(e) => setExamSubject(e.target.value)}
+                    className="w-full py-2.5 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                  >
+                    <option value="كيمياء">كيمياء</option>
+                    <option value="فيزياء">فيزياء</option>
+                    <option value="أحياء">أحياء</option>
+                    <option value="علوم">علوم</option>
+                    <option value="لغة عربية">لغة عربية</option>
+                    <option value="رياضيات">رياضيات</option>
+                    <option value="لغة إنجليزية">لغة إنجليزية</option>
+                    <option value="جيولوجيا">جيولوجيا</option>
+                    <option value="دراسات">دراسات</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">الصف الدراسي</label>
+                  <select
+                    value={examGrade}
+                    onChange={(e) => setExamGrade(e.target.value)}
+                    className="w-full py-2.5 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                  >
+                    <option value="الصف الثالث الإعدادي">الصف الثالث الإعدادي</option>
+                    <option value="الصف الأول الثانوي">الصف الأول الثانوي</option>
+                    <option value="الصف الثاني الثانوي">الصف الثاني الثانوي</option>
+                    <option value="الصف الثالث الثانوي">الصف الثالث الثانوي</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">المدة (بالدقائق)</label>
+                  <input
+                    type="number"
+                    min="5"
+                    max="180"
+                    value={examDuration}
+                    onChange={(e) => setExamDuration(parseInt(e.target.value) || 20)}
+                    className="w-full py-2.5 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">الدرجة الكلية</label>
+                  <input
+                    type="number"
+                    value={examTotalMarks}
+                    onChange={(e) => setExamTotalMarks(parseInt(e.target.value) || 30)}
+                    className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">درجة النجاح</label>
+                  <input
+                    type="number"
+                    value={examPassMarks}
+                    onChange={(e) => setExamPassMarks(parseInt(e.target.value) || 18)}
+                    className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">مستوى الصعوبة</label>
+                  <select
+                    value={examDifficulty}
+                    onChange={(e) => setExamDifficulty(e.target.value as any)}
+                    className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100"
+                  >
+                    <option value="متوسط">متوسط</option>
+                    <option value="متقدم">متقدم</option>
+                    <option value="نموذج وزاري">نموذج وزاري</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">وصف موجز للامتحان</label>
+                <textarea
+                  rows={2}
+                  value={examDescription}
+                  onChange={(e) => setExamDescription(e.target.value)}
+                  placeholder="اكتب نبذة عن أبواب المنهج التي يغطيها الاختبار..."
+                  className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              {/* Target Audience Controls */}
+              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-amber-500/30 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-bold text-amber-700 dark:text-amber-300">
+                    🎯 الفئة الموجه لها الامتحان (متاح مجاناً للجميع أو مخصص)
+                  </label>
+                  <span className="text-[10px] text-zinc-500 dark:text-zinc-400">كل الامتحانات مجانية 100%</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setExamTargetScope('all')}
+                    className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
+                      examTargetScope === 'all'
+                        ? 'bg-amber-500 text-zinc-950 border-amber-400 font-extrabold'
+                        : 'bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+                    }`}
+                  >
+                    🌐 متاح مجاناً لكافة الطلاب
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setExamTargetScope('specific_students')}
+                    className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
+                      examTargetScope === 'specific_students'
+                        ? 'bg-amber-500 text-zinc-950 border-amber-400 font-extrabold'
+                        : 'bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+                    }`}
+                  >
+                    👤 مخصص لطلاب محددين بالبريد
+                  </button>
+                </div>
+
+                {examTargetScope === 'specific_students' && (
+                  <div className="p-3 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 space-y-2 text-xs">
+                    <span className="text-[11px] font-bold text-zinc-700 dark:text-zinc-300 block">
+                      اكتب البريد الإلكتروني للطلاب الموجه لهم الامتحان (مفصولاً بفواصل أو أسطر):
+                    </span>
+                    <textarea
+                      rows={2}
+                      value={examTargetStudentEmails}
+                      onChange={(e) => setExamTargetStudentEmails(e.target.value)}
+                      placeholder="student1@gmail.com, student2@example.com"
+                      className="w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 font-mono focus:outline-none focus:border-amber-500"
+                    />
+                    {users.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mt-1.5">
+                        <span className="text-[10px] text-zinc-500 block">إضافة سريعة من الطلاب المسجلين:</span>
+                        {users.slice(0, 6).map(u => (
+                          <button
+                            key={u.id}
+                            type="button"
+                            onClick={() => {
+                              if (!examTargetStudentEmails.includes(u.email)) {
+                                setExamTargetStudentEmails(prev => prev ? `${prev}, ${u.email}` : u.email);
+                              }
+                            }}
+                            className="px-2 py-0.5 rounded-lg bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-amber-700 dark:text-amber-300 text-[10px] transition"
+                          >
+                            + {u.name} ({u.email})
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Questions Section */}
+              <div className="border-t border-slate-200 dark:border-zinc-800 pt-4 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-amber-700 dark:text-amber-300 flex items-center gap-1.5">
+                    <span>أسئلة الامتحان ({examQuestions.length})</span>
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={handleAddQuestionToExam}
+                    className="px-3 py-1.5 bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-amber-700 dark:text-amber-300 text-xs font-bold rounded-xl border border-slate-300 dark:border-zinc-700 transition flex items-center gap-1"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>إضافة سؤال جديد</span>
+                  </button>
+                </div>
+
+                <div className="space-y-4 max-h-96 overflow-y-auto pr-1">
+                  {examQuestions.map((q, qIdx) => (
+                    <div key={qIdx} className="p-4 rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-amber-700 dark:text-amber-400">سؤال رقم {qIdx + 1}</span>
+                        {examQuestions.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveQuestionFromExam(qIdx)}
+                            className="text-xs text-rose-600 dark:text-rose-400 hover:text-rose-500 p-1"
+                            title="حذف هذا السؤال"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+
+                      <input
+                        type="text"
+                        required
+                        value={q.question}
+                        onChange={(e) => handleUpdateQuestionField(qIdx, 'question', e.target.value)}
+                        placeholder={`نص السؤال رقم ${qIdx + 1}...`}
+                        className="w-full py-2 px-3 bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500"
+                      />
+
+                      {/* Question Image Attachment (Optional) */}
+                      <div className="p-3 rounded-xl bg-white dark:bg-zinc-900/90 border border-slate-200 dark:border-zinc-800 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[11px] font-bold text-amber-700 dark:text-amber-300 flex items-center gap-1.5">
+                            <ImageIcon className="w-3.5 h-3.5" />
+                            <span>إرفاق صورة توضيحية للسؤال (اختياري - رسومات بيانية، دوائر، معادلات):</span>
+                          </label>
+                          {(q.imageUrl || q.image) && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                handleUpdateQuestionField(qIdx, 'imageUrl', '');
+                                handleUpdateQuestionField(qIdx, 'image', '');
+                              }}
+                              className="text-[10px] text-rose-600 dark:text-rose-400 hover:underline"
+                            >
+                              إزالة الصورة ✕
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="flex flex-col sm:flex-row items-center gap-2">
+                          <label className="flex-1 w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-dashed border-slate-300 dark:border-zinc-700 hover:border-amber-500 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                            <Upload className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                            <span>{(q.imageUrl || q.image) ? 'تغيير صورة السؤال من جهازك' : 'رفع صورة من جهازك'}</span>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  const reader = new FileReader();
+                                  reader.onload = () => {
+                                    const img = document.createElement('img');
+                                    img.onload = () => {
+                                      const maxDim = 600;
+                                      let w = img.width;
+                                      let h = img.height;
+                                      if (w > h && w > maxDim) {
+                                        h = Math.round((h * maxDim) / w);
+                                        w = maxDim;
+                                      } else if (h > maxDim) {
+                                        w = Math.round((w * maxDim) / h);
+                                        h = maxDim;
+                                      }
+                                      const canvas = document.createElement('canvas');
+                                      canvas.width = w;
+                                      canvas.height = h;
+                                      const ctx = canvas.getContext('2d');
+                                      if (ctx) {
+                                        ctx.drawImage(img, 0, 0, w, h);
+                                        const compressed = canvas.toDataURL('image/jpeg', 0.85);
+                                        handleUpdateQuestionField(qIdx, 'imageUrl', compressed);
+                                        handleUpdateQuestionField(qIdx, 'image', compressed);
+                                      }
+                                    };
+                                    img.src = reader.result as string;
+                                  };
+                                  reader.readAsDataURL(file);
+                                }
+                              }}
+                            />
+                          </label>
+
+                          <input
+                            type="text"
+                            value={q.imageUrl || q.image || ''}
+                            onChange={(e) => {
+                              handleUpdateQuestionField(qIdx, 'imageUrl', e.target.value);
+                              handleUpdateQuestionField(qIdx, 'image', e.target.value);
+                            }}
+                            placeholder="أو الصق رابط صورة مباشر (URL)..."
+                            className="flex-1 w-full py-2 px-3 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 font-mono focus:outline-none focus:border-amber-500"
+                          />
+                        </div>
+
+                        {(q.imageUrl || q.image) && (
+                          <div className="flex items-center gap-3 p-2 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-amber-500/30">
+                            <img
+                              src={q.imageUrl || q.image}
+                              alt={`معاينة رسم سؤال ${qIdx + 1}`}
+                              className="max-h-24 w-auto rounded-md object-contain border border-slate-200 dark:border-zinc-800"
+                            />
+                            <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold">
+                              تم إرفاق صورة السؤال بنجاح وتجهيزها للعرض للطلاب ✓
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {q.options.map((opt, optIdx) => (
+                          <div key={optIdx} className="flex items-center gap-2 bg-white dark:bg-zinc-900 p-2 rounded-xl border border-slate-300 dark:border-zinc-800">
+                            <input
+                              type="radio"
+                              name={`correct_${qIdx}`}
+                              checked={q.correctIndex === optIdx}
+                              onChange={() => handleUpdateQuestionField(qIdx, 'correctIndex', optIdx)}
+                              className="text-amber-500 focus:ring-amber-500"
+                              title="حدد هذا الخيار كإجابة صحيحة"
+                            />
+                            <input
+                              type="text"
+                              required
+                              value={opt}
+                              onChange={(e) => handleUpdateQuestionOption(qIdx, optIdx, e.target.value)}
+                              placeholder={`الخيار (${optIdx + 1})`}
+                              className="w-full bg-transparent text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none"
+                            />
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <input
+                          type="text"
+                          value={q.explanation}
+                          onChange={(e) => handleUpdateQuestionField(qIdx, 'explanation', e.target.value)}
+                          placeholder="الشرح والتفسير العلمي للإجابة الصحيحة..."
+                          className="w-full py-1.5 px-3 bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-700 dark:text-zinc-300"
+                        />
+                        <input
+                          type="text"
+                          value={q.topic}
+                          onChange={(e) => handleUpdateQuestionField(qIdx, 'topic', e.target.value)}
+                          placeholder="موضوع أو باب السؤال (مثال: الكيمياء الكهربية)..."
+                          className="w-full py-1.5 px-3 bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-zinc-700 dark:text-zinc-300"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end pt-3 border-t border-slate-200 dark:border-zinc-800">
+                <button
+                  type="submit"
+                  disabled={isSavingContent}
+                  className="px-6 py-2.5 bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400 text-zinc-950 font-bold text-xs rounded-xl hover:brightness-110 transition shadow-lg shadow-amber-500/20 active:scale-95 disabled:opacity-60"
+                >
+                  {isSavingContent ? 'جاري حفظ ونشر الامتحان...' : 'حفظ ونشر الامتحان للطلاب فوراً 🚀'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Receipt Image Preview Modal */}
+      {selectedReceiptPreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 dark:bg-black/90 backdrop-blur-md animate-in fade-in">
+          <div className="relative max-w-xl w-full bg-white dark:bg-zinc-950 border border-amber-500/40 rounded-3xl p-6 text-right shadow-2xl">
+            <button
+              onClick={() => setSelectedReceiptPreview(null)}
+              className="absolute top-4 left-4 p-2 rounded-xl bg-slate-100 dark:bg-zinc-900 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <h3 className="text-sm font-bold text-amber-700 dark:text-amber-300 mb-4 flex items-center gap-2">
+              <Eye className="w-4 h-4" />
+              <span>صورة إثبات التحويل / إيصال الدفع البنكي</span>
+            </h3>
+            <div className="max-h-[70vh] overflow-auto rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900 flex items-center justify-center p-2">
+              <img 
+                src={selectedReceiptPreview} 
+                alt="إيصال التحويل" 
+                className="max-h-[65vh] w-auto object-contain rounded-xl shadow-2xl" 
+              />
+            </div>
+            <div className="mt-4 flex justify-end">
+              <button
+                onClick={() => setSelectedReceiptPreview(null)}
+                className="px-5 py-2 rounded-xl bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 text-xs font-bold transition"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Inline PDF Book Preview Modal */}
+      {previewPdfBook && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 dark:bg-black/90 backdrop-blur-md animate-in fade-in">
+          <div className="relative max-w-4xl w-full bg-white dark:bg-zinc-950 border border-amber-500/40 rounded-3xl p-5 sm:p-6 text-right shadow-2xl flex flex-col max-h-[90vh]">
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-200 dark:border-zinc-800">
+              <h3 className="text-sm font-bold text-amber-700 dark:text-amber-300 flex items-center gap-2">
+                <BookOpen className="w-4 h-4" />
+                <span>معاينة الكتاب: {previewPdfBook.title}</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  if (previewPdfBook.isObjectUrl) URL.revokeObjectURL(previewPdfBook.url);
+                  setPreviewPdfBook(null);
+                }}
+                className="p-2 rounded-xl bg-slate-100 dark:bg-zinc-900 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex-1 min-h-[60vh] rounded-2xl overflow-hidden border border-slate-200 dark:border-zinc-800 bg-slate-100 dark:bg-zinc-900">
+              <iframe src={previewPdfBook.url} title={previewPdfBook.title} className="w-full h-[65vh]" />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Themed Confirmation Modal */}
+      {confirmDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 dark:bg-black/85 backdrop-blur-md animate-in fade-in">
+          <div className="relative max-w-md w-full bg-white dark:bg-zinc-950 border border-rose-500/40 rounded-3xl p-6 text-right shadow-2xl space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">{confirmDialog.title}</h3>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5">{confirmDialog.message}</p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200 dark:border-zinc-800">
+              <button
+                type="button"
+                onClick={() => setConfirmDialog(null)}
+                className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 text-xs font-bold transition"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const fn = confirmDialog.onConfirm;
+                  setConfirmDialog(null);
+                  await fn();
+                }}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition"
+              >
+                تأكيد التنفيذ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+};

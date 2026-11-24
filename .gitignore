@@ -6,3 +6,7 @@ coverage/
 *.log
 .env*
 !.env.example
+<<<<<<< HEAD
+=======
+.aistudio/
+>>>>>>> c05b6562d60cedf0c03364b88d720a6aad8e7821

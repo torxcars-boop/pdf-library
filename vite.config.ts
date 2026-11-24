@@ -1,11 +1,15 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
+<<<<<<< HEAD
 import fs from 'fs';
+=======
+>>>>>>> c05b6562d60cedf0c03364b88d720a6aad8e7821
 import path from 'path';
 import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+<<<<<<< HEAD
     plugins: [
       react(),
       tailwindcss(),
@@ -31,6 +35,12 @@ export default defineConfig(() => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
+=======
+    plugins: [react(), tailwindcss()],
+    resolve: {
+      alias: {
+        '@': path.resolve('.'),
+>>>>>>> c05b6562d60cedf0c03364b88d720a6aad8e7821
       },
     },
     server: {
